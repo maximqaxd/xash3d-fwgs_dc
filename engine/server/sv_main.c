@@ -747,7 +747,7 @@ void SV_AddToMaster( netadr_t from, sizebuf_t *msg )
 	Info_SetValueForKeyf( s, "max", len, "%d", svs.maxclients ); // max_players
 	Info_SetValueForKeyf( s, "bots", len, "%d", bots ); // bot count
 #if XASH_DREAMCAST
-	Info_SetValueForKey( s, "gamedir", "cstrike", len ); // gamedir
+	Info_SetValueForKey( s, "gamedir", "valve", len ); // gamedir
 #else
 	Info_SetValueForKey( s, "gamedir", GI->gamefolder, len ); // gamedir
 #endif
@@ -846,7 +846,7 @@ void SV_Init( void )
 	Cvar_Get( "suitvolume", "0.25", FCVAR_ARCHIVE, "HEV suit volume" );
 	Cvar_Get( "sv_background", "0", FCVAR_READ_ONLY, "indicate what background map is running" );
 #if XASH_DREAMCAST
-	Cvar_Get( "gamedir", "cstrike", FCVAR_READ_ONLY, "game folder" );
+	Cvar_Get( "gamedir", "valve", FCVAR_READ_ONLY, "game folder" );
 #else
 	Cvar_Get( "gamedir", GI->gamefolder, FCVAR_READ_ONLY, "game folder" );
 #endif	   

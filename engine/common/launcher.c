@@ -26,7 +26,7 @@ GNU General Public License for more details.
 #include <kos.h>
 #endif
 #ifndef XASH_GAMEDIR
-#define XASH_GAMEDIR "cstrike" // !!! Replace with your default (base) game directory !!!
+#define XASH_GAMEDIR "valve" // !!! Replace with your default (base) game directory !!!
 #endif
 
 #if XASH_WIN32

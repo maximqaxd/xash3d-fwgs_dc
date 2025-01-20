@@ -923,7 +923,7 @@ static void SV_Info( netadr_t from, int protocolVersion )
 		Info_SetValueForKeyf( s, "numcl", sizeof( s ), "%i", count );
 		Info_SetValueForKeyf( s, "maxcl", sizeof( s ), "%i", svs.maxclients );
 #if XASH_DREAMCAST
-		Info_SetValueForKey( s, "gamedir", "cstrike", sizeof( s ));
+		Info_SetValueForKey( s, "gamedir", "valve", sizeof( s ));
 #else
 		Info_SetValueForKey( s, "gamedir", GI->gamefolder, sizeof( s ));
 #endif
@@ -1053,7 +1053,7 @@ static void SV_BuildNetAnswer( netadr_t from )
 		// should match SV_SourceQuery_Details
 		Info_SetValueForKey( string, "hostname", hostname.string, sizeof( string ));
 #if XASH_DREAMCAST
-		Info_SetValueForKey( string, "gamedir", "cstrike", sizeof( string ));
+		Info_SetValueForKey( string, "gamedir", "valve", sizeof( string ));
 #else
 		Info_SetValueForKey( string, "gamedir", GI->gamefolder, sizeof( string ));
 #endif
@@ -1614,7 +1614,7 @@ void SV_SendServerdata( sizebuf_t *msg, sv_client_t *cl )
 	MSG_WriteString( msg, STRING( svgame.edicts->v.message )); // Map Message
 	MSG_WriteOneBit( msg, sv.background ); // tell client about background map
 #if XASH_DREAMCAST
-	MSG_WriteString( msg, "cstrike" );
+	MSG_WriteString( msg, "valve" );
 #else
 	MSG_WriteString( msg, GI->gamefolder );
 #endif			   									 

@@ -2732,7 +2732,7 @@ static const char *pfnGetGameDirectory( void )
 {
 	static char	szGetGameDir[MAX_SYSPATH];
 #if XASH_DREAMCAST
-	Q_strncpy( szGetGameDir, "cstrike", sizeof( szGetGameDir ));
+	Q_strncpy( szGetGameDir, "valve", sizeof( szGetGameDir ));
 #else
 	Q_strncpy( szGetGameDir, GI->gamefolder, sizeof( szGetGameDir ));
 #endif
