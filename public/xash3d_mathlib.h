@@ -24,6 +24,10 @@ GNU General Public License for more details.
 
 #include "build.h"
 #include "xash3d_types.h"
+#if XASH_DREAMCAST
+#include <dc/fmath.h>
+#include <dc/matrix.h>
+#endif
 
 /*
 ===========================
@@ -280,8 +284,12 @@ static inline float anglemod( float a )
 
 static inline void SinCos( float radians, float *sine, float *cosine )
 {
+#if XASH_DREAMCAST
+	fsincosr(radians, sine, cosine);
+#else
 	*sine = sin( radians );
 	*cosine = cos( radians );
+#endif
 }
 
 static inline int NearestPOW( int value, qboolean roundDown )
