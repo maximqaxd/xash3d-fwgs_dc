@@ -470,6 +470,10 @@ void Mem_PrintStats( void )
 
 	Con_Printf( "^3%zu^7 memory pools, totalling: ^1%s\n", count, Q_memprint( size ));
 	Con_Printf( "total allocated size: ^1%s\n", Q_memprint( realsize ));
+
+#if XASH_DREAMCAST
+	getRamStatus();
+#endif
 }
 
 void Mem_PrintList( size_t minallocationsize )

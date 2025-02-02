@@ -215,10 +215,10 @@ qboolean VID_SetMode(void) {
             dm = DM_640x480_VGA; // VGA mode
             break;
         case CT_RGB:
-            dm = DM_640x480_NTSC_IL; // RGB mode
+            dm = DM_640x480; // RGB mode
             break;
         case CT_COMPOSITE:
-            dm = DM_640x480_NTSC_IL; // Composite mode
+            dm = DM_640x480; // Composite mode
             break;
         case CT_NONE:
         default:

@@ -80,6 +80,9 @@ int main( int argc, char **argv )
 	szArgc = argc;
 	szArgv = argv;
 #endif // XASH_PSVITA
+#if XASH_DREAMCAST
+	setSystemRam();
+#endif
 	return Sys_Start();
 }
 #endif // XASH_ENABLE_MAIN

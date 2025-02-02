@@ -104,6 +104,11 @@ void Linux_SetTimer( float time );
 int Linux_GetProcessID( void );
 #endif
 
+#if XASH_DREAMCAST
+void setSystemRam( void );
+void getRamStatus( void );
+#endif
+
 static inline void Platform_Init( qboolean con_showalways )
 {
 #if XASH_POSIX
