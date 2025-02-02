@@ -54,6 +54,10 @@ static float	g_DecalClipVerts2[MAX_DECALCLIPVERT][VERTEXSIZE];
 decal_t	gDecalPool[MAX_RENDER_DECALS];
 static int	gDecalCount;
 
+#if XASH_DREAMCAST
+extern convar_t r_decals;
+#endif // XASH_DREAMCAST
+
 void R_ClearDecals( void )
 {
 	memset( gDecalPool, 0, sizeof( gDecalPool ));
@@ -102,8 +106,13 @@ static decal_t *R_DecalAlloc( decal_t *pdecal )
 {
 	int	limit = MAX_RENDER_DECALS;
 
+#if XASH_DREAMCAST
+	if( r_decals.value < limit )
+		limit = r_decals.value;
+#else
 	if( r_decals->value < limit )
 		limit = r_decals->value;
+#endif // XASH_DREAMCAST
 
 	if( !limit ) return NULL;
 
@@ -670,10 +679,14 @@ static void R_DecalNodeSurfaces( model_t *model, mnode_t *node, decalinfo_t *dec
 	// iterate over all surfaces in the node
 	msurface_t	*surf;
 	int		i;
+	int firstsurface, numsurfaces;
 
-	surf = model->surfaces + node->firstsurface;
+	firstsurface = node_firstsurface( node, model );
+	numsurfaces  = node_numsurfaces( node, model );
 
-	for( i = 0; i < node->numsurfaces; i++, surf++ )
+	surf = model->surfaces + firstsurface;
+
+	for( i = 0; i < numsurfaces; i++, surf++ )
 	{
 		// never apply decals on the water or sky surfaces
 		if( surf->flags & (SURF_DRAWTURB|SURF_DRAWSKY|SURF_CONVEYOR))
@@ -695,6 +708,7 @@ static void R_DecalNode( model_t *model, mnode_t *node, decalinfo_t *decalinfo )
 {
 	mplane_t	*splitplane;
 	float	dist;
+	mnode_t *children[2];
 
 	Assert( node != NULL );
 
@@ -706,6 +720,7 @@ static void R_DecalNode( model_t *model, mnode_t *node, decalinfo_t *decalinfo )
 
 	splitplane = node->plane;
 	dist = DotProduct( decalinfo->m_Position, splitplane->normal ) - splitplane->dist;
+	node_children( children, node, model );
 
 	// This is arbitrarily set to 10 right now. In an ideal world we'd have the
 	// exact surface but we don't so, this tells me which planes are "sort of
@@ -717,19 +732,19 @@ static void R_DecalNode( model_t *model, mnode_t *node, decalinfo_t *decalinfo )
 	// have a surface normal
 	if( dist > decalinfo->m_Size )
 	{
-		R_DecalNode( model, node->children[0], decalinfo );
+		R_DecalNode( model, children[0], decalinfo );
 	}
 	else if( dist < -decalinfo->m_Size )
 	{
-		R_DecalNode( model, node->children[1], decalinfo );
+		R_DecalNode( model, children[1], decalinfo );
 	}
 	else
 	{
 		if( dist < DECAL_DISTANCE && dist > -DECAL_DISTANCE )
 			R_DecalNodeSurfaces( model, node, decalinfo );
 
-		R_DecalNode( model, node->children[0], decalinfo );
-		R_DecalNode( model, node->children[1], decalinfo );
+		R_DecalNode( model, children[0], decalinfo );
+		R_DecalNode( model, children[1], decalinfo );
 	}
 }
 

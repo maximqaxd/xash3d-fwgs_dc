@@ -79,9 +79,6 @@ static struct
 	qboolean update;
 
 	uint32_t texture[RIPPLES_TEXSIZE];
-	int gl_texturenum;
-	int rippletexturenum;
-	float texturescale; // not all textures are 128x128, scale the texcoords down
 } g_ripple;
 
 
@@ -565,7 +562,7 @@ EmitWaterPolys
 Does a water warp on the pre-fragmented glpoly_t chain
 =============
 */
-void EmitWaterPolys( msurface_t *warp, qboolean reverse )
+void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 {
 	float	*v, nv, waveHeight;
 	float	s, t, os, ot;
@@ -609,15 +606,15 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse )
 			os = v[3];
 			ot = v[4];
 
-			if( !r_ripple.value )
+			if( !ripples )
 			{
 				s = os + r_turbsin[(int)((ot * 0.125f + gp_cl->time) * TURBSCALE) & 255];
 				t = ot + r_turbsin[(int)((os * 0.125f + gp_cl->time) * TURBSCALE) & 255];
 			}
 			else
 			{
-				s = os / g_ripple.texturescale;
-				t = ot / g_ripple.texturescale;
+				s = os;
+				t = ot;
 			}
 
 			s *= ( 1.0f / SUBDIVIDE_SIZE );
@@ -654,22 +651,6 @@ void R_ResetRipples( void )
 	g_ripple.oldbuf = g_ripple.buf[1];
 	g_ripple.time = g_ripple.oldtime = gp_cl->time - 0.1;
 	memset( g_ripple.buf, 0, sizeof( g_ripple.buf ));
-}
-
-void R_InitRipples( void )
-{
-	rgbdata_t pic = { 0 };
-
-	pic.width = pic.height = RIPPLES_CACHEWIDTH;
-	pic.depth = 1;
-	pic.flags = IMAGE_HAS_COLOR;
-	pic.buffer = (byte *)g_ripple.texture;
-	pic.type = PF_RGBA_32;
-	pic.size = sizeof( g_ripple.texture );
-	pic.numMips = 1;
-	memset( pic.buffer, 0, pic.size );
-
-	g_ripple.rippletexturenum = GL_LoadTextureInternal( "*rippletex", &pic, TF_NOMIPMAP|TF_ALLOW_NEAREST );
 }
 
 static void R_SwapBufs( void )
@@ -710,17 +691,6 @@ static void R_RunRipplesAnimation( const short *oldbuf, short *pbuf )
 	}
 }
 
-static int MostSignificantBit( unsigned int v )
-{
-#if __GNUC__
-	return 31 - __builtin_clz( v );
-#else
-	int i;
-	for( i = 0, v >>= 1; v; v >>= 1, i++ );
-	return i;
-#endif
-}
-
 void R_AnimateRipples( void )
 {
 	double frametime = gp_cl->time - g_ripple.time;
@@ -750,67 +720,88 @@ void R_AnimateRipples( void )
 	R_RunRipplesAnimation( g_ripple.oldbuf, g_ripple.curbuf );
 }
 
-void R_UploadRipples( texture_t *image )
+qboolean R_UploadRipples( texture_t *image )
 {
-	gl_texture_t *glt;
-	uint32_t *pixels;
-	int wbits, wmask, wshft;
+	const gl_texture_t *glt;
+	const uint32_t *pixels;
 	int y;
+	int width, height, size;
 
-	// discard unuseful textures
-	if( !r_ripple.value || image->width > RIPPLES_CACHEWIDTH || image->width != image->height )
+	if( !r_ripple.value )
 	{
 		GL_Bind( XASH_TEXTURE0, image->gl_texturenum );
-		return;
+		return false;
 	}
 
+	// discard unuseful textures
 	glt = R_GetTexture( image->gl_texturenum );
 	if( !glt || !glt->original || !glt->original->buffer || !FBitSet( glt->flags, TF_EXPAND_SOURCE ))
 	{
 		GL_Bind( XASH_TEXTURE0, image->gl_texturenum );
-		return;
+		return false;
 	}
 
-	GL_Bind( XASH_TEXTURE0, g_ripple.rippletexturenum );
+	// try to preserve aspect ratio
+	width = height = RIPPLES_CACHEWIDTH; // always render at maximum size
+	if( image->width > image->height )
+		height = (float)image->height / image->width * width;
+	else if( image->width < image->height )
+		width = (float)image->width / image->height * height;
+
+	if( !image->fb_texturenum )
+	{
+		rgbdata_t pic = { 0 };
+		string name;
+		Q_snprintf( name, sizeof( name ), "*rippletex_%s", image->name );
+
+		pic.width = width;
+		pic.height = height;
+		pic.depth = 1;
+		pic.flags = IMAGE_HAS_COLOR;
+		pic.buffer = (byte *)g_ripple.texture;
+		pic.type = PF_RGBA_32;
+		pic.size = width * height * 4;
+		pic.numMips = 1;
+		memset( pic.buffer, 0, pic.size );
+
+		image->fb_texturenum = GL_LoadTextureInternal( name, &pic, TF_NOMIPMAP | TF_ALLOW_NEAREST );
+	}
+
+	GL_Bind( XASH_TEXTURE0, image->fb_texturenum );
 
 	// no updates this frame
-	if( !g_ripple.update && image->gl_texturenum == g_ripple.gl_texturenum )
-		return;
+	if( !g_ripple.update )
+		return true;
 
-	g_ripple.gl_texturenum = image->gl_texturenum;
-	if( r_ripple.value == 1.0f )
+	size = r_ripple.value == 1.0f ? 64 : RIPPLES_CACHEWIDTH;
+	pixels = (const uint32_t *)glt->original->buffer;
+
+	for( y = 0; y < height; y++ )
 	{
-		g_ripple.texturescale = Q_max( 1.0f, image->width / 64.0f );
-	}
-	else
-	{
-		g_ripple.texturescale = 1.0f;
-	}
-
-
-	pixels = (uint32_t *)glt->original->buffer;
-	wbits = MostSignificantBit( image->width );
-	wshft = 7 - wbits;
-	wmask = image->width - 1;
-
-	for( y = 0; y < image->height; y++ )
-	{
-		int ry = y << ( 7 + wshft );
+		int ry = (float)y / height * size;
 		int x;
 
-		for( x = 0; x < image->width; x++ )
+		for( x = 0; x < width; x++ )
 		{
-			int rx = x << wshft;
-			int val = g_ripple.curbuf[ry + rx] >> 4;
+			int rx = (float)x / width * size;
+			int val = g_ripple.curbuf[ry * RIPPLES_CACHEWIDTH + rx] / 16;
 
-			int py = (y - val) & wmask;
-			int px = (x + val) & wmask;
-			int p = ( py << wbits ) + px;
+			// transform it to texture space and get nice tiling effect
+			int rpy = ( y - val ) % height;
+			int rpx = ( x + val ) % width;
 
-			g_ripple.texture[(y << wbits) + x] = pixels[p];
+			int py = (float)rpy / height * image->height;
+			int px = (float)rpx / width * image->width;
+
+			if( py < 0 ) py = image->height + py;
+			if( px < 0 ) px = image->width + px;
+
+			g_ripple.texture[y * width + x] = pixels[py * image->width + px];
 		}
 	}
 
-	pglTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA, image->width, image->width, 0,
+	pglTexImage2D( GL_TEXTURE_2D, 0, glt->format, width, height, 0,
 		GL_RGBA, GL_UNSIGNED_BYTE, g_ripple.texture );
+
+	return true;
 }

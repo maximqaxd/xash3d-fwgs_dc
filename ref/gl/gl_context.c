@@ -18,7 +18,7 @@ GNU General Public License for more details.
 #include "gl_local.h"
 #include "gl_export.h"
 
-#ifdef XASH_GL4ES
+#if XASH_GL4ES
 #include "gl4es/include/gl4esinit.h"
 #endif
 
@@ -27,6 +27,18 @@ ref_globals_t *gpGlobals;
 ref_client_t  *gp_cl;
 ref_host_t    *gp_host;
 
+#if !XASH_DREAMCAST
+void _Mem_Free( void *data, const char *filename, int fileline )
+{
+	gEngfuncs._Mem_Free( data, filename, fileline );
+}
+
+void *_Mem_Alloc( poolhandle_t poolptr, size_t size, qboolean clear, const char *filename, int fileline )
+{
+	return gEngfuncs._Mem_Alloc( poolptr, size, clear, filename, fileline );
+}
+
+#endif // !XASH_DREAMCAST
 static void R_ClearScreen( void )
 {
 	pglClearColor( 0.0f, 0.0f, 0.0f, 0.0f );
@@ -49,13 +61,16 @@ CL_FillRGBA
 
 =============
 */
-static void CL_FillRGBA( float _x, float _y, float _w, float _h, int r, int g, int b, int a )
+static void CL_FillRGBA( int rendermode, float _x, float _y, float _w, float _h, byte r, byte g, byte b, byte a )
 {
 	pglDisable( GL_TEXTURE_2D );
 	pglEnable( GL_BLEND );
 	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
-	pglColor4f( r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f );
+	if( rendermode == kRenderTransAdd )
+		pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
+	else
+		pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+	pglColor4ub( r, g, b, a );
 
 	pglBegin( GL_QUADS );
 		pglVertex2f( _x, _y );
@@ -64,33 +79,6 @@ static void CL_FillRGBA( float _x, float _y, float _w, float _h, int r, int g, i
 		pglVertex2f( _x, _y + _h );
 	pglEnd ();
 
-	pglColor3f( 1.0f, 1.0f, 1.0f );
-	pglEnable( GL_TEXTURE_2D );
-	pglDisable( GL_BLEND );
-}
-
-/*
-=============
-pfnFillRGBABlend
-
-=============
-*/
-static void GAME_EXPORT CL_FillRGBABlend( float _x, float _y, float _w, float _h, int r, int g, int b, int a )
-{
-	pglDisable( GL_TEXTURE_2D );
-	pglEnable( GL_BLEND );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-	pglColor4f( r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f );
-
-	pglBegin( GL_QUADS );
-		pglVertex2f( _x, _y );
-		pglVertex2f( _x + _w, _y );
-		pglVertex2f( _x + _w, _y + _h );
-		pglVertex2f( _x, _y + _h );
-	pglEnd ();
-
-	pglColor3f( 1.0f, 1.0f, 1.0f );
 	pglEnable( GL_TEXTURE_2D );
 	pglDisable( GL_BLEND );
 }
@@ -102,11 +90,13 @@ static void Mod_BrushUnloadTextures( model_t *mod )
 	for( i = 0; i < mod->numtextures; i++ )
 	{
 		texture_t *tx = mod->textures[i];
-		if( !tx || tx->gl_texturenum == tr.defaultTexture )
+		if( !tx )
 			continue; // free slot
 
-		GL_FreeTexture( tx->gl_texturenum );    // main texture
-		GL_FreeTexture( tx->fb_texturenum );    // luma texture
+		if( tx->gl_texturenum != tr.defaultTexture )
+			GL_FreeTexture( tx->gl_texturenum ); // main texture
+		GL_FreeTexture( tx->fb_texturenum ); // luma texture
+		GL_FreeTexture( tx->dt_texturenum ); // detail texture
 	}
 }
 
@@ -119,9 +109,11 @@ static void Mod_UnloadTextures( model_t *mod )
 	case mod_studio:
 		Mod_StudioUnloadTextures( mod->cache.data );
 		break;
+#if !XASH_DREAMCAST
 	case mod_alias:
 		Mod_AliasUnloadTextures( mod->cache.data );
 		break;
+#endif
 	case mod_brush:
 		Mod_BrushUnloadTextures( mod );
 		break;
@@ -136,33 +128,37 @@ static void Mod_UnloadTextures( model_t *mod )
 
 static qboolean Mod_ProcessRenderData( model_t *mod, qboolean create, const byte *buf )
 {
-	qboolean loaded = true;
-
-	if( create )
-	{
-		switch( mod->type )
-		{
-			case mod_studio:
-				// Mod_LoadStudioModel( mod, buf, loaded );
-				break;
-			case mod_sprite:
-				Mod_LoadSpriteModel( mod, buf, &loaded, mod->numtexinfo );
-				break;
-			case mod_alias:
-				Mod_LoadAliasModel( mod, buf, &loaded );
-				break;
-			case mod_brush:
-				// Mod_LoadBrushModel( mod, buf, loaded );
-				break;
-			default: gEngfuncs.Host_Error( "%s: unsupported type %d\n", __func__, mod->type );
-		}
-	}
-
-	if( loaded && gEngfuncs.drawFuncs->Mod_ProcessUserData )
-		gEngfuncs.drawFuncs->Mod_ProcessUserData( mod, create, buf );
+	qboolean loaded = false;
 
 	if( !create )
+	{
+		if( gEngfuncs.drawFuncs->Mod_ProcessUserData )
+			gEngfuncs.drawFuncs->Mod_ProcessUserData( mod, false, buf );
 		Mod_UnloadTextures( mod );
+		return true;
+	}
+
+	switch( mod->type )
+	{
+	case mod_studio:
+	case mod_brush:
+		loaded = true;
+		break;
+	case mod_sprite:
+		Mod_LoadSpriteModel( mod, buf, &loaded, mod->numtexinfo );
+		break;
+#if !XASH_DREAMCAST	
+	case mod_alias:
+		Mod_LoadAliasModel( mod, buf, &loaded );
+		break;
+#endif
+	default:
+		gEngfuncs.Host_Error( "%s: unsupported type %d\n", __func__, mod->type );
+		return false;
+	}
+
+	if( gEngfuncs.drawFuncs->Mod_ProcessUserData )
+		gEngfuncs.drawFuncs->Mod_ProcessUserData( mod, true, buf );
 
 	return loaded;
 }
@@ -410,7 +406,7 @@ static void GAME_EXPORT R_OverrideTextureSourceSize( unsigned int texnum, uint s
 
 static void* GAME_EXPORT R_GetProcAddress( const char *name )
 {
-#ifdef XASH_GL4ES
+#if XASH_GL4ES
 	return gl4es_GetProcAddress( name );
 #else // TODO: other wrappers
 	return gEngfuncs.GL_GetProcAddress( name );
@@ -424,8 +420,13 @@ static const char *R_GetConfigName( void )
 
 static const ref_interface_t gReffuncs =
 {
+#if XASH_DREAMCAST
+	.R_Init = Ref_Init,
+	.R_Shutdown = Ref_Shutdown,
+#else
 	R_Init,
 	R_Shutdown,
+#endif
 	R_GetConfigName,
 	R_SetDisplayTransform,
 
@@ -461,9 +462,7 @@ static const ref_interface_t gReffuncs =
 	R_Set2DMode,
 	R_DrawStretchRaw,
 	R_DrawStretchPic,
-	R_DrawTileClear,
 	CL_FillRGBA,
-	CL_FillRGBABlend,
 	R_WorldToScreen,
 
 	VID_ScreenShot,
@@ -487,7 +486,6 @@ static const ref_interface_t gReffuncs =
 	R_GetSpriteParms,
 	R_GetSpriteTexture,
 
-	Mod_LoadMapSprite,
 	Mod_ProcessRenderData,
 	Mod_StudioLoadTextures,
 
@@ -543,8 +541,11 @@ static const ref_interface_t gReffuncs =
 	R_NewMap,
 	R_ClearScene,
 	R_GetProcAddress,
-
+#if XASH_DREAMCAST
+	.TriRenderMode = R_TriRenderMode,
+#else
 	TriRenderMode,
+#endif
 	TriBegin,
 	TriEnd,
 	_TriColor4f,

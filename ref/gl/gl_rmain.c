@@ -26,6 +26,10 @@ GNU General Public License for more details.
 float		gldepthmin, gldepthmax;
 ref_instance_t	RI;
 
+#if XASH_DREAMCAST
+extern convar_t gl_clear;
+#endif
+
 static int R_RankForRenderMode( int rendermode )
 {
 	switch( rendermode )
@@ -44,7 +48,7 @@ void R_AllowFog( qboolean allowed )
 {
 	if( allowed )
 	{
-		if( glState.isFogEnabled )
+		if( glState.isFogEnabled && gl_fog.value )
 			pglEnable( GL_FOG );
 	}
 	else
@@ -557,6 +561,7 @@ void R_SetupGL( qboolean set_gl_state )
 	pglMatrixMode( GL_MODELVIEW );
 	GL_LoadMatrix( RI.worldviewMatrix );
 
+#if !XASH_DREAMCAST	// TODO: manual clipping plane
 	if( FBitSet( RI.params, RP_CLIPPLANE ))
 	{
 		GLdouble	clip[4];
@@ -570,12 +575,13 @@ void R_SetupGL( qboolean set_gl_state )
 		pglClipPlane( GL_CLIP_PLANE0, clip );
 		pglEnable( GL_CLIP_PLANE0 );
 	}
-
+#endif // !XASH_DREAMCAST 
 	GL_Cull( GL_FRONT );
 
 	pglDisable( GL_BLEND );
 	pglDisable( GL_ALPHA_TEST );
 	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+
 }
 
 /*
@@ -600,6 +606,7 @@ watertexture to grab fog values from it
 static gl_texture_t *R_RecursiveFindWaterTexture( const mnode_t *node, const mnode_t *ignore, qboolean down )
 {
 	gl_texture_t *tex = NULL;
+	mnode_t *children[2];
 
 	// assure the initial node is not null
 	// we could check it here, but we would rather check it
@@ -637,15 +644,17 @@ static gl_texture_t *R_RecursiveFindWaterTexture( const mnode_t *node, const mno
 
 	// this is a regular node
 	// traverse children
-	if( node->children[0] && ( node->children[0] != ignore ))
+	node_children( children, node, WORLDMODEL );
+
+	if( children[0] && ( children[0] != ignore ))
 	{
-		tex = R_RecursiveFindWaterTexture( node->children[0], node, true );
+		tex = R_RecursiveFindWaterTexture( children[0], node, true );
 		if( tex ) return tex;
 	}
 
-	if( node->children[1] && ( node->children[1] != ignore ))
+	if( children[1] && ( children[1] != ignore ))
 	{
-		tex = R_RecursiveFindWaterTexture( node->children[1], node, true );
+		tex = R_RecursiveFindWaterTexture( children[1], node, true );
 		if( tex )	return tex;
 	}
 
@@ -800,7 +809,8 @@ R_DrawFog
 */
 void R_DrawFog( void )
 {
-	if( !RI.fogEnabled ) return;
+	if( !RI.fogEnabled || !gl_fog.value )
+		return;
 
 	pglEnable( GL_FOG );
 	if( ENGINE_GET_PARM( PARM_QUAKE_COMPATIBLE ))
@@ -837,9 +847,11 @@ static void R_DrawEntitiesOnList( void )
 		case mod_brush:
 			R_DrawBrushModel( RI.currententity );
 			break;
+#if !XASH_DREAMCAST
 		case mod_alias:
 			R_DrawAliasModel( RI.currententity );
 			break;
+#endif
 		case mod_studio:
 			R_DrawStudioModel( RI.currententity );
 			break;
@@ -907,9 +919,11 @@ static void R_DrawEntitiesOnList( void )
 		case mod_brush:
 			R_DrawBrushModel( RI.currententity );
 			break;
+#if !XASH_DREAMCAST
 		case mod_alias:
 			R_DrawAliasModel( RI.currententity );
 			break;
+#endif
 		case mod_studio:
 			R_DrawStudioModel( RI.currententity );
 			break;
@@ -1051,8 +1065,13 @@ void R_BeginFrame( qboolean clearScene )
 {
 	glConfig.softwareGammaUpdate = false;	// in case of possible fails
 
+#if XASH_DREAMCAST
+	if(( gl_clear.value || ENGINE_GET_PARM( PARM_DEV_OVERVIEW )) &&
+		clearScene && ENGINE_GET_PARM( PARM_CONNSTATE ) != ca_cinematic )
+#else
 	if(( gl_clear->value || ENGINE_GET_PARM( PARM_DEV_OVERVIEW )) &&
 		clearScene && ENGINE_GET_PARM( PARM_CONNSTATE ) != ca_cinematic )
+#endif // XASH_DREAMCAST
 	{
 		pglClear( GL_COLOR_BUFFER_BIT );
 	}

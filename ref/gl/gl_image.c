@@ -18,10 +18,15 @@ GNU General Public License for more details.
 #include "crclib.h"
 
 #define TEXTURES_HASH_SIZE	(MAX_TEXTURES >> 2)
+#if XASH_DREAMCAST
+#define TEXTURE_SIZE_MIN	8
+#endif
 
 static gl_texture_t		gl_textures[MAX_TEXTURES];
 static gl_texture_t*	gl_texturesHashTable[TEXTURES_HASH_SIZE];
 static uint		gl_numTextures;
+static uint		vq_codebook_sz = 2048;
+static uint 	vq_small_codebook_sz = 256;
 
 static byte    dottexture[8][8] =
 {
@@ -55,7 +60,7 @@ gl_texture_t *R_GetTexture( GLenum texnum )
 GL_TargetToString
 =================
 */
-static const char *GL_TargetToString( GLenum target )
+const char *GL_TargetToString( GLenum target )
 {
 	switch( target )
 	{
@@ -221,8 +226,9 @@ void GL_ApplyTextureParams( gl_texture_t *tex )
 
 		if( tex->target == GL_TEXTURE_3D || tex->target == GL_TEXTURE_CUBE_MAP_ARB )
 			pglTexParameteri( tex->target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER );
-
+#if !XASH_DREAMCAST
 		pglTexParameterfv( tex->target, GL_TEXTURE_BORDER_COLOR, border );
+#endif // !XASH_DREAMCAST
 	}
 	else if( FBitSet( tex->flags, TF_CLAMP ))
 	{
@@ -381,6 +387,32 @@ static size_t GL_CalcImageSize( pixformat_t format, int width, int height, int d
 	case PF_ATI2:
 		size = (((width + 3) >> 2) * ((height + 3) >> 2) * 16) * depth;
 		break;
+#if XASH_DREAMCAST
+	case PF_RGB_5650_TWID:
+	case PF_RGB_5650:
+		size = ((width + 3) & ~3) * ((height + 3) & ~3) * 2;
+		break;
+	case PF_VQ_ARGB_4444:
+	case PF_VQ_RGB_5650:
+		size = vq_codebook_sz + ((width * height) / 4);
+		break;
+	case PF_ARGB_1555:
+		size = width * height * depth * 2;
+		break;
+	case PF_VQ_MIPMAP_RGB_5650:
+		int main_size = (width * height) / 4;
+        int mip1_size = main_size / 4;
+        int mip2_size = mip1_size / 4;
+        int mip3_size = mip2_size / 4;
+		size = vq_codebook_sz + main_size + mip1_size + mip2_size + mip3_size;
+		break;
+	case PF_VQ_ARGB_1555:
+		size = vq_codebook_sz + ((width * height) / 4);
+		break; 
+	case PF_ARGB_4444:
+		size = width * height * depth * 2;
+		break;
+#endif
 	}
 
 	return size;
@@ -488,6 +520,31 @@ static size_t GL_CalcTextureSize( GLenum format, int width, int height, int dept
 	case GL_DEPTH_COMPONENT32F:
 		size = width * height * depth * 4;
 		break;
+#if XASH_DREAMCAST
+	case GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS:
+		int main_size = (width * height) / 4;
+        int mip1_size = main_size / 4;
+        int mip2_size = mip1_size / 4;
+        int mip3_size = mip2_size / 4;
+		size = vq_codebook_sz + main_size + mip1_size + mip2_size + mip3_size;
+		break;
+	case GL_COMPRESSED_RGB_565_VQ_KOS:
+		size = vq_codebook_sz + ((width * height) / 4);
+		break;
+	case GL_COMPRESSED_ARGB_1555_VQ_KOS:
+		size = vq_codebook_sz + ((width * height) / 4);
+		break; 
+	case GL_COMPRESSED_ARGB_4444_VQ_KOS:
+		size = vq_codebook_sz + ((width * height) / 4);
+		break; 
+	case GL_RGB565_TWID_KOS:
+	case GL_RGB565_KOS:
+		size = ((width + 3) & ~3) * ((height + 3) & ~3) * 2;
+		break;
+	case GL_ARGB1555_KOS:
+		size = width * height * depth * 2;
+	break;
+#endif
 	default:
 		gEngfuncs.Host_Error( "%s: bad texture internal format (%u)\n", __func__, format );
 		break;
@@ -510,6 +567,21 @@ static int GL_CalcMipmapCount( gl_texture_t *tex, qboolean haveBuffer )
 	if( FBitSet( tex->flags, TF_NOMIPMAP ))
 		return 1;
 
+#if XASH_DREAMCAST
+	// mip-maps can't exceeds 4
+	for( mipcount = 1; mipcount < 4; mipcount++ )
+	{
+
+		width = Q_max( TEXTURE_SIZE_MIN, ( tex->width >> mipcount ));
+		height = Q_max( TEXTURE_SIZE_MIN, ( tex->height >> mipcount ));
+
+		if( width == TEXTURE_SIZE_MIN && height == TEXTURE_SIZE_MIN )
+			break;
+	}
+		
+	return mipcount;
+
+#else
 	// mip-maps can't exceeds 16
 	for( mipcount = 0; mipcount < 16; mipcount++ )
 	{
@@ -517,9 +589,11 @@ static int GL_CalcMipmapCount( gl_texture_t *tex, qboolean haveBuffer )
 		height = Q_max( 1, ( tex->height >> mipcount ));
 		if( width == 1 && height == 1 )
 			break;
+
 	}
 
 	return mipcount + 1;
+#endif
 }
 
 /*
@@ -562,7 +636,6 @@ static void GL_SetTextureDimensions( gl_texture_t *tex, int width, int height, i
 	// store original sizes
 	tex->srcWidth = width;
 	tex->srcHeight = height;
-
 	if( !GL_Support( GL_ARB_TEXTURE_NPOT_EXT ))
 	{
 		int	step = (int)gl_round_down.value;
@@ -607,13 +680,18 @@ static void GL_SetTextureDimensions( gl_texture_t *tex, int width, int height, i
 			}
 		}
 	}
-
+#if XASH_DREAMCAST
+	// set the texture dimensions
+	tex->width = Q_max( TEXTURE_SIZE_MIN, width );
+	tex->height = Q_max( TEXTURE_SIZE_MIN, height );
+	tex->depth = Q_max( 1, depth );
+#else
 	// set the texture dimensions
 	tex->width = Q_max( 1, width );
 	tex->height = Q_max( 1, height );
 	tex->depth = Q_max( 1, depth );
+#endif
 }
-
 /*
 ===============
 GL_SetTextureTarget
@@ -632,7 +710,7 @@ static void GL_SetTextureTarget( gl_texture_t *tex, rgbdata_t *pic )
 	pic->numMips = Q_max( 1, pic->numMips );
 
 	// trying to determine texture type
-#ifndef XASH_GLES
+#if !XASH_GLES
 	if( pic->width > 1 && pic->height <= 1 )
 		tex->target = GL_TEXTURE_1D;
 	else 
@@ -690,6 +768,13 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 	{
 		switch( format )
 		{
+#if XASH_DREAMCAST
+		case PF_VQ_ARGB_4444: tex->format = GL_COMPRESSED_ARGB_4444_VQ_KOS; break;
+		case PF_VQ_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_KOS; break;
+		case PF_SMALL_VQ_RGB_5650: 
+		case PF_VQ_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_KOS; break;
+		case PF_VQ_MIPMAP_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS; break;
+#endif
 		case PF_DXT1: tex->format = GL_COMPRESSED_RGB_S3TC_DXT1_EXT; break;	// never use DXT1 with 1-bit alpha
 		case PF_DXT3: tex->format = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; break;
 		case PF_DXT5: tex->format = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; break;
@@ -742,6 +827,27 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 	}
 	else
 	{
+#if XASH_DREAMCAST
+			switch (format)
+		{
+			case PF_ARGB_4444: tex->format = GL_ARGB4444_KOS; break;
+			case PF_ARGB_1555: tex->format = GL_ARGB1555_KOS; break;
+			case PF_RGB_5650: tex->format = GL_RGB565_KOS; break;
+			case PF_RGB_5650_TWID: tex->format = GL_RGB565_TWID_KOS; break;
+			case PF_INDEXED_24:
+			case PF_INDEXED_32:
+			case PF_RGBA_32: tex->format = GL_RGBA; break;
+			case PF_BGRA_32: tex->format = GL_BGRA; break;
+			case PF_RGB_24: tex->format = GL_RGB; break;
+			case PF_BGR_24: tex->format = GL_BGR; break;
+
+			default:
+			gEngfuncs_gl.Host_Error( "GL_SetTextureFormat: %s unknown format %i\n", tex->name, format );
+			break;
+			
+		} 
+	}
+#else
 		// NOTE: not all the types will be compressed
 		int	bits = gpGlobals->desktopBitsPixel;
 
@@ -772,6 +878,7 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 			break;
 		}
 	}
+#endif
 }
 
 /*
@@ -865,6 +972,79 @@ byte *GL_ResampleTexture( const byte *source, int inWidth, int inHeight, int out
 	return scaledImage;
 }
 
+#if XASH_DREAMCAST
+qboolean GL_UpdateTexture(int texnum, int xoff, int yoff, int width, int height, const void *buffer)
+{
+    gl_texture_t *tex;
+    GLuint format, type;
+
+    // missed or invalid texture?
+    if((texnum <= 0) || (texnum >= MAX_TEXTURES))
+    {
+        if(texnum != 0)
+        {
+            gEngfuncs.Con_DPrintf(S_ERROR "GL_UpdateTexture: invalid texture num %d\n", texnum);
+            return false;
+        }
+    }
+    tex = &gl_textures[texnum];
+
+    if((tex->width < width + xoff) || (tex->height < height + yoff))
+    {
+        gEngfuncs.Con_DPrintf(S_ERROR "GL_UpdateTexture: %s invalid update area size XY[%d x %d] WH[%d x %d]\n", 
+            tex->name, width, height, xoff, yoff);
+        return false;
+    }
+    // Convert GU format to GL format
+    switch(tex->format)
+    {	
+		case GL_RGB565_KOS:
+			format = GL_RGB565_KOS;
+            type = GL_UNSIGNED_SHORT_5_6_5;
+		case GL_RGB:
+        case GL_RGB8:
+            format = GL_RGB;
+            type = GL_UNSIGNED_BYTE;
+            break;
+		case GL_RGBA4:
+        case GL_RGBA8:
+            format = GL_RGBA;
+            type = GL_UNSIGNED_BYTE;
+            break;
+        case GL_LUMINANCE8:
+            format = GL_LUMINANCE;
+            type = GL_UNSIGNED_BYTE;
+            break;
+        default:
+            gEngfuncs.Con_DPrintf(S_ERROR "GL_UpdateTexture: unsupported texture format 0x%04x\n", tex->format);
+			return false;
+    }
+
+
+    if(!FBitSet(tex->flags, TF_IMG_UPLOADED))
+    {
+        // First time upload - create the texture
+        glGenTextures(1, &tex->texnum);
+        glBindTexture(GL_TEXTURE_2D, tex->texnum);
+        
+        // Set texture parameters
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+        // Allocate texture storage
+        glTexImage2D(GL_TEXTURE_2D, 0, format, tex->width, tex->height, 0, format, type, NULL);
+        SetBits(tex->flags, TF_IMG_UPLOADED);
+    }
+
+    // Update the texture subregion
+    glBindTexture(GL_TEXTURE_2D, tex->texnum);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, xoff, yoff, width, height, format, type, buffer);
+
+    return true;
+}
+#endif
 /*
 =================
 GL_BoxFilter3x3
@@ -1036,6 +1216,19 @@ static void GL_TextureImageRAW( gl_texture_t *tex, GLint side, GLint level, GLin
 	GLint	dataType = GL_UNSIGNED_BYTE;
 	GLsizei	samplesCount = 0;
 
+#if XASH_DREAMCAST 
+	// hacky stuff incoming
+    if(tex->format == GL_RGB565_KOS) {
+        inFormat = GL_RGB; // force informat for RGB565 
+		dataType = GL_UNSIGNED_SHORT_5_6_5;
+	}
+
+	if(tex->format == GL_RGB565_TWID_KOS) {
+        inFormat = GL_RGB; // force informat for RGB565 
+		dataType = GL_UNSIGNED_SHORT_5_6_5_TWID_KOS;
+	}
+#endif
+
 	Assert( tex != NULL );
 
 	if( FBitSet( tex->flags, TF_DEPTHMAP ))
@@ -1045,17 +1238,20 @@ static void GL_TextureImageRAW( gl_texture_t *tex, GLint side, GLint level, GLin
 		dataType = GL_HALF_FLOAT_ARB;
 	else if( FBitSet( tex->flags, TF_ARB_FLOAT ))
 		dataType = GL_FLOAT;
-
+#if !XASH_DREAMCAST
 	if( tex->target == GL_TEXTURE_1D )
 	{
 		if( subImage ) pglTexSubImage1D( tex->target, level, 0, width, inFormat, dataType, data );
 		else pglTexImage1D( tex->target, level, tex->format, width, 0, inFormat, dataType, data );
 	}
-	else if( tex->target == GL_TEXTURE_CUBE_MAP_ARB )
+	else
+#endif // !XASH_DREAMCAST
+	if( tex->target == GL_TEXTURE_CUBE_MAP_ARB )
 	{
 		if( subImage ) pglTexSubImage2D( cubeTarget + side, level, 0, 0, width, height, inFormat, dataType, data );
 		else pglTexImage2D( cubeTarget + side, level, tex->format, width, height, 0, inFormat, dataType, data );
 	}
+#if !XASH_DREAMCAST
 	else if( tex->target == GL_TEXTURE_3D || tex->target == GL_TEXTURE_2D_ARRAY_EXT )
 	{
 		if( subImage ) pglTexSubImage3D( tex->target, level, 0, 0, 0, width, height, depth, inFormat, dataType, data );
@@ -1080,6 +1276,7 @@ static void GL_TextureImageRAW( gl_texture_t *tex, GLint side, GLint level, GLin
 		gEngfuncs.Con_Printf( S_ERROR "GLES renderer don't support GL_TEXTURE_2D_MULTISAMPLE!\n" );
 #endif /* !XASH_GL_STATIC !XASH_GLES && !XASH_GL4ES */
 	}
+#endif // !XASH_DREAMCAST
 	else // 2D or RECT
 	{
 		if( subImage ) pglTexSubImage2D( tex->target, level, 0, 0, width, height, inFormat, dataType, data );
@@ -1094,7 +1291,7 @@ static void GL_TextureImageCompressed( gl_texture_t *tex, GLint side, GLint leve
 
 	Assert( tex != NULL );
 
-#ifndef XASH_GLES
+#if !XASH_GLES && !XASH_DREAMCAST
 	if( tex->target == GL_TEXTURE_1D )
 	{
 		if( subImage ) pglCompressedTexSubImage1DARB( tex->target, level, 0, width, tex->format, size, data );
@@ -1116,6 +1313,10 @@ static void GL_TextureImageCompressed( gl_texture_t *tex, GLint side, GLint leve
 		else pglCompressedTexImage2DARB( tex->target, level, tex->format, width, height, 0, size, data );
 	}
 #endif
+
+#if XASH_DREAMCAST
+	pglCompressedTexImage2DARB( tex->target, level, tex->format, width, height, 0, size, data );
+#endif // XASH_DREAMCAST
 }
 
 /*
@@ -1214,8 +1415,13 @@ static qboolean GL_UploadTexture( gl_texture_t *tex, rgbdata_t *pic )
 		{
 			for( j = 0; j < Q_max( 1, pic->numMips ); j++ )
 			{
+#if XASH_DREAMCAST
+				width = Q_max( TEXTURE_SIZE_MIN, ( tex->width >> j ));
+				height = Q_max( TEXTURE_SIZE_MIN, ( tex->height >> j ));
+#else
 				width = Q_max( 1, ( tex->width >> j ));
 				height = Q_max( 1, ( tex->height >> j ));
+#endif
 				texsize = GL_CalcTextureSize( tex->format, width, height, tex->depth );
 				size = GL_CalcImageSize( pic->type, width, height, tex->depth );
 				GL_TextureImageCompressed( tex, i, j, width, height, tex->depth, size, buf );
@@ -1230,8 +1436,13 @@ static qboolean GL_UploadTexture( gl_texture_t *tex, rgbdata_t *pic )
 		{
 			for( j = 0; j < Q_max( 1, pic->numMips ); j++ )
 			{
+#if XASH_DREAMCAST
+				width = Q_max( TEXTURE_SIZE_MIN, ( tex->width >> j ));
+				height = Q_max( TEXTURE_SIZE_MIN, ( tex->height >> j ));
+#else
 				width = Q_max( 1, ( tex->width >> j ));
 				height = Q_max( 1, ( tex->height >> j ));
+#endif
 				texsize = GL_CalcTextureSize( tex->format, width, height, tex->depth );
 				size = GL_CalcImageSize( pic->type, width, height, tex->depth );
 				GL_TextureImageRAW( tex, i, j, width, height, tex->depth, pic->type, buf );
@@ -1245,7 +1456,12 @@ static qboolean GL_UploadTexture( gl_texture_t *tex, rgbdata_t *pic )
 		}
 		else // RGBA32
 		{
-			int mipCount = GL_CalcMipmapCount( tex, ( buf != NULL ));
+
+#if XASH_DREAMCAST
+			int mipCount = 1;
+#else
+   			int mipCount = GL_CalcMipmapCount(tex, (buf != NULL));
+#endif
 
 			// NOTE: only single uncompressed textures can be resamples, no mips, no layers, no sides
 			if(( tex->depth == 1 ) && (( pic->width != tex->width ) || ( pic->height != tex->height )))
@@ -1258,12 +1474,21 @@ static qboolean GL_UploadTexture( gl_texture_t *tex, rgbdata_t *pic )
 			// mips will be auto-generated if desired
 			for( j = 0; j < mipCount; j++ )
 			{
+#if XASH_DREAMCAST
+				width = Q_max( TEXTURE_SIZE_MIN, ( tex->width >> j ));
+				height = Q_max( TEXTURE_SIZE_MIN, ( tex->height >> j ));
+#else
 				width = Q_max( 1, ( tex->width >> j ));
 				height = Q_max( 1, ( tex->height >> j ));
+#endif
 				texsize = GL_CalcTextureSize( tex->format, width, height, tex->depth );
 				size = GL_CalcImageSize( pic->type, width, height, tex->depth );
 				GL_TextureImageRAW( tex, i, j, width, height, tex->depth, pic->type, data );
+#if XASH_DREAMCAST
+				if(mipCount > 1 && width == height)
+#else
 				if( mipCount > 1 )
+#endif
 					GL_BuildMipMap( data, width, height, tex->depth, tex->flags );
 				tex->size += texsize;
 				tex->numMips++;
@@ -1536,8 +1761,13 @@ void GL_UpdateTexSize( int texnum, int width, int height, int depth )
 	{
 		for( j = 0; j < Q_max( 1, tex->numMips ); j++ )
 		{
+#if XASH_DREAMCAST
+			width = Q_max( TEXTURE_SIZE_MIN, ( tex->width >> j ));	
+			height = Q_max( TEXTURE_SIZE_MIN, ( tex->height >> j ));
+#else
 			width = Q_max( 1, ( tex->width >> j ));
 			height = Q_max( 1, ( tex->height >> j ));
+#endif
 			texsize = GL_CalcTextureSize( tex->format, width, height, tex->depth );
 			tex->size += texsize;
 		}
@@ -1699,8 +1929,13 @@ int GL_LoadTextureArray( const char **names, int flags )
 
 		for( j = 0; j < Q_max( 1, pic->numMips ); j++ )
 		{
+#if XASH_DREAMCAST
+			int width = Q_max( TEXTURE_SIZE_MIN, ( pic->width >> j ));
+			int height = Q_max( TEXTURE_SIZE_MIN, ( pic->height >> j ));
+#else
 			int width = Q_max( 1, ( pic->width >> j ));
 			int height = Q_max( 1, ( pic->height >> j ));
+#endif
 			mipsize = GL_CalcImageSize( pic->type, width, height, 1 );
 			memcpy( pic->buffer + dstsize + mipsize * i, src->buffer + srcsize, mipsize );
 			dstsize += mipsize * numLayers;
@@ -1845,8 +2080,13 @@ int GL_CreateTextureArray( const char *name, int width, int height, int depth, c
 	rgbdata_t	r_empty;
 
 	memset( &r_empty, 0, sizeof( r_empty ));
+#if XASH_DREAMCAST
+	r_empty.width = Q_max( TEXTURE_SIZE_MIN, width );
+	r_empty.height = Q_max( TEXTURE_SIZE_MIN, height );
+#else
 	r_empty.width = Q_max( width, 1 );
 	r_empty.height = Q_max( height, 1 );
+#endif
 	r_empty.depth = Q_max( depth, 1 );
 	r_empty.type = PF_RGBA_32;
 	r_empty.size = r_empty.width * r_empty.height * r_empty.depth * 4;
@@ -2001,8 +2241,13 @@ static rgbdata_t *GL_FakeImage( int width, int height, int depth, int flags )
 	static rgbdata_t	r_image;
 
 	// also use this for bad textures, but without alpha
+#if XASH_DREAMCAST
+	r_image.width = Q_max( TEXTURE_SIZE_MIN, width );
+	r_image.height = Q_max( TEXTURE_SIZE_MIN, height );
+#else
 	r_image.width = Q_max( 1, width );
 	r_image.height = Q_max( 1, height );
+#endif
 	r_image.depth = Q_max( 1, depth );
 	r_image.flags = flags;
 	r_image.type = PF_RGBA_32;
@@ -2024,21 +2269,41 @@ static rgbdata_t *GL_FakeImage( int width, int height, int depth, int flags )
 R_InitDlightTexture
 ==================
 */
-void R_InitDlightTexture( void )
+void R_InitDlightTexture(void)
 {
-	rgbdata_t	r_image;
+    rgbdata_t r_image;
+    
+    if (tr.dlightTexture != 0)
+        return; // already initialized
+    
+    memset(&r_image, 0, sizeof(r_image));
+    
+    r_image.width = BLOCK_SIZE;
+    r_image.height = BLOCK_SIZE;
+    r_image.flags = IMAGE_HAS_COLOR;
+    r_image.type = LIGHTMAP_FORMAT;
+    r_image.size = r_image.width * r_image.height * LIGHTMAP_BPP;
 
-	if( tr.dlightTexture != 0 )
-		return; // already initialized
+    // Allocate memory for the image data
+    r_image.buffer = (byte *)Mem_Malloc(r_temppool, r_image.size);
+    if (!r_image.buffer) {
+        fprintf(stderr, "Failed to allocate memory for dlight texture\n");
+        return;
+    }
+    
+    // Initialize the data to some default value (e.g., zero)
+    memset(r_image.buffer, 0, r_image.size);
 
-	memset( &r_image, 0, sizeof( r_image ));
-	r_image.width = BLOCK_SIZE;
-	r_image.height = BLOCK_SIZE;
-	r_image.flags = IMAGE_HAS_COLOR;
-	r_image.type = PF_RGBA_32;
-	r_image.size = r_image.width * r_image.height * 4;
+    tr.dlightTexture = GL_LoadTextureInternal("*dlight", &r_image, TF_NOMIPMAP | TF_CLAMP | TF_ATLAS_PAGE);
 
-	tr.dlightTexture = GL_LoadTextureInternal( "*dlight", &r_image, TF_NOMIPMAP|TF_CLAMP|TF_ATLAS_PAGE );
+    if (tr.dlightTexture == 0) {
+        fprintf(stderr, "Failed to create dlight texture\n");
+    } else {
+        printf("Successfully created dlight texture\n");
+    }
+
+    // Free the allocated memory after loading the texture
+    Mem_Free(r_image.buffer);
 }
 
 /*
@@ -2338,7 +2603,6 @@ void R_InitImages( void )
 	// validate cvars
 	R_SetTextureParameters();
 	GL_CreateInternalTextures();
-	R_InitRipples();
 
 	gEngfuncs.Cmd_AddCommand( "texturelist", R_TextureList_f, "display loaded textures list" );
 }
@@ -2367,6 +2631,7 @@ void R_ShutdownImages( void )
 
 void R_TextureReplacementReport( const char *modelname, int gl_texturenum, const char *foundpath )
 {
+#if !XASH_DREAMCAST
 	if( host_allow_materials->value != 2.0f )
 		return;
 
@@ -2376,6 +2641,7 @@ void R_TextureReplacementReport( const char *modelname, int gl_texturenum, const
 		gEngfuncs.Con_Printf( "Looking for %s tex replacement..." S_YELLOW "MISS (%s)\n", modelname, foundpath );
 	else
 		gEngfuncs.Con_Printf( "Looking for %s tex replacement..." S_RED "FAIL (%s)\n", modelname, foundpath );
+#endif // !XASH_DREAMCAST
 }
 
 qboolean R_SearchForTextureReplacement( char *out, size_t size, const char *modelname, const char *fmt, ... )

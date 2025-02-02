@@ -21,8 +21,6 @@ GNU General Public License for more details.
 #include "pm_local.h"
 #include "pmtrace.h"
 
-extern cvar_t r_shadows;
-
 typedef struct
 {
 	double		time;
@@ -580,7 +578,6 @@ static void R_AliasDynamicLight( cl_entity_t *ent, alight_t *plight )
 	float		add, radius, total;
 	colorVec		light;
 	uint		lnum;
-	dlight_t		*dl;
 
 	if( !plight || !ent )
 		return;
@@ -696,7 +693,7 @@ static void R_AliasDynamicLight( cl_entity_t *ent, alight_t *plight )
 
 	for( lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
 	{
-		dl = gEngfuncs.GetDynamicLight( lnum );
+		const dlight_t *dl = &tr.dlights[lnum];
 
 		if( dl->die < g_alias.time || !r_dynamic->value )
 			continue;
@@ -802,7 +799,7 @@ static void R_AliasLighting( float *lv, const vec3_t normal )
 
 	illum = bound( 0.0f, illum, 255.0f );
 
-	*lv = gEngfuncs.LightToTexGammaEx( illum * 4 ) / 1023.0f;
+	*lv = LightToTexGamma( illum * 4 ) / 1023.0f;
 }
 
 /*

@@ -23,8 +23,55 @@ GNU General Public License for more details.
 
 ========================================================================
 */
-void Matrix4x4_Concat( matrix4x4 out, const matrix4x4 in1, const matrix4x4 in2 )
+void Matrix4x4_Concat(matrix4x4 out, const matrix4x4 in1, const matrix4x4 in2)
 {
+#if XASH_DREAMCAST 
+    unsigned int prefetch_scratch;
+
+    asm volatile (
+        "mov %[bmtrx], %[pref_scratch]\n\t"
+        "add #32, %[pref_scratch]\n\t"
+        "fschg\n\t"
+
+        "pref @%[pref_scratch]\n\t"
+
+        "fmov.d @%[bmtrx]+, XD0\n\t" 
+        "fmov.d @%[bmtrx]+, XD2\n\t"
+        "fmov.d @%[bmtrx]+, XD4\n\t"
+        "fmov.d @%[bmtrx]+, XD6\n\t"
+        "pref @%[fmtrx]\n\t" 
+        "fmov.d @%[bmtrx]+, XD8\n\t" 
+        "fmov.d @%[bmtrx]+, XD10\n\t"
+        "fmov.d @%[bmtrx]+, XD12\n\t"
+        "mov %[fmtrx], %[pref_scratch]\n\t"
+        "add #32, %[pref_scratch]\n\t"
+
+        "fmov.d @%[bmtrx], XD14\n\t"
+        "pref @%[pref_scratch]\n\t"
+
+        "fmov.d @%[fmtrx]+, DR0\n\t"
+        "fmov.d @%[fmtrx]+, DR2\n\t"
+        "fmov.d @%[fmtrx]+, DR4\n\t"
+        "ftrv XMTRX, FV0\n\t"
+
+        "fmov.d @%[fmtrx]+, DR6\n\t"
+        "fmov.d @%[fmtrx]+, DR8\n\t"
+        "ftrv XMTRX, FV4\n\t"
+
+        "fmov.d @%[fmtrx]+, DR10\n\t"
+        "fmov.d @%[fmtrx]+, DR12\n\t"
+        "ftrv XMTRX, FV8\n\t"
+
+        "fmov.d @%[fmtrx], DR14\n\t"
+        "fschg\n\t"
+        "ftrv XMTRX, FV12\n\t"
+        "frchg\n"
+        : [bmtrx] "+&r" ((unsigned int)in2), [fmtrx] "+r" ((unsigned int)in1), [pref_scratch] "=&r" (prefetch_scratch)  // Swapped in1 and in2 here
+        : // no inputs
+        : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7", "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15"
+    );
+    mat_store((matrix_t *)out);
+#else
 	out[0][0] = in1[0][0] * in2[0][0] + in1[0][1] * in2[1][0] + in1[0][2] * in2[2][0] + in1[0][3] * in2[3][0];
 	out[0][1] = in1[0][0] * in2[0][1] + in1[0][1] * in2[1][1] + in1[0][2] * in2[2][1] + in1[0][3] * in2[3][1];
 	out[0][2] = in1[0][0] * in2[0][2] + in1[0][1] * in2[1][2] + in1[0][2] * in2[2][2] + in1[0][3] * in2[3][2];
@@ -41,8 +88,8 @@ void Matrix4x4_Concat( matrix4x4 out, const matrix4x4 in1, const matrix4x4 in2 )
 	out[3][1] = in1[3][0] * in2[0][1] + in1[3][1] * in2[1][1] + in1[3][2] * in2[2][1] + in1[3][3] * in2[3][1];
 	out[3][2] = in1[3][0] * in2[0][2] + in1[3][1] * in2[1][2] + in1[3][2] * in2[2][2] + in1[3][3] * in2[3][2];
 	out[3][3] = in1[3][0] * in2[0][3] + in1[3][1] * in2[1][3] + in1[3][2] * in2[2][3] + in1[3][3] * in2[3][3];
+#endif
 }
-
 /*
 ================
 Matrix4x4_CreateProjection
@@ -99,26 +146,25 @@ void Matrix4x4_CreateModelview( matrix4x4 out )
 	out[1][2] = 1.0f;
 }
 
-void Matrix4x4_ToArrayFloatGL( const matrix4x4 in, float out[16] )
+void Matrix4x4_ToArrayFloatGL(const matrix4x4 in, float out[16])
 {
-	out[ 0] = in[0][0];
-	out[ 1] = in[1][0];
-	out[ 2] = in[2][0];
-	out[ 3] = in[3][0];
-	out[ 4] = in[0][1];
-	out[ 5] = in[1][1];
-	out[ 6] = in[2][1];
-	out[ 7] = in[3][1];
-	out[ 8] = in[0][2];
-	out[ 9] = in[1][2];
-	out[10] = in[2][2];
-	out[11] = in[3][2];
-	out[12] = in[0][3];
-	out[13] = in[1][3];
-	out[14] = in[2][3];
-	out[15] = in[3][3];
+    out[ 0] = in[0][0];
+    out[ 1] = in[1][0];
+    out[ 2] = in[2][0];
+    out[ 3] = in[3][0];
+    out[ 4] = in[0][1];
+    out[ 5] = in[1][1];
+    out[ 6] = in[2][1];
+    out[ 7] = in[3][1];
+    out[ 8] = in[0][2];
+    out[ 9] = in[1][2];
+    out[10] = in[2][2];
+    out[11] = in[3][2];
+    out[12] = in[0][3];
+    out[13] = in[1][3];
+    out[14] = in[2][3];
+    out[15] = in[3][3];
 }
-
 static void Matrix4x4_CreateTranslate( matrix4x4 out, float x, float y, float z )
 {
 	out[0][0] = 1.0f;

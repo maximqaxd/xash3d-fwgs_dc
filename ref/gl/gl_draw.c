@@ -83,39 +83,6 @@ void R_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, f
 
 /*
 =============
-Draw_TileClear
-
-This repeats a 64*64 tile graphic to fill the screen around a sized down
-refresh window.
-=============
-*/
-void R_DrawTileClear( int texnum, int x, int y, int w, int h )
-{
-	float		tw, th;
-	gl_texture_t	*glt;
-
-	GL_SetRenderMode( kRenderNormal );
-	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
-	GL_Bind( XASH_TEXTURE0, texnum );
-
-	glt = R_GetTexture( texnum );
-	tw = glt->srcWidth;
-	th = glt->srcHeight;
-
-	pglBegin( GL_QUADS );
-		pglTexCoord2f( x / tw, y / th );
-		pglVertex2f( x, y );
-		pglTexCoord2f((x + w) / tw, y / th );
-		pglVertex2f( x + w, y );
-		pglTexCoord2f((x + w) / tw, (y + h) / th );
-		pglVertex2f( x + w, y + h );
-		pglTexCoord2f( x / tw, (y + h) / th );
-		pglVertex2f( x, y + h );
-	pglEnd ();
-}
-
-/*
-=============
 R_DrawStretchRaw
 =============
 */
@@ -240,42 +207,48 @@ R_Set2DMode
 */
 void R_Set2DMode( qboolean enable )
 {
-	if( enable )
-	{
-		if( glState.in2DMode )
-			return;
+    if( enable )
+    {
+        if( glState.in2DMode )
+            return;
 
-		// set 2D virtual screen size
-		pglViewport( 0, 0, gpGlobals->width, gpGlobals->height );
-		pglMatrixMode( GL_PROJECTION );
-		pglLoadIdentity();
-		pglOrtho( 0, gpGlobals->width, gpGlobals->height, 0, -99999, 99999 );
-		pglMatrixMode( GL_MODELVIEW );
-		pglLoadIdentity();
+        // set 2D virtual screen size
+        pglViewport( 0, 0, gpGlobals->width, gpGlobals->height );
+        pglMatrixMode( GL_PROJECTION );
+        pglLoadIdentity();
+        pglOrtho( 0, gpGlobals->width, gpGlobals->height, 0, -99999, 99999 );
+        pglMatrixMode( GL_MODELVIEW );
+        pglLoadIdentity();
 
-		GL_Cull( GL_NONE );
+        GL_Cull( GL_NONE );
 
-		pglDepthMask( GL_FALSE );
-		pglDisable( GL_DEPTH_TEST );
-		pglEnable( GL_ALPHA_TEST );
-		pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+        pglDepthMask( GL_FALSE );
+        pglDisable( GL_DEPTH_TEST );
+#ifdef XASH_DREAMCAST
+        pglDisable( GL_NEARZ_CLIPPING_KOS );
+#endif
+        pglEnable( GL_ALPHA_TEST );
+        pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 
-		glState.in2DMode = true;
-		RI.currententity = NULL;
-		RI.currentmodel = NULL;
-	}
-	else
-	{
-		pglDepthMask( GL_TRUE );
-		pglEnable( GL_DEPTH_TEST );
-		glState.in2DMode = false;
+        glState.in2DMode = true;
+        RI.currententity = NULL;
+        RI.currentmodel = NULL;
+    }
+    else
+    {
+        pglDepthMask( GL_TRUE );
+        pglEnable( GL_DEPTH_TEST );
+#ifdef XASH_DREAMCAST
+        pglEnable( GL_NEARZ_CLIPPING_KOS );
+#endif
+        glState.in2DMode = false;
 
-		pglMatrixMode( GL_PROJECTION );
-		GL_LoadMatrix( RI.projectionMatrix );
+        pglMatrixMode( GL_PROJECTION );
+        GL_LoadMatrix( RI.projectionMatrix );
 
-		pglMatrixMode( GL_MODELVIEW );
-		GL_LoadMatrix( RI.worldviewMatrix );
+        pglMatrixMode( GL_MODELVIEW );
+        GL_LoadMatrix( RI.worldviewMatrix );
 
-		GL_Cull( GL_FRONT );
-	}
+        GL_Cull( GL_FRONT );
+    }
 }
