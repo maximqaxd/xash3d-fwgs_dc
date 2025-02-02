@@ -10,16 +10,19 @@ include engine.mk
 
 # Module paths and lib names
 FILESYSTEM_DIR = filesystem
-REF_GL_DIR = ref/gldc
+REF_GL_DIR = ref/gl
 MAINUI_DIR = mainui_cpp
 CS_DLL_DIR = cs16-client
 
 MAINUI_LIB = $(MAINUI_DIR)/libmenu.a
 FILESYSTEM_LIB = $(FILESYSTEM_DIR)/libfilesystem_stdio.a
-REF_GL_LIB = $(REF_GL_DIR)/libref_gldc.a
+REF_GL_LIB = $(REF_GL_DIR)/libref_gl.a
+CL_DLL_LIB = $(CS_DLL_DIR)/libcs_client.a
 
 OBJS =  $(XASH_CLIENT_OBJS) $(XASH_OBJS) $(XASH_SERVER_OBJS) $(XASH_PLATFORM_OBJS)
-LIBS = -L$(CS_DLL_DIR) \
+
+LIBS = -Lcs16-client \
+	   -L3rdparty/dreamcast/GLdc/dcbuild \
        -L$(KOS_BASE)/addons/lib/$(KOS_ARCH) \
        -L$(KOS_PORTS)/lib \
        -L$(FILESYSTEM_DIR) \
@@ -29,24 +32,20 @@ LIBS = -L$(CS_DLL_DIR) \
 	   -lbz2 \
        -lfilesystem_stdio \
        -lcs_client \
-       -lref_gldc \
+       -lref_gl \
        -l:libGL.a \
        -lppp
 	   
 
 # Build module libraries
+$(CS_DLL_LIB):
+	$(MAKE) -C $(CS_DLL_DIR)
+
 $(FILESYSTEM_LIB):
 	$(MAKE) -C $(FILESYSTEM_DIR)
 
 $(REF_GL_LIB):
 	$(MAKE) -C $(REF_GL_DIR)
-
-$(CS_DLL_LIB):
-	$(MAKE) -C $(CS_DLL_DIR)
-
-$(MAINUI_LIB):
-	$(MAKE) -C $(MAINUI_DIR)
-
 
 # The rm-elf step is to remove the target before building, to force the
 # re-creation of the rom disk.
