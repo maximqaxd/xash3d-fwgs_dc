@@ -144,7 +144,8 @@ XASH_PLATFORM_OBJS = \
 	engine/platform/dreamcast/vid_dc.o \
 	engine/platform/dreamcast/in_dc.o 
 
-INCLUDE = -Icommon \
+INCLUDE = -I. \
+-Icommon \
 -Iengine/server \
 -Iengine/client/vgui \
 -Iengine/client/avi \
@@ -168,3 +169,11 @@ INCLUDE = -Icommon \
 DEFINES = -DENGINE_DLL -D_KOS_ -D_SH4_ -DXASH_BUILD_COMMIT=\"64726f13-dirty\" -DXASH_BUILD_BRANCH=\"master\" -DFRAME_POINTERS=1 -DXASH_STATIC_LIBS=1 -DXASH_LOW_MEMORY=2 -DXASH_ENABLE_MAIN=1 -DXASH_REF_SOFT_ENABLED=0  -DXASH_REF_GL_ENABLED=1 -DHAVE_TGMATH_H=0 -DHAVE_STRNICMP=1 -DHAVE_STRICMP=1 -D_snprintf=snprintf 
 FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -freorder-blocks-algorithm=simple -flto=auto
 CFLAGS +=  $(INCLUDE) $(DEFINES) $(FLAGS)  
+# -O3 math and phys
+public/matrixlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions  -ffast-math -ffp-contract=fast
+public/xash3d_mathlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/server/sv_phys.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/server/sv_pmove.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/server/sv_move.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/common/pm_surface.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/common/pm_trace.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
