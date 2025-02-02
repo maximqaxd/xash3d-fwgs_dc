@@ -227,8 +227,6 @@ qboolean Image_LoadMDL( const char *name, const byte *buffer, fs_offset_t filesi
             if (filesize < (sizeof(*pin) + pixels + 768))
                 return false;
 
-			Con_DPrintf("%s: loading IL_HINT_HL texture %s\n", __func__, name);
-
             if (FBitSet(pin->flags, STUDIO_NF_MASKED))
             {
                 byte *pal = fin + pixels;
@@ -292,7 +290,7 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
         uint32_t format;
         memcpy(&format, fin + 8, sizeof(uint32_t));
         uint8_t texture_format = (format >> 8) & 0xFF;
-        
+        uint8_t color_format = format & 0xFF;     
         image.width = pin.width;
         image.height = pin.height;
         
@@ -300,7 +298,13 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
         {  
             if (texture_format == PVR_VQ)
             {
-                image.type = PF_VQ_RGB_5650;
+				if (color_format == PVR_ARGB1555)
+					image.type = PF_VQ_ARGB_1555;
+				else if (color_format == PVR_ARGB4444)
+					image.type = PF_VQ_ARGB_4444;
+				else
+                	image.type = PF_VQ_RGB_5650;
+
                 const int codebook_size = 2048;
                 const int indices_size = (image.width * image.height) / 4;
                 image.size = codebook_size + indices_size;
@@ -319,6 +323,13 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
             }
         }
     }
+
+	// FIXME: maximqad THIS IS STUPID UGLY HACK to fit certain sprites into VRAM, remove that when we have VQ sprgen
+	if (Q_stristr(name, "puff") || Q_stristr(name, "smoke") || Q_stristr(name, "tele") || Q_stristr(name, "pistol_smoke") || Q_stristr (name, "rifle_smoke") || Q_stristr (name, "logo"))
+	{
+		image.width /= 8;  
+		image.height /= 8; 
+	}
 
     if( filesize == ( image.width * image.height * 4 ))
         truecolor = true;
@@ -342,8 +353,7 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
 
     if( truecolor )
     {
-		Con_Printf("truecolor sprite %s\n", name);
-        image.size = image.width * image.height / 8;
+        image.size = image.width * image.height * 4;
         image.rgba = Mem_Malloc( host.imagepool, image.size );
         memcpy( image.rgba, fin, image.size );
         SetBits( image.flags, IMAGE_HAS_COLOR );
