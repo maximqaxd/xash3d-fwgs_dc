@@ -64,7 +64,10 @@ qboolean Image_LoadPVR(const char *name, const byte *buffer, fs_offset_t filesiz
     switch (pvrt->imageFormat)
     {
         case PVR_VQ:
-            image.type = PF_VQ_RGB_5650;
+            if (pvrt->colorFormat == PVR_ARGB4444)
+                image.type= PF_VQ_ARGB_4444;
+            else        
+                image.type = PF_VQ_RGB_5650;
             image.size = 2048 + ((image.width * image.height) / 4);
             break;
         case PVR_RECT:

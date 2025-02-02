@@ -41,7 +41,9 @@ GNU General Public License for more details.
 #define PVR_SMALL_VQ_MIPMAP   0x11
 #define PVR_TWIDDLED_MIPMAP2  0x12
 
-
+#define PVR_ARGB1555 0x00
+#define PVR_RGB565   0x01
+#define PVR_ARGB4444 0x02
 
 #pragma pack(push,1)
 typedef struct gbix_s
