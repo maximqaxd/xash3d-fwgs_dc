@@ -524,8 +524,6 @@ typedef struct
 	size_t  size;      // for bounds checking
 #ifdef XASH_DREAMCAST
 	uint32_t  aica_pos;  // position in AICA memory
-	uint32_t*   aica_chunks;   // Array of AICA chunk addresses
-    size_t      num_chunks;    // Number of chunks
 #endif
 } wavdata_t;
 
@@ -845,14 +843,22 @@ static inline connprotocol_t CL_Protocol( void )
 
 static inline qboolean Host_IsLocalGame( void )
 {
+#if XASH_DREAMCAST
+	return false;
+#else
 	if( SV_Active( ))
 		return SV_GetMaxClients() == 1 ? true : false;
 	return CL_GetMaxClients() == 1 ? true : false;
+#endif
 }
 
 static inline qboolean Host_IsLocalClient( void )
 {
+#if XASH_DREAMCAST
+	return false;
+#else
 	return CL_Initialized( ) && SV_Initialized( ) ? true : false;
+#endif
 }
 
 // soundlib shared exports

@@ -177,6 +177,7 @@ static qboolean Cvar_UpdateInfo( convar_t *var, const char *value, qboolean noti
 #endif
 	}
 
+#if !XASH_DREAMCAST
 	if( FBitSet( var->flags, FCVAR_SERVER ) && notify )
 	{
 		if( !FBitSet( var->flags, FCVAR_UNLOGGED ))
@@ -193,7 +194,7 @@ static qboolean Cvar_UpdateInfo( convar_t *var, const char *value, qboolean noti
 			}
 		}
 	}
-
+#endif
 	return true;
 }
 

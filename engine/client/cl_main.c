@@ -1410,9 +1410,11 @@ static void CL_Connect_f( void )
 
 	Q_strncpy( server, Cmd_Argv( 1 ), sizeof( server ));
 
+#if !XASH_DREAMCAST
 	// if running a local server, kill it and reissue
 	if( SV_Active( ))
 		SV_Shutdown( "Server was killed due to connection to remote server\n" );
+#endif
 	NET_Config( true, !cl_nat.value ); // allow remote
 
 	Con_Printf( "server %s\n", server );
@@ -1442,6 +1444,7 @@ an unconnected command.
 */
 static void CL_Rcon_f( void )
 {
+#if !XASH_DREAMCAST
 	char message[1024];
 	sizebuf_t msg;
 	netadr_t to;
@@ -1489,6 +1492,7 @@ static void CL_Rcon_f( void )
 	MSG_WriteByte( &msg, 0 );
 
 	NET_SendPacket( NS_CLIENT, MSG_GetNumBytesWritten( &msg ), MSG_GetData( &msg ), to );
+#endif
 }
 
 
@@ -2659,10 +2663,11 @@ static void CL_ReadNetMessage( void )
 	case PROTO_QUAKE:
 		parsefn = CL_ParseQuakeMessage;
 		break;
-#endif // XASH_DREAMCAST we don't need quake and Xash3D 48 protocol on DC
+
 	case PROTO_GOLDSRC:
 		parsefn = CL_ParseGoldSrcServerMessage;
 		break;
+#endif // XASH_DREAMCAST we don't need quake and Xash3D 48, GoldSrc protocol on DC
 	default:
 		parsefn = CL_ParseServerMessage;
 		break;

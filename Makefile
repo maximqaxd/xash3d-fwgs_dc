@@ -19,7 +19,7 @@ FILESYSTEM_LIB = $(FILESYSTEM_DIR)/libfilesystem_stdio.a
 REF_GL_LIB = $(REF_GL_DIR)/libref_gl.a
 CL_DLL_LIB = $(CS_DLL_DIR)/libcs_client.a
 
-OBJS =  $(XASH_CLIENT_OBJS) $(XASH_OBJS) $(XASH_SERVER_OBJS) $(XASH_PLATFORM_OBJS)
+OBJS =  $(XASH_CLIENT_OBJS) $(XASH_OBJS) $(XASH_PLATFORM_OBJS)
 
 LIBS = -Lcs16-client \
 	   -L3rdparty/dreamcast/GLdc/dcbuild \
@@ -29,7 +29,6 @@ LIBS = -Lcs16-client \
        -L$(REF_GL_DIR) \
        -L$(MAINUI_DIR) \
 	   -lfatfs \
-	   -lbz2 \
        -lfilesystem_stdio \
        -lcs_client \
        -lref_gl \

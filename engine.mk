@@ -19,10 +19,7 @@ XASH_CLIENT_OBJS = \
 	engine/client/cl_main.o \
 	engine/client/cl_netgraph.o \
 	engine/client/cl_parse.o \
-	engine/client/cl_parse_gs.o \
-	engine/client/cl_qparse.o \
 	engine/client/cl_pmove.o \
-	engine/client/cl_remap.o \
 	engine/client/cl_render.o \
 	engine/client/cl_scrn.o \
 	engine/client/cl_securedstub.o \
@@ -62,6 +59,7 @@ XASH_CLIENT_OBJS = \
 	engine/client/titles.o \
 	engine/client/vid_common.o \
 	engine/client/voice.o \
+	engine/server/sv_stub.o \
 
 XASH_OBJS = \
 	engine/common/base_cmd.o \
@@ -172,8 +170,7 @@ CFLAGS +=  $(INCLUDE) $(DEFINES) $(FLAGS)
 # -O3 math and phys
 public/matrixlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions  -ffast-math -ffp-contract=fast
 public/xash3d_mathlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
-engine/server/sv_phys.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
-engine/server/sv_pmove.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
-engine/server/sv_move.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
 engine/common/pm_surface.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
 engine/common/pm_trace.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/client/cl_pmove.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/client/cl_frame.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast

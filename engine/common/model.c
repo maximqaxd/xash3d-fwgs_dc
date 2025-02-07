@@ -75,7 +75,7 @@ static void Mod_FreeUserData( model_t *mod )
 	// ignore submodels and freed models
 	if( !COM_CheckStringEmpty( mod->name ) || mod->name[0] == '*' )
 		return;
-
+#if !XASH_DREAMCAST
 	if( Host_IsDedicated() )
 	{
 		if( svgame.physFuncs.Mod_ProcessUserData != NULL )
@@ -84,6 +84,7 @@ static void Mod_FreeUserData( model_t *mod )
 			svgame.physFuncs.Mod_ProcessUserData( mod, false, NULL );
 		}
 	}
+#endif
 #if !XASH_DEDICATED
 	else
 	{
@@ -328,7 +329,7 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 	{
 		if( world.loading )
 			SetBits( mod->flags, MODEL_WORLD ); // mark worldmodel
-
+#if !XASH_DREAMCAST
 		if( Host_IsDedicated() )
 		{
 			if( svgame.physFuncs.Mod_ProcessUserData != NULL )
@@ -337,6 +338,7 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 				svgame.physFuncs.Mod_ProcessUserData( mod, true, buf );
 			}
 		}
+#endif
 #if !XASH_DEDICATED
 		else
 		{
