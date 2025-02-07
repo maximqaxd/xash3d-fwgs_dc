@@ -1085,12 +1085,14 @@ void CL_InitEdicts( int maxclients )
 	clgame.static_entities = NULL; // will be initialized later
 	clgame.numStatics = 0;
 
+#if !XASH_DREAMCAST
 	if(( clgame.maxRemapInfos - 1 ) != clgame.maxEntities )
 	{
 		CL_ClearAllRemaps (); // purge old remap info
 		clgame.maxRemapInfos = clgame.maxEntities + 1;
 		clgame.remap_info = (remap_info_t **)Mem_Calloc( clgame.mempool, sizeof( remap_info_t* ) * clgame.maxRemapInfos );
 	}
+#endif
 
 	ref.dllFuncs.R_ProcessEntData( true, clgame.entities, clgame.maxEntities );
 }
@@ -3957,7 +3959,9 @@ void CL_UnloadProgs( void )
 	CL_FreeTempEnts();
 	CL_FreeViewBeams();
 	CL_FreeParticles();
+#if !XASH_DREAMCAST
 	CL_ClearAllRemaps();
+#endif
 	Mod_ClearUserData();
 #if !XASH_DREAMCAST
 	// NOTE: HLFX 0.5 has strange bug: hanging on exit if no map was loaded
