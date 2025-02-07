@@ -176,7 +176,12 @@ typedef struct clientdata_s
 
 #include "weaponinfo.h"
 
+
 #define MAX_LOCAL_WEAPONS	64	// max weapons that can be predicted on the client
+#if XASH_DREAMCAST
+#undef MAX_LOCAL_WEAPONS
+#define MAX_LOCAL_WEAPONS 	32
+#endif // XASH_DREAMCAST
 
 typedef struct local_state_s
 {
