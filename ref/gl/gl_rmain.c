@@ -1080,12 +1080,15 @@ void R_BeginFrame( qboolean clearScene )
 
 	R_Set2DMode( true );
 
+#if !XASH_DREAMCAST
 	// draw buffer stuff
 	pglDrawBuffer( GL_BACK );
 
 	// update texture parameters
 	if( FBitSet( gl_texture_nearest.flags|gl_lightmap_nearest.flags|gl_texture_anisotropy.flags|gl_texture_lodbias.flags, FCVAR_CHANGED ))
 		R_SetTextureParameters();
+
+#endif
 
 	gEngfuncs.CL_ExtraUpdate ();
 }

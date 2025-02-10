@@ -226,7 +226,12 @@ void GL_ApplyTextureParams( gl_texture_t *tex )
 
 		if( tex->target == GL_TEXTURE_3D || tex->target == GL_TEXTURE_CUBE_MAP_ARB )
 			pglTexParameteri( tex->target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER );
-#if !XASH_DREAMCAST
+#if XASH_DREAMCAST
+		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR, border[0]); // Red
+		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 1, border[1]); // Green
+		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 2, border[2]); // Blue
+		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 3, border[3]); // Alpha
+#else
 		pglTexParameterfv( tex->target, GL_TEXTURE_BORDER_COLOR, border );
 #endif // !XASH_DREAMCAST
 	}
@@ -972,79 +977,6 @@ byte *GL_ResampleTexture( const byte *source, int inWidth, int inHeight, int out
 	return scaledImage;
 }
 
-#if XASH_DREAMCAST
-qboolean GL_UpdateTexture(int texnum, int xoff, int yoff, int width, int height, const void *buffer)
-{
-    gl_texture_t *tex;
-    GLuint format, type;
-
-    // missed or invalid texture?
-    if((texnum <= 0) || (texnum >= MAX_TEXTURES))
-    {
-        if(texnum != 0)
-        {
-            gEngfuncs.Con_DPrintf(S_ERROR "GL_UpdateTexture: invalid texture num %d\n", texnum);
-            return false;
-        }
-    }
-    tex = &gl_textures[texnum];
-
-    if((tex->width < width + xoff) || (tex->height < height + yoff))
-    {
-        gEngfuncs.Con_DPrintf(S_ERROR "GL_UpdateTexture: %s invalid update area size XY[%d x %d] WH[%d x %d]\n", 
-            tex->name, width, height, xoff, yoff);
-        return false;
-    }
-    // Convert GU format to GL format
-    switch(tex->format)
-    {	
-		case GL_RGB565_KOS:
-			format = GL_RGB565_KOS;
-            type = GL_UNSIGNED_SHORT_5_6_5;
-		case GL_RGB:
-        case GL_RGB8:
-            format = GL_RGB;
-            type = GL_UNSIGNED_BYTE;
-            break;
-		case GL_RGBA4:
-        case GL_RGBA8:
-            format = GL_RGBA;
-            type = GL_UNSIGNED_BYTE;
-            break;
-        case GL_LUMINANCE8:
-            format = GL_LUMINANCE;
-            type = GL_UNSIGNED_BYTE;
-            break;
-        default:
-            gEngfuncs.Con_DPrintf(S_ERROR "GL_UpdateTexture: unsupported texture format 0x%04x\n", tex->format);
-			return false;
-    }
-
-
-    if(!FBitSet(tex->flags, TF_IMG_UPLOADED))
-    {
-        // First time upload - create the texture
-        glGenTextures(1, &tex->texnum);
-        glBindTexture(GL_TEXTURE_2D, tex->texnum);
-        
-        // Set texture parameters
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-        // Allocate texture storage
-        glTexImage2D(GL_TEXTURE_2D, 0, format, tex->width, tex->height, 0, format, type, NULL);
-        SetBits(tex->flags, TF_IMG_UPLOADED);
-    }
-
-    // Update the texture subregion
-    glBindTexture(GL_TEXTURE_2D, tex->texnum);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, xoff, yoff, width, height, format, type, buffer);
-
-    return true;
-}
-#endif
 /*
 =================
 GL_BoxFilter3x3
@@ -1523,8 +1455,9 @@ static void GL_ProcessImage( gl_texture_t *tex, rgbdata_t *pic )
 	if( tex->flags & TF_FORCE_COLOR ) pic->flags |= IMAGE_HAS_COLOR;
 	if( pic->flags & IMAGE_HAS_ALPHA ) tex->flags |= TF_HAS_ALPHA;
 
+#if !XASH_DREAMCAST
 	tex->encode = pic->encode; // share encode method
-
+#endif
 	if( ImageCompressed( pic->type ))
 	{
 		if( !pic->numMips )
@@ -1552,9 +1485,11 @@ static void GL_ProcessImage( gl_texture_t *tex, rgbdata_t *pic )
 		if( !FBitSet( tex->flags, TF_IMG_UPLOADED ) && FBitSet( tex->flags, TF_KEEP_SOURCE ))
 			tex->original = gEngfuncs.FS_CopyImage( pic ); // because current pic will be expanded to rgba
 
+#if !XASH_DREAMCAST
 		// we need to expand image into RGBA buffer
 		if( pic->type == PF_INDEXED_24 || pic->type == PF_INDEXED_32 )
 			img_flags |= IMAGE_FORCE_RGBA;
+#endif
 
 		// processing image before uploading (force to rgba, make luma etc)
 		if( pic->buffer ) gEngfuncs.Image_Process( &pic, 0, 0, img_flags, 0 );

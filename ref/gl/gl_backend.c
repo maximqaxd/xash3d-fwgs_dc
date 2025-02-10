@@ -811,13 +811,17 @@ void SCR_TimeRefresh_f( void )
 	// run without page flipping like GoldSrc
 	if( gEngfuncs.Cmd_Argc() == 1 )
 	{
+#if !XASH_DREAMCAST
 		pglDrawBuffer( GL_FRONT );
+#endif
 		for( i = 0; i < 128; i++ )
 		{
 			gpGlobals->viewangles[1] = i / 128.0f * 360.0f;
 			R_RenderScene();
 		}
+#if !XASH_DREAMCAST
 		pglFinish();
+#endif
 		R_EndFrame();
 	}
 	else

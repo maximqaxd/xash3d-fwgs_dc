@@ -878,7 +878,47 @@ float *R_DecalSetupVerts( decal_t *pDecal, msurface_t *surf, int texture, int *o
 
 	return v;
 }
+#if XASH_DREAMCAST
+void DrawSingleDecal(decal_t *pDecal, msurface_t *fa) {
+    float *v;
+    int i, numVerts;
 
+    v = R_DecalSetupVerts(pDecal, fa, pDecal->texture, &numVerts);
+    if (!numVerts) return;
+
+    GL_Bind(XASH_TEXTURE0, pDecal->texture);
+
+    // Allocate space for vertex data
+    glvert_fast_t vertices[numVerts];
+
+    // Populate the vertex array
+    for (i = 0; i < numVerts; i++, v += VERTEXSIZE) {
+        // Initialize the vertex using designated initializers
+        vertices[i] = (glvert_fast_t){
+            .flags = (i == numVerts - 1) ? VERTEX_EOL : VERTEX,
+            .vert = {v[0], v[1], v[2]},
+            .texture = {v[3], v[4]},
+            .color = {0, 0, 0, 255}, // Default color (black), not used in this function
+            .pad0 = {0}
+        };
+    }
+
+    // Enable client states
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+
+    // Pointers to vertex data
+    glVertexPointer(3, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].vert);
+    glTexCoordPointer(2, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].texture);
+
+    // Draw the polygon
+    glDrawArrays(GL_POLYGON, 0, numVerts);
+
+    // Disable client states
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+}
+#else
 void DrawSingleDecal( decal_t *pDecal, msurface_t *fa )
 {
 	float	*v;
@@ -899,7 +939,141 @@ void DrawSingleDecal( decal_t *pDecal, msurface_t *fa )
 
 	pglEnd();
 }
+#endif
 
+#if XASH_DREAMCAST
+void DrawSurfaceDecals(msurface_t *fa, qboolean single, qboolean reverse) {
+    decal_t *p;
+    cl_entity_t *e;
+    if (!fa->pdecals) return;
+    e = RI.currententity;
+    Assert(e != NULL);
+
+    if (single) {
+        if (e->curstate.rendermode == kRenderNormal || e->curstate.rendermode == kRenderTransAlpha) {
+            pglDepthMask(GL_FALSE);
+            pglEnable(GL_BLEND);
+            if (e->curstate.rendermode == kRenderTransAlpha)
+                pglDisable(GL_ALPHA_TEST);
+        }
+        if (e->curstate.rendermode == kRenderTransColor)
+            pglEnable(GL_TEXTURE_2D);
+        if (e->curstate.rendermode == kRenderTransTexture || e->curstate.rendermode == kRenderTransAdd)
+            GL_Cull(GL_NONE);
+        if (gl_polyoffset.value) {
+            pglEnable(GL_POLYGON_OFFSET_FILL);
+            pglPolygonOffset(-1.0f, -gl_polyoffset.value);
+        }
+    }
+
+    if (FBitSet(fa->flags, SURF_TRANSPARENT) && glState.stencilEnabled) {
+        mtexinfo_t *tex = fa->texinfo;
+        for (p = fa->pdecals; p; p = p->pnext) {
+            if (p->texture) {
+                float *o, *v;
+                int i, numVerts;
+                o = R_DecalSetupVerts(p, fa, p->texture, &numVerts);
+
+                // Allocate space for vertex data
+                glvert_fast_t vertices[numVerts];
+
+                // Populate the vertex array for stencil setup
+                for (i = 0, v = o; i < numVerts; i++, v += VERTEXSIZE) {
+                    float s = (DotProduct(v, tex->vecs[0]) + tex->vecs[0][3]) / tex->texture->width;
+                    float t = (DotProduct(v, tex->vecs[1]) + tex->vecs[1][3]) / tex->texture->height;
+                    // Initialize the vertex using designated initializers
+                    vertices[i] = (glvert_fast_t){
+                        .flags = (i == numVerts - 1) ? VERTEX_EOL : VERTEX,
+                        .vert = {v[0], v[1], v[2]},
+                        .texture = {s, t},
+                        .color = {0, 0, 0, 255}, // Default color (black), not used in this function
+                        .pad0 = {0}
+                    };
+                }
+
+                // Enable client states for stencil setup
+                glEnableClientState(GL_VERTEX_ARRAY);
+                glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+
+                // Pointers to vertex data for stencil setup
+                glVertexPointer(3, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].vert);
+                glTexCoordPointer(2, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].texture);
+
+                // Stencil setup
+                pglEnable(GL_STENCIL_TEST);
+                pglStencilFunc(GL_ALWAYS, 1, 0xFFFFFFFF);
+                pglColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+                pglStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
+                // Draw the polygon for stencil setup
+                glDrawArrays(GL_POLYGON, 0, numVerts);
+
+                // Stencil decrement
+                pglStencilOp(GL_KEEP, GL_KEEP, GL_DECR);
+                pglEnable(GL_ALPHA_TEST);
+
+                // Draw the polygon for stencil decrement
+                glDrawArrays(GL_POLYGON, 0, numVerts);
+
+                // Reset states after stencil operations
+                pglDisable(GL_ALPHA_TEST);
+                pglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                pglStencilFunc(GL_EQUAL, 0, 0xFFFFFFFF);
+                pglStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+
+                // Disable client states after stencil operations
+                glDisableClientState(GL_VERTEX_ARRAY);
+                glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+            }
+        }
+    }
+
+    pglBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    if (reverse && e->curstate.rendermode == kRenderTransTexture) {
+        decal_t *list[1024];
+        int i, count;
+        for (p = fa->pdecals, count = 0; p && count < 1024; p = p->pnext) {
+            if (p->texture) list[count++] = p;
+        }
+        for (i = count - 1; i >= 0; i--) {
+            DrawSingleDecal(list[i], fa);
+        }
+    } else {
+        for (p = fa->pdecals; p; p = p->pnext) {
+            if (!p->texture) continue;
+            DrawSingleDecal(p, fa);
+        }
+    }
+
+    if (FBitSet(fa->flags, SURF_TRANSPARENT) && glState.stencilEnabled) {
+        pglDisable(GL_STENCIL_TEST);
+    }
+
+    if (single) {
+        if (e->curstate.rendermode == kRenderNormal || e->curstate.rendermode == kRenderTransAlpha) {
+            pglDepthMask(GL_TRUE);
+            pglDisable(GL_BLEND);
+            if (e->curstate.rendermode == kRenderTransAlpha)
+                pglEnable(GL_ALPHA_TEST);
+        }
+        if (gl_polyoffset.value) {
+            pglDisable(GL_POLYGON_OFFSET_FILL);
+        }
+        if (e->curstate.rendermode == kRenderTransTexture || e->curstate.rendermode == kRenderTransAdd) {
+            GL_Cull(GL_FRONT);
+        }
+        if (e->curstate.rendermode == kRenderTransColor) {
+            pglDisable(GL_TEXTURE_2D);
+        }
+        // restore blendfunc here
+        if (e->curstate.rendermode == kRenderTransAdd || e->curstate.rendermode == kRenderGlow) {
+            pglBlendFunc(GL_SRC_ALPHA, GL_ONE);
+        }
+        pglTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    }
+}
+#else
 void DrawSurfaceDecals( msurface_t *fa, qboolean single, qboolean reverse )
 {
 	decal_t		*p;
@@ -1036,7 +1210,7 @@ void DrawSurfaceDecals( msurface_t *fa, qboolean single, qboolean reverse )
 		pglTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
 	}
 }
-
+#endif
 void DrawDecalsBatch( void )
 {
 	cl_entity_t	*e;

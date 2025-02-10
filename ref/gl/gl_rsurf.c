@@ -19,17 +19,17 @@ GNU General Public License for more details.
 
 typedef struct
 {
-	int		allocated[BLOCK_SIZE_MAX];
+	int		allocated[BLOCK_SIZE_DEFAULT];
 	int		current_lightmap_texture;
 	msurface_t	*dynamic_surfaces;
 	msurface_t	*lightmap_surfaces[MAX_LIGHTMAPS];
-	byte		lightmap_buffer[BLOCK_SIZE_MAX*BLOCK_SIZE_MAX*LIGHTMAP_BPP];
+	byte		lightmap_buffer[BLOCK_SIZE_DEFAULT*BLOCK_SIZE_DEFAULT*LIGHTMAP_BPP];
 } gllightmapstate_t;
 
 static int		nColinElim; // stats
 static vec2_t		world_orthocenter;
 static vec2_t		world_orthohalf;
-static uint		r_blocklights[BLOCK_SIZE_MAX*BLOCK_SIZE_MAX*3];
+static uint		r_blocklights[BLOCK_SIZE_DEFAULT*BLOCK_SIZE_DEFAULT*3];
 static mextrasurf_t		*fullbright_surfaces[MAX_TEXTURES];
 static mextrasurf_t		*detail_surfaces[MAX_TEXTURES];
 static int		rtable[MOD_FRAMES][MOD_FRAMES];
@@ -700,7 +700,7 @@ static void LM_UploadDynamicBlock( void )
 			height = gl_lms.allocated[i];
 	}
 
-	pglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, BLOCK_SIZE, height, GL_RGBA, GL_UNSIGNED_BYTE, gl_lms.lightmap_buffer );
+	pglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, BLOCK_SIZE, height, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, gl_lms.lightmap_buffer );
 }
 
 static void LM_UploadBlock( qboolean dynamic )
@@ -847,6 +847,93 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 DrawGLPoly
 ================
 */
+#if XASH_DREAMCAST
+static void DrawGLPoly(glpoly2_t *p, float xScale, float yScale) 
+{
+    float *v;
+    float sOffset = 0.0f, sy = 0.0f;
+    float tOffset = 0.0f, cy = 0.0f;
+	cl_entity_t	*e = RI.currententity;
+	int		i, hasScale = false;
+
+	if( !p ) return;
+
+	if( FBitSet( p->flags, SURF_DRAWTILED ))
+		GL_ResetFogColor();
+
+	if( p->flags & SURF_CONVEYOR )
+	{
+		float		flConveyorSpeed = 0.0f;
+		float		flRate, flAngle;
+		gl_texture_t	*texture;
+
+		if( ENGINE_GET_PARM( PARM_QUAKE_COMPATIBLE ) && RI.currententity == CL_GetEntityByIndex( 0 )) 
+		{
+            flConveyorSpeed = -35.0f; // Quake-compatible speed
+        } 
+		else 
+		{
+            flConveyorSpeed = (e->curstate.rendercolor.g << 8 | e->curstate.rendercolor.b) / 16.0f;
+
+            if (e->curstate.rendercolor.r) 
+				flConveyorSpeed = -flConveyorSpeed;
+        }
+
+        texture = R_GetTexture(glState.currentTexturesIndex[glState.activeTMU]);
+        flRate = fabs(flConveyorSpeed) / (float)texture->srcWidth;
+        flAngle = (flConveyorSpeed >= 0) ? 180 : 0;
+        SinCos(flAngle * (M_PI_F / 180.0f), &sy, &cy);
+
+        sOffset = gp_cl->time * cy * flRate;
+        tOffset = gp_cl->time * sy * flRate;
+
+        // Ensure offsets are positive and within [0, 1] range
+        if (sOffset < 0.0f) sOffset += 1.0f + -(int)sOffset;
+        if (tOffset < 0.0f) tOffset += 1.0f + -(int)tOffset;
+        sOffset -= (int)sOffset;
+        tOffset -= (int)tOffset;
+    }
+
+    if (xScale != 0.0f && yScale != 0.0f) {
+        hasScale = true;
+    }
+
+    // Allocate space for vertex data
+    glvert_fast_t vertices[p->numverts];
+
+    // Populate the vertex array
+    for (i = 0, v = p->verts[0]; i < p->numverts; i++, v += VERTEXSIZE) {
+
+        // Initialize the vertex using designated initializers
+        vertices[i] = (glvert_fast_t){
+            .flags = (i == p->numverts - 1) ? VERTEX_EOL : VERTEX,
+            .vert = {v[0], v[1], v[2]},
+            .texture = {
+                hasScale ? (v[3] + sOffset) * xScale : v[3] + sOffset,
+                hasScale ? (v[4] + tOffset) * yScale : v[4] + tOffset
+            },
+            .pad0 = {0}
+        };
+    }
+
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+
+    glVertexPointer(3, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].vert);
+    glTexCoordPointer(2, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].texture);
+
+    glDrawArrays(GL_POLYGON, 0, p->numverts);
+
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+
+    if (FBitSet(p->flags, SURF_DRAWTILED)) 
+	{
+        GL_SetupFogColorForSurfaces();
+    }
+	
+}
+#else
 static void DrawGLPoly( glpoly2_t *p, float xScale, float yScale )
 {
 	float		*v;
@@ -917,6 +1004,7 @@ static void DrawGLPoly( glpoly2_t *p, float xScale, float yScale )
 	if( FBitSet( p->flags, SURF_DRAWTILED ))
 		GL_SetupFogColorForSurfaces();
 }
+#endif
 /*
 ================
 DrawGLPolyChain
@@ -924,6 +1012,52 @@ DrawGLPolyChain
 Render lightmaps
 ================
 */
+#if XASH_DREAMCAST
+static void DrawGLPolyChain(glpoly2_t *p, float soffset, float toffset) {
+    qboolean dynamic = true;
+    if (soffset == 0.0f && toffset == 0.0f) {
+        dynamic = false;
+    }
+
+    for (; p != NULL; p = p->chain) {
+        float *v;
+        int i;
+
+        // Allocate space for vertex data
+        glvert_fast_t vertices[p->numverts];
+
+        // Populate the vertex array
+        for (i = 0, v = p->verts[0]; i < p->numverts; i++, v += VERTEXSIZE) {
+            // Initialize the vertex using designated initializers
+            vertices[i] = (glvert_fast_t){
+                .flags = (i == p->numverts - 1) ? VERTEX_EOL : VERTEX,
+                .vert = {v[0], v[1], v[2]},
+                .texture = {
+                    dynamic ? (v[5] - soffset) : v[5],
+                    dynamic ? (v[6] - toffset) : v[6]
+                },
+                .color = {0, 0, 0, 255}, // Default color (black), not used in this function
+                .pad0 = {0}
+            };
+        }
+
+        // Enable client states
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+
+        // Pointers to vertex data
+        glVertexPointer(3, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].vert);
+        glTexCoordPointer(2, GL_FLOAT, sizeof(glvert_fast_t), &vertices[0].texture);
+
+        // Draw the polygon
+        glDrawArrays(GL_POLYGON, 0, p->numverts);
+
+        // Disable client states
+        glDisableClientState(GL_VERTEX_ARRAY);
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    }
+}
+#else
 static void DrawGLPolyChain( glpoly2_t *p, float soffset, float toffset )
 {
 	qboolean	dynamic = true;
@@ -948,7 +1082,7 @@ static void DrawGLPolyChain( glpoly2_t *p, float soffset, float toffset )
 		pglEnd ();
 	}
 }
-
+#endif
 static qboolean R_HasLightmap( void )
 {
 	if( r_fullbright->value || !WORLDMODEL->lightdata )
@@ -1314,7 +1448,7 @@ dynamic:
 			GL_Bind( XASH_TEXTURE0, tr.lightmapTextures[fa->lightmaptexturenum] );
 #endif
 
-			pglTexSubImage2D( GL_TEXTURE_2D, 0, fa->light_s, fa->light_t, smax, tmax, GL_RGBA, GL_UNSIGNED_BYTE, temp );
+			pglTexSubImage2D( GL_TEXTURE_2D, 0, fa->light_s, fa->light_t, smax, tmax, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, temp );
 
 #if XASH_WES
 			GL_SelectTexture( XASH_TEXTURE0 );

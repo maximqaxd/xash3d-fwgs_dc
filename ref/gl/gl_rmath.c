@@ -25,7 +25,7 @@ GNU General Public License for more details.
 */
 void Matrix4x4_Concat(matrix4x4 out, const matrix4x4 in1, const matrix4x4 in2)
 {
-#if XASH_DREAMCAST 
+#if XASH_DREAMCAST
     unsigned int prefetch_scratch;
 
     asm volatile (

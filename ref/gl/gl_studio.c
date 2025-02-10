@@ -119,6 +119,7 @@ typedef struct
 	// playermodels
 	player_model_t  player_models[MAX_CLIENTS];
 
+#if !XASH_DREAMCAST
 	// drawelements renderer
 	vec3_t			arrayverts[MAXSTUDIOVERTS];
 	vec2_t			arraycoord[MAXSTUDIOVERTS];
@@ -126,6 +127,7 @@ typedef struct
 	GLubyte			arraycolor[MAXSTUDIOVERTS][4];
 	uint			numverts;
 	uint			numelems;
+#endif
 } studio_draw_state_t;
 
 // studio-related cvars
@@ -1806,8 +1808,10 @@ static void R_StudioSetupSkin( studiohdr_t *ptexturehdr, int index )
 	if( ptexturehdr == NULL )
 		return;
 
+#if !XASH_DREAMCAST
 	// NOTE: user may ignore to call StudioRemapColors and remap_info will be unavailable
 	if( m_fDoRemap ) ptexture = gEngfuncs.CL_GetRemapInfoForEntity( RI.currententity )->ptexture;
+#endif
 	if( !ptexture ) ptexture = (mstudiotexture_t *)((byte *)ptexturehdr + ptexturehdr->textureindex); // fallback
 
 	if( r_lightmap->value && !r_fullbright->value )
@@ -1833,8 +1837,11 @@ mstudiotexture_t *R_StudioGetTexture( cl_entity_t *e )
 	thdr = m_pStudioHeader;
 	if( !thdr ) return NULL;
 
+#if !XASH_DREAMCAST
 	if( m_fDoRemap ) ptexture = gEngfuncs.CL_GetRemapInfoForEntity( e )->ptexture;
-	else ptexture = (mstudiotexture_t *)((byte *)thdr + thdr->textureindex);
+	else
+#endif
+	ptexture = (mstudiotexture_t *)((byte *)thdr + thdr->textureindex);
 
 	return ptexture;
 }
@@ -2200,6 +2207,7 @@ static void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, float
 
 static int R_StudioBuildIndices( qboolean tri_strip, int vertexState )
 {
+#if !XASH_DREAMCAST
 	// build in indices
 	if( vertexState++ < 3 )
 	{
@@ -2232,6 +2240,7 @@ static int R_StudioBuildIndices( qboolean tri_strip, int vertexState )
 	}
 
 	return vertexState;
+#endif
 }
 
 /*
@@ -2243,6 +2252,7 @@ generic path
 */
 static void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t )
 {
+#if !XASH_DREAMCAST
 	float	*lv;
 	int	i;
 	float alpha = tr.blend;
@@ -2275,6 +2285,7 @@ static void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms,
 			g_studio.numverts++;
 		}
 	}
+#endif
 }
 
 /*
@@ -2286,6 +2297,7 @@ generic path
 */
 static void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 {
+#if !XASH_DREAMCAST
 	float	*lv;
 	int	i;
 	float alpha = tr.blend;
@@ -2318,6 +2330,7 @@ static void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 			g_studio.numverts++;
 		}
 	}
+#endif
 }
 
 /*
@@ -2329,6 +2342,7 @@ generic path
 */
 static void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t, float scale )
 {
+#if !XASH_DREAMCAST
 	float	*lv, *av;
 	int	i, idx;
 	qboolean	glowShell = (scale > 0.0f) ? true : false;
@@ -2382,10 +2396,12 @@ static void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms,
 			g_studio.numverts++;
 		}
 	}
+#endif
 }
 
 static void R_StudioDrawArrays( uint startverts, uint startelems )
 {
+#if !XASH_DREAMCAST
 	pglEnableClientState( GL_VERTEX_ARRAY );
 	pglVertexPointer( 3, GL_FLOAT, 12, g_studio.arrayverts );
 
@@ -2412,6 +2428,7 @@ static void R_StudioDrawArrays( uint startverts, uint startelems )
 	pglDisableClientState( GL_TEXTURE_COORD_ARRAY );
 	if( !( g_nForceFaceFlags & STUDIO_NF_CHROME ) )
 		pglDisableClientState( GL_COLOR_ARRAY );
+#endif
 }
 
 /*
@@ -2436,9 +2453,9 @@ static void R_StudioDrawPoints( void )
 
 	if( !m_pStudioHeader ) return;
 
-
+#if !XASH_DREAMCAST
 	g_studio.numverts = g_studio.numelems = 0;
-
+#endif
 	m_skinnum = RI.currententity->curstate.skin;
 	ptexture = (mstudiotexture_t *)((byte *)m_pStudioHeader + m_pStudioHeader->textureindex);
 	pvertbone = ((byte *)m_pStudioHeader + m_pSubModel->vertinfoindex);
@@ -2548,8 +2565,10 @@ static void R_StudioDrawPoints( void )
 	for( j = 0; j < m_pSubModel->nummesh; j++ )
 	{
 		float	oldblend = tr.blend;
+	#if !XASH_DREAMCAST
 		uint startArrayVerts = g_studio.numverts;
 		uint startArrayElems = g_studio.numelems;
+	#endif
 		short	*ptricmds;
 		float	s, t;
 
@@ -2583,6 +2602,7 @@ static void R_StudioDrawPoints( void )
 
 		R_StudioSetupSkin( m_pStudioHeader, pskinref[pmesh->skinref] );
 
+#if !XASH_DREAMCAST
 		if( r_studio_drawelements.value )
 		{
 			if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
@@ -2594,6 +2614,7 @@ static void R_StudioDrawPoints( void )
 			R_StudioDrawArrays( startArrayVerts, startArrayElems );
 		}
 		else
+#endif
 		{
 			if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 				R_StudioDrawChromeMesh( ptricmds, pstudionorms, s, t, shellscale );
@@ -2830,8 +2851,10 @@ R_StudioSetRemapColors
 */
 static void R_StudioSetRemapColors( int newTop, int newBottom )
 {
+#if !XASH_DREAMCAST
 	if( gEngfuncs.CL_EntitySetRemapColors( RI.currententity, RI.currentmodel, newTop, newBottom ))
 		m_fDoRemap = true;
+#endif
 }
 
 void R_StudioResetPlayerModels( void )

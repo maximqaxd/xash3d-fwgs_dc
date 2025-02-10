@@ -111,7 +111,7 @@ extern poolhandle_t r_temppool;
 	#undef MAX_LIGHTMAPS
 	#define MAX_LIGHTMAPS 64
 	#define BLOCK_SIZE_MAX 128
-	#define MAX_TEXTURES 1268
+	#define MAX_TEXTURES 1200
 	#define MAX_DECAL_SURFS 32
 	#define MAX_DETAILTEXTURES 16	
 	
@@ -142,7 +142,7 @@ typedef glvert_fast_t __attribute__((aligned(32))) fast_vert_aligned_t;
 #define VERTEX_EOL 0xf0000000
 #define VERTEX 0xe0000000
 
-#define LIGHTMAP_BPP	4 //1 2 3 4 
+#define LIGHTMAP_BPP	2 //1 2 3 4 
 
 #if LIGHTMAP_BPP == 1
 #define LIGHTMAP_FORMAT	PF_RGB_332
@@ -162,7 +162,7 @@ typedef glvert_fast_t __attribute__((aligned(32))) fast_vert_aligned_t;
 
 typedef struct gltexture_s
 {
-	char		name[256];	// game path, including extension (can be store image programs)
+	char		name[64];	// game path, including extension (can be store image programs)
 	word		srcWidth;		// keep unscaled sizes
 	word		srcHeight;
 	word		width;		// upload width\height
