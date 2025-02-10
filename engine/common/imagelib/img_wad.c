@@ -309,7 +309,6 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
                 const int indices_size = (image.width * image.height) / 4;
                 image.size = codebook_size + indices_size;
 				fin += sizeof(dspriteframe_t);
-                Image_GetPaletteLMP(NULL, LUMP_VQ);
                 image.rgba = Mem_Malloc(host.imagepool, image.size);
                 memcpy(image.rgba, fin, image.size);
                 return true;
@@ -318,14 +317,13 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
             {
                 image.type = PF_RGB_5650;
                 image.size = image.width * image.height * 2;
-                SetBits(image.flags, TF_KEEP_SOURCE);
                 return true;
             }
         }
     }
 
 	// FIXME: maximqad THIS IS STUPID UGLY HACK to fit certain sprites into VRAM, remove that when we have VQ sprgen
-	if (Q_stristr(name, "puff") || Q_stristr(name, "smoke") || Q_stristr(name, "tele") || Q_stristr(name, "pistol_smoke") || Q_stristr (name, "rifle_smoke") || Q_stristr (name, "logo"))
+	if (Q_stristr(name, "puff") || Q_stristr(name, "tele") ||  Q_stristr(name, "smoke") || Q_stristr(name, "logo"))
 	{
 		image.width /= 8;  
 		image.height /= 8; 
