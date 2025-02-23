@@ -27,7 +27,17 @@ ref_globals_t *gpGlobals;
 ref_client_t  *gp_cl;
 ref_host_t    *gp_host;
 
-#if !XASH_DREAMCAST
+#if XASH_DREAMCAST
+void GL_Mem_Free( void *data, const char *filename, int fileline )
+{
+	gEngfuncs._Mem_Free( data, filename, fileline );
+}
+
+void *GL_Mem_Alloc( poolhandle_t poolptr, size_t size, qboolean clear, const char *filename, int fileline )
+{
+	return gEngfuncs._Mem_Alloc( poolptr, size, clear, filename, fileline );
+}
+#else
 void _Mem_Free( void *data, const char *filename, int fileline )
 {
 	gEngfuncs._Mem_Free( data, filename, fileline );
@@ -37,8 +47,7 @@ void *_Mem_Alloc( poolhandle_t poolptr, size_t size, qboolean clear, const char 
 {
 	return gEngfuncs._Mem_Alloc( poolptr, size, clear, filename, fileline );
 }
-
-#endif // !XASH_DREAMCAST
+#endif // XASH_DREAMCAST
 static void R_ClearScreen( void )
 {
 	pglClearColor( 0.0f, 0.0f, 0.0f, 0.0f );

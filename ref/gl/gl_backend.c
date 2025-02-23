@@ -250,6 +250,7 @@ GL_MultiTexCoord2f
 */
 void GL_MultiTexCoord2f( GLenum texture, GLfloat s, GLfloat t )
 {
+#if !XASH_DREAMCAST
 	if( !GL_Support( GL_ARB_MULTITEXTURE ))
 		return;
 
@@ -257,6 +258,8 @@ void GL_MultiTexCoord2f( GLenum texture, GLfloat s, GLfloat t )
 	if( pglMultiTexCoord2f != NULL )
 #endif
 		pglMultiTexCoord2f( texture + GL_TEXTURE0_ARB, s, t );
+
+#endif
 }
 
 /*

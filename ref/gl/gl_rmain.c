@@ -561,7 +561,7 @@ void R_SetupGL( qboolean set_gl_state )
 	pglMatrixMode( GL_MODELVIEW );
 	GL_LoadMatrix( RI.worldviewMatrix );
 
-#if !XASH_DREAMCAST	// TODO: manual clipping plane
+#if !XASH_DREAMCAST	
 	if( FBitSet( RI.params, RP_CLIPPLANE ))
 	{
 		GLdouble	clip[4];

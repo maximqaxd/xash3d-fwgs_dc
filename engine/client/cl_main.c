@@ -2280,9 +2280,9 @@ static qboolean CL_IsFromConnectingServer( netadr_t from )
 static void CL_HandleTestPacket( netadr_t from, sizebuf_t *msg )
 {
 	byte	recv_buf[NET_MAX_FRAGMENT];
-	dword	crcValue;
+	uint32_t	crcValue;
 	int	realsize;
-	dword	crcValue2 = 0;
+	uint32_t	crcValue2 = 0;
 
 	// this message only used during connection
 	// it doesn't make sense after client_connect

@@ -776,7 +776,6 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 #if XASH_DREAMCAST
 		case PF_VQ_ARGB_4444: tex->format = GL_COMPRESSED_ARGB_4444_VQ_KOS; break;
 		case PF_VQ_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_KOS; break;
-		case PF_SMALL_VQ_RGB_5650: 
 		case PF_VQ_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_KOS; break;
 		case PF_VQ_MIPMAP_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS; break;
 #endif

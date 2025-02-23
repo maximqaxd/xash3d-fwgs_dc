@@ -28,6 +28,7 @@ GNU General Public License for more details.
 #define Y_SPACING 24
 #include <dc/video.h>
 #include <arch/arch.h>
+#include <dc/sound/sound.h>
 #include <glkos.h>
 
 /*

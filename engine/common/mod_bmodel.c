@@ -1780,7 +1780,7 @@ static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_
 	char        modelname[64], path[64];
 	int         iCompare;
 	fs_offset_t datasize;
-	file_t      *f;
+	dc_file_t      *f;
 	uint        hdr[2];
 
 	COM_FileBase( mod->name, modelname, sizeof( modelname ));

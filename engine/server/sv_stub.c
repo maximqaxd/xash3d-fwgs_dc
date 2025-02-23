@@ -23,7 +23,7 @@ qboolean SV_Active( void )
 }
 int SV_GetMaxClients( void )
 {
-	return;
+	return 1;
 }
 
 /*
@@ -183,7 +183,7 @@ get server infostring
 */
 char *SV_Serverinfo( void )
 {
-	return;
+	return "";
 }
 
 /*
