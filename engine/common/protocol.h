@@ -196,7 +196,6 @@ GNU General Public License for more details.
 #define MAX_USER_MESSAGES 		128
 #define MAX_WEAPONS 			32
 #define MAX_CLIENTS 			8
-#define DC_MAX_EDICTS			128
 #define MAX_VISIBLE_PACKET      128     
 #define MAX_VISIBLE_PACKET_VIS_BYTES    ((MAX_VISIBLE_PACKET + 7) / 8)
 #define MAX_EVENTS          32      
@@ -208,6 +207,10 @@ GNU General Public License for more details.
 #define MAX_RENDER_DECALS   16      
 #define MAX_RESOURCES       (MAX_MODELS + MAX_SOUNDS + MAX_CUSTOM + MAX_EVENTS)    
 #define MAX_LIGHTSTYLES		64
+#define DC_MAX_EDICTS		128
+#define DC_MAX_TENTS 		32
+#define DC_MAX_PARTICLES 	64
+#define DC_MAX_BEAMS 		4
 #else
 #if XASH_LOW_MEMORY == 2
 #undef MAX_VISIBLE_PACKET

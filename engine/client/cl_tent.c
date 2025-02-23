@@ -192,14 +192,13 @@ static void CL_ClearTempEnts( void )
 	cl_free_tents = cl_tempents;
 	cl_active_tents = NULL;
 #else
-#define GI_MAX_TENTS 32
-	for( i = 0; i < GI_MAX_TENTS - 1; i++ )
+	for( i = 0; i < DC_MAX_TENTS - 1; i++ )
 	{
 		cl_tempents[i].next = &cl_tempents[i+1];
 		cl_tempents[i].entity.trivial_accept = INVALID_HANDLE;
 	}
 
-	cl_tempents[GI_MAX_TENTS-1].next = NULL;
+	cl_tempents[DC_MAX_TENTS-1].next = NULL;
 	cl_free_tents = cl_tempents;
 	cl_active_tents = NULL;
 #endif

@@ -15,7 +15,7 @@ icon		"game.ico"
 sp_entity		"info_player_start"
 mp_entity		"info_player_deathmatch"
 secure		"1"
-max_edicts	512
+max_edicts	256
 max_tempents	300
 max_beams		64
 max_particles	1024
