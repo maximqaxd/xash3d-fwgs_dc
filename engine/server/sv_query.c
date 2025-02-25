@@ -39,7 +39,7 @@ static void SV_SourceQuery_Details( netadr_t from )
 	MSG_WriteString( &buf, hostname.string );
 	MSG_WriteString( &buf, sv.name );
 #if XASH_DREAMCAST
-	MSG_WriteString( &buf, "valve" );
+	MSG_WriteString( &buf, XASH_GAMEDIR);
 #else
 	MSG_WriteString( &buf, GI->gamefolder );
 #endif

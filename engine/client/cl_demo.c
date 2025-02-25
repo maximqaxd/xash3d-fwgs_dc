@@ -726,7 +726,6 @@ static void CL_DemoStartPlayback( int mode )
 		// NOTE: at this point demo is still valid
 		CL_Disconnect();
 		SV_Shutdown( "Server was killed due to demo playback start\n" );
-
 		Con_FastClose();
 		UI_SetActiveMenu( false );
 	}
@@ -1678,6 +1677,7 @@ Return to looping demos
 */
 void CL_Demos_f( void )
 {
+#if !XASH_DREAMCAST
 	if( cls.key_dest != key_menu )
 	{
 		Con_Printf( "'demos' is not valid from the console\n" );
@@ -1693,6 +1693,7 @@ void CL_Demos_f( void )
 	// run demos loop in background mode
 	if( !SV_Active() && !cls.demoplayback )
 		CL_NextDemo ();
+#endif
 }
 
 

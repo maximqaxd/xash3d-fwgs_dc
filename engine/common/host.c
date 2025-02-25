@@ -1401,6 +1401,11 @@ void Host_ShutdownWithReason( const char *reason )
 	HTTP_Shutdown();
 	Host_FreeCommon();
 	Platform_Shutdown();
+#if !XASH_DREAMCAST
+	BaseCmd_Shutdown();
+#endif
+	Cmd_Shutdown();
+	Cvar_Shutdown();
 
 	// must be last, console uses this
 	Mem_FreePool( &host.mempool );

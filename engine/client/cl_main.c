@@ -861,9 +861,9 @@ static void CL_WritePacket( void )
 		// command finished, remember last sent sequence id
 		cls.lastoutgoingcommand = cls.netchan.outgoing_sequence;
 		pcmd->sendsize = MSG_GetNumBytesWritten( &buf );
-
+#if !XASH_DREAMCAST
 		CL_AddVoiceToDatagram();
-
+#endif
 		// now add unreliable, if there is enough space
 		if( MSG_GetNumBitsWritten( &cls.datagram ) <= MSG_GetNumBitsLeft( &buf ))
 			MSG_WriteBits( &buf, MSG_GetData( &cls.datagram ), MSG_GetNumBitsWritten( &cls.datagram ));
@@ -1413,6 +1413,7 @@ static void CL_Connect_f( void )
 	// if running a local server, kill it and reissue
 	if( SV_Active( ))
 		SV_Shutdown( "Server was killed due to connection to remote server\n" );
+		
 	NET_Config( true, !cl_nat.value ); // allow remote
 
 	Con_Printf( "server %s\n", server );
@@ -1442,6 +1443,7 @@ an unconnected command.
 */
 static void CL_Rcon_f( void )
 {
+#if !XASH_DREAMCAST
 	char message[1024];
 	sizebuf_t msg;
 	netadr_t to;
@@ -1489,6 +1491,7 @@ static void CL_Rcon_f( void )
 	MSG_WriteByte( &msg, 0 );
 
 	NET_SendPacket( NS_CLIENT, MSG_GetNumBytesWritten( &msg ), MSG_GetData( &msg ), to );
+#endif
 }
 
 
@@ -1666,7 +1669,10 @@ void CL_Disconnect( void )
 	cls.connect_time = 0;
 	cls.changedemo = false;
 	cls.max_fragment_size = FRAGMENT_MAX_SIZE; // reset fragment size
+
+#if !XASH_DREAMCAST
 	Voice_Disconnect();
+#endif
 	CL_Stop_f();
 
 	// send a disconnect message to the server
@@ -2276,9 +2282,9 @@ static qboolean CL_IsFromConnectingServer( netadr_t from )
 static void CL_HandleTestPacket( netadr_t from, sizebuf_t *msg )
 {
 	byte	recv_buf[NET_MAX_FRAGMENT];
-	dword	crcValue;
+	uint32_t	crcValue;
 	int	realsize;
-	dword	crcValue2 = 0;
+	uint32_t	crcValue2 = 0;
 
 	// this message only used during connection
 	// it doesn't make sense after client_connect
@@ -2659,10 +2665,11 @@ static void CL_ReadNetMessage( void )
 	case PROTO_QUAKE:
 		parsefn = CL_ParseQuakeMessage;
 		break;
-#endif // XASH_DREAMCAST we don't need quake and Xash3D 48 protocol on DC
+
 	case PROTO_GOLDSRC:
 		parsefn = CL_ParseGoldSrcServerMessage;
 		break;
+#endif // XASH_DREAMCAST we don't need quake and Xash3D 48, GoldSrc protocol on DC
 	default:
 		parsefn = CL_ParseServerMessage;
 		break;
@@ -3379,7 +3386,9 @@ static void CL_InitLocal( void )
 	Cvar_RegisterVariable( &cl_logomaxdim );
 	Cvar_RegisterVariable( &cl_test_bandwidth );
 
+#if !XASH_DREAMCAST
 	Voice_RegisterCvars();
+#endif
 	VGui_RegisterCvars();
 
 	// register our variables
@@ -3603,9 +3612,10 @@ void Host_ClientFrame( void )
 	// a new portion updates from server
 	CL_RedoPrediction ();
 
+#if !XASH_DREAMCAST
 	// update voice
 	Voice_Idle( host.frametime );
-
+#endif
 	// emit visible entities
 	CL_EmitEntities ();
 
@@ -3655,8 +3665,9 @@ void CL_Init( void )
 
 	VID_Init();	// init video
 	S_Init();	// init sound
+#if !XASH_DREAMCAST
 	Voice_Init( VOICE_DEFAULT_CODEC, 3, true ); // init voice (do not open the device)
-
+#endif
 	// unreliable buffer. unsed for unreliable commands and voice stream
 	MSG_Init( &cls.datagram, "cls.datagram", cls.datagram_buf, sizeof( cls.datagram_buf ));
 

@@ -277,7 +277,7 @@ typedef struct
 
 	double frametime_remainder;
 
-	uint worldmapCRC;
+	uint32_t worldmapCRC;
 } client_t;
 
 /*

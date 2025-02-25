@@ -747,7 +747,7 @@ static void Netchan_CreateFragments_( netchan_t *chan, sizebuf_t *msg )
 	wait = (fragbufwaiting_t *)Mem_Calloc( net_mempool, sizeof( fragbufwaiting_t ));
 	if( chan->use_bz2 && memcmp( MSG_GetData( msg ), "BZ2", 4 ))
 	{
-#if !XASH_DEDICATED
+#if !XASH_DEDICATED && !XASH_DREAMCAST
 		byte pbOut[0x10000];
 		uint uSourceSize = MSG_GetNumBytesWritten( msg );
 		uint uCompressedSize = MSG_GetNumBytesWritten( msg ) - 4;
@@ -1174,7 +1174,7 @@ qboolean Netchan_CopyNormalFragments( netchan_t *chan, sizebuf_t *msg, size_t *l
 
 	if( chan->use_bz2 && !memcmp( MSG_GetData( msg ), "BZ2", 4 ) )
 	{
-#if !XASH_DEDICATED
+#if !XASH_DEDICATED && !XASH_DREAMCAST
 		byte buf[0x10000];
 		uint uDecompressedLen = sizeof( buf );
 		int bz2_err = BZ2_bzBuffToBuffDecompress( buf, &uDecompressedLen, MSG_GetData( msg ) + 4, MSG_GetNumBytesWritten( msg ) - 4, 1, 0 );
@@ -1332,7 +1332,7 @@ qboolean Netchan_CopyFileFragments( netchan_t *chan, sizebuf_t *msg )
 
 	if( chan->gs_netchan && chan->use_bz2 && !Q_stricmp( compressor, "bz2" ))
 	{
-#if !XASH_DEDICATED
+#if !XASH_DEDICATED && !XASH_DREAMCAST
 		byte *uncompressedBuffer = Mem_Calloc( net_mempool, uncompressedSize );
 
 		Con_DPrintf( "Decompressing file %s (%d -> %d bytes)\n", filename, nsize, uncompressedSize );

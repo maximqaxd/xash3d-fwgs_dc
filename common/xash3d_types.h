@@ -30,8 +30,11 @@ typedef vec_t		quat_t[4];
 typedef byte		rgba_t[4];	// unsigned byte colorpack
 typedef byte		rgb_t[3];		// unsigned byte colorpack
 typedef vec_t		matrix3x4[3][4];
+#if XASH_DREAMCAST
+typedef __attribute__ ((aligned (8))) vec_t        matrix4x4[4][4];
+#else
 typedef vec_t		matrix4x4[4][4];
-
+#endif
 typedef uint32_t        poolhandle_t;
 
 #undef true
@@ -51,7 +54,11 @@ typedef uint64_t longtime_t;
 #define MAX_LOCALINFO_STRING	32768	// localinfo used on server and not sended to the clients
 #define MAX_SYSPATH		256	// system filepath
 #define MAX_VA_STRING	1024	// string length returned by va()
+#if XASH_DREAMCAST
+#define MAX_PRINT_MSG	512	// how many symbols can handle single call of Con_Printf or Con_DPrintf
+#else
 #define MAX_PRINT_MSG	2048	// how many symbols can handle single call of Con_Printf or Con_DPrintf
+#endif
 #define MAX_TOKEN		2048	// parse token length
 #if XASH_DREAMCAST
 #define MAX_MODS		4	// environment games that engine can keep visible
@@ -251,13 +258,18 @@ typedef void *(*pfnCreateInterface_t)( const char *, int * );
 // config strings are a general means of communication from
 // the server to all connected clients.
 // each config string can be at most CS_SIZE characters.
+#if XASH_DREAMCAST
+#define MAX_QPATH		32
+#else
 #if XASH_LOW_MEMORY == 0
 #define MAX_QPATH		64	// max length of a game pathname
 #elif XASH_LOW_MEMORY == 2
-#define MAX_QPATH		48 // should be enough for singleplayer
+#define MAX_QPATH		32 // should be enough for singleplayer
 #elif XASH_LOW_MEMORY == 1
 #define MAX_QPATH 48
 #endif
+#endif // XASH_DREAMCAST
+
 #define MAX_OSPATH		260	// max length of a filesystem pathname
 #define CS_SIZE		64	// size of one config string
 #define CS_TIME		16	// size of time string

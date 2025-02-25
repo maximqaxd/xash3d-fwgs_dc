@@ -21,6 +21,7 @@ extern poolhandle_t sndpool;
 #include "xash3d_mathlib.h"
 #if XASH_DREAMCAST
 #include <dc/sound/aica_comm.h>
+#include <dc/sound/sound.h>
 #endif
 
 #define XASH_AUDIO_CD_QUALITY 1 // some platforms might need this

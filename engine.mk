@@ -19,10 +19,7 @@ XASH_CLIENT_OBJS = \
 	engine/client/cl_main.o \
 	engine/client/cl_netgraph.o \
 	engine/client/cl_parse.o \
-	engine/client/cl_parse_gs.o \
-	engine/client/cl_qparse.o \
 	engine/client/cl_pmove.o \
-	engine/client/cl_remap.o \
 	engine/client/cl_render.o \
 	engine/client/cl_scrn.o \
 	engine/client/cl_securedstub.o \
@@ -61,7 +58,6 @@ XASH_CLIENT_OBJS = \
 	engine/client/s_utils.o \
 	engine/client/titles.o \
 	engine/client/vid_common.o \
-	engine/client/voice.o \
 
 XASH_OBJS = \
 	engine/common/base_cmd.o \
@@ -92,7 +88,6 @@ XASH_OBJS = \
 	engine/common/launcher.o \
 	engine/common/lib_common.o \
 	engine/common/masterlist.o \
-	engine/common/mod_alias.o\
 	engine/common/mod_bmodel.o\
 	engine/common/mod_sprite.o \
 	engine/common/mod_studio.o \
@@ -144,7 +139,8 @@ XASH_PLATFORM_OBJS = \
 	engine/platform/dreamcast/vid_dc.o \
 	engine/platform/dreamcast/in_dc.o 
 
-INCLUDE = -Icommon \
+INCLUDE = -I. \
+-Icommon \
 -Iengine/server \
 -Iengine/client/vgui \
 -Iengine/client/avi \
@@ -165,6 +161,13 @@ INCLUDE = -Icommon \
 -I$(KOS_PORTS)/include/bzlib 
 
 
-DEFINES = -DENGINE_DLL -D_KOS_ -D_SH4_ -DXASH_BUILD_COMMIT=\"64726f13-dirty\" -DXASH_BUILD_BRANCH=\"master\" -DFRAME_POINTERS=1 -DXASH_STATIC_LIBS=1 -DXASH_LOW_MEMORY=2 -DXASH_ENABLE_MAIN=1 -DXASH_REF_SOFT_ENABLED=0  -DXASH_REF_GL_ENABLED=1 -DHAVE_TGMATH_H=0 -DHAVE_STRNICMP=1 -DHAVE_STRICMP=1 -D_snprintf=snprintf 
+DEFINES = -DENGINE_DLL -D_KOS_ -D_SH4_ -DXASH_BUILD_COMMIT=\"64726f13-dirty\" -DXASH_GAMEDIR=\"valve\" -DXASH_BUILD_BRANCH=\"master\" -DFRAME_POINTERS=1 -DXASH_STATIC_LIBS=1 -DXASH_LOW_MEMORY=2 -DXASH_ENABLE_MAIN=1 -DXASH_REF_SOFT_ENABLED=0  -DXASH_REF_GL_ENABLED=1 -DHAVE_TGMATH_H=0 -DHAVE_STRNICMP=1 -DHAVE_STRICMP=1 -D_snprintf=snprintf 
 FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -freorder-blocks-algorithm=simple -flto=auto
 CFLAGS +=  $(INCLUDE) $(DEFINES) $(FLAGS)  
+# -O3 math and phys
+public/matrixlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions  -ffast-math -ffp-contract=fast
+public/xash3d_mathlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/common/pm_surface.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/common/pm_trace.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/client/cl_pmove.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/client/cl_frame.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast

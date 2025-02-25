@@ -1780,7 +1780,7 @@ static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_
 	char        modelname[64], path[64];
 	int         iCompare;
 	fs_offset_t datasize;
-	file_t      *f;
+	dc_file_t      *f;
 	uint        hdr[2];
 
 	COM_FileBase( mod->name, modelname, sizeof( modelname ));
@@ -3676,6 +3676,7 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
 	// loading base lumps
 	for( i = 0; i < ARRAYSIZE( srclumps ); i++ )
 		Mod_LoadLump( mod_base, &srclumps[i], &worldstats[i], flags );
+
 #if !XASH_DREAMCAST
 	// loading extralumps
 	for( i = 0; i < ARRAYSIZE( extlumps ); i++ )
@@ -3689,7 +3690,39 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
 	else if( !bmod->isworld && loadstat.numwarnings )
 		Con_DPrintf( "Mod_Load%s: %i warning(s)\n", isworld ? "World" : "Brush", loadstat.numwarnings );
 
-	
+	    // Profile lump sizes before loading into heap
+    Con_Printf("Profiling lump sizes for %s:\n", mod->name);
+    Con_Printf("\t^3Lump Name\tSize\n");
+    size_t total_size = 0;
+    struct lump_profile_s {
+        const char *name;
+        int lumpnum;
+    } lump_profile[] = {
+        {"Entities", LUMP_ENTITIES},
+        {"Planes", LUMP_PLANES},
+        {"Textures", LUMP_TEXTURES},
+        {"Vertexes", LUMP_VERTEXES},
+        {"Visibility", LUMP_VISIBILITY},
+        {"Nodes", LUMP_NODES},
+        {"TexInfo", LUMP_TEXINFO},
+        {"Surfaces", LUMP_FACES},
+        {"Lighting", LUMP_LIGHTING},
+        {"Clipnodes", LUMP_CLIPNODES},
+        {"Leafs", LUMP_LEAFS},
+        {"MarkSurfaces", LUMP_MARKSURFACES},
+        {"Edges", LUMP_EDGES},
+        {"SurfEdges", LUMP_SURFEDGES},
+        {"Models", LUMP_MODELS}
+    };
+
+    for (i = 0; i < ARRAYSIZE(lump_profile); i++)
+    {
+        int lumpnum = lump_profile[i].lumpnum;
+        size_t lump_size = header->lumps[lumpnum].filelen;
+        Con_Printf("\t%s\t\t%s\n", lump_profile[i].name, Q_memprint(lump_size));
+        total_size += lump_size;
+    }
+    Con_Printf("Total lump size: %s\n", Q_memprint(total_size));
 	// load into heap
 	Mod_LoadEntities( mod, bmod );
 	Mod_LoadPlanes( mod, bmod );

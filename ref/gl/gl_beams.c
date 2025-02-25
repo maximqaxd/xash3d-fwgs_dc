@@ -1048,8 +1048,11 @@ static void R_BeamDraw( BEAM *pbeam, float frametime )
 			pbeam->brightness *= flFade;
 		}
 	}
-
+#if XASH_DREAMCAST
+	R_TriRenderMode( FBitSet( pbeam->flags, FBEAM_SOLID ) ? kRenderNormal : kRenderTransAdd );
+#else
 	TriRenderMode( FBitSet( pbeam->flags, FBEAM_SOLID ) ? kRenderNormal : kRenderTransAdd );
+#endif
 
 	if( !TriSpriteTexture( model, (int)(pbeam->frame + pbeam->frameRate * gp_cl->time) % pbeam->frameCount ))
 	{

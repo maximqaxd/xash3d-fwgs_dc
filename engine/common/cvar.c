@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "eiface.h" // ARRAYSIZE
 
 static convar_t	*cvar_vars = NULL; // head of list
+static poolhandle_t cvar_pool;
 CVAR_DEFINE_AUTO( cmd_scripting, "0", FCVAR_ARCHIVE|FCVAR_PRIVILEGED, "enable simple condition checking and variable operations" );
 
 typedef struct cvar_filter_quirks_s
@@ -176,6 +177,7 @@ static qboolean Cvar_UpdateInfo( convar_t *var, const char *value, qboolean noti
 #endif
 	}
 
+#if !XASH_DREAMCAST
 	if( FBitSet( var->flags, FCVAR_SERVER ) && notify )
 	{
 		if( !FBitSet( var->flags, FCVAR_UNLOGGED ))
@@ -192,7 +194,7 @@ static qboolean Cvar_UpdateInfo( convar_t *var, const char *value, qboolean noti
 			}
 		}
 	}
-
+#endif
 	return true;
 }
 
@@ -446,7 +448,8 @@ convar_t *Cvar_Get( const char *name, const char *value, int flags, const char *
 			{
 				// directly set value
 				freestring( var->string );
-				var->string = copystring( value );
+
+				var->string = copystringpool( cvar_pool, value );
 				var->value = Q_atof( var->string );
 				SetBits( var->flags, flags );
 
@@ -466,19 +469,21 @@ convar_t *Cvar_Get( const char *name, const char *value, int flags, const char *
 				Con_Reportf( "%s change description from %s to %s\n", var->name, var->desc, var_desc );
 			// update description if needs
 			freestring( var->desc );
-			var->desc = copystring( var_desc );
+
+			var->desc = copystringpool( cvar_pool, var_desc );
 		}
 #endif
 		return var;
 	}
 
 	// allocate a new cvar
-	var = Z_Malloc( sizeof( *var ));
-	var->name = copystring( name );
-	var->string = copystring( value );
-	var->def_string = copystring( value );
+	var = Mem_Malloc( cvar_pool, sizeof( *var ));
+	var->name = copystringpool( cvar_pool, name );
+	var->string = copystringpool( cvar_pool, value );
+	var->def_string = copystringpool( cvar_pool, value );
 #if !XASH_DREAMCAST
-	var->desc = copystring( var_desc );
+	var->desc = copystringpool( cvar_pool, var_desc );
+
 #endif
 	var->value = Q_atof( var->string );
 	var->flags = flags|FCVAR_ALLOCATED;
@@ -565,7 +570,8 @@ void Cvar_RegisterVariable( convar_t *var )
 	if( FBitSet( var->flags, FCVAR_EXTENDED ))
 		var->def_string = var->string; // just swap pointers
 
-	var->string = copystring( var->string );
+
+	var->string = copystringpool( cvar_pool, var->string );
 	var->value = Q_atof( var->string );
 
 	// find the supposed position in chain (alphanumerical order)
@@ -695,7 +701,8 @@ static convar_t *Cvar_Set2( const char *var_name, const char *value )
 
 	// and finally changed the cvar itself
 	freestring( var->string );
-	var->string = copystring( pszValue );
+
+	var->string = copystringpool( cvar_pool, pszValue );
 	var->value = Q_atof( var->string );
 
 	// tell engine about changes
@@ -754,7 +761,8 @@ void GAME_EXPORT Cvar_DirectSet( convar_t *var, const char *value )
 
 	// and finally changed the cvar itself
 	freestring( var->string );
-	var->string = copystring( pszValue );
+
+	var->string = copystringpool( cvar_pool, pszValue );
 	var->value = Q_atof( var->string );
 
 	// tell engine about changes
@@ -797,7 +805,8 @@ void Cvar_FullSet( const char *var_name, const char *value, int flags )
 	}
 
 	freestring( var->string );
-	var->string = copystring( value );
+
+	var->string = copystringpool( cvar_pool, value );
 	var->value = Q_atof( var->string );
 	SetBits( var->flags, flags );
 
@@ -1083,6 +1092,7 @@ Writes lines containing "variable value" for all variables
 with the specified flag set to true.
 ============
 */
+
 void Cvar_WriteVariables( dc_file_t *f, int group )
 {
 	convar_t	*var;
@@ -1277,7 +1287,8 @@ pending_cvar_t *Cvar_PrepareToUnlink( int group )
 			continue;
 
 		namelen = Q_strlen( cv->name ) + 1;
-		p = Mem_Malloc( host.mempool, sizeof( *list ) + namelen );
+
+		p = Mem_Malloc( cvar_pool, sizeof( *list ) + namelen );
 		p->next = NULL;
 		p->cv_cur = cv;
 		p->cv_next = cv->next;
@@ -1355,6 +1366,7 @@ Reads in all archived cvars
 */
 void Cvar_Init( void )
 {
+	cvar_pool = Mem_AllocPool( "Console Variables" );
 	cvar_vars = NULL;
 	cvar_active_filter_quirks = NULL;
 	Cvar_RegisterVariable( &cmd_scripting );
@@ -1365,6 +1377,11 @@ void Cvar_Init( void )
 	Cmd_AddRestrictedCommand( "reset", Cvar_Reset_f, "reset any type variable to initial value" );
 	Cmd_AddCommand( "set", Cvar_Set_f, "create or change the value of a console variable" );
 	Cmd_AddCommand( "cvarlist", Cvar_List_f, "display all console variables beginning with the specified prefix" );
+}
+
+void Cvar_Shutdown( void )
+{
+	Mem_FreePool( &cvar_pool );
 }
 
 /*

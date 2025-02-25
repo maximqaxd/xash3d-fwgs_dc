@@ -594,7 +594,7 @@ static void CL_InitTitles( const char *filename )
 
 		Q_snprintf( name, sizeof( name ), TEXT_MSGNAME, i );
 
-		cl_textmessage[i].pName = _copystring( clgame.mempool, name, __FILE__, __LINE__ );
+		cl_textmessage[i].pName = copystringpool( clgame.mempool, name );
 		cl_textmessage[i].pMessage = cl_textbuffer[i];
 	}
 
@@ -1085,12 +1085,14 @@ void CL_InitEdicts( int maxclients )
 	clgame.static_entities = NULL; // will be initialized later
 	clgame.numStatics = 0;
 
+#if !XASH_DREAMCAST
 	if(( clgame.maxRemapInfos - 1 ) != clgame.maxEntities )
 	{
 		CL_ClearAllRemaps (); // purge old remap info
 		clgame.maxRemapInfos = clgame.maxEntities + 1;
 		clgame.remap_info = (remap_info_t **)Mem_Calloc( clgame.mempool, sizeof( remap_info_t* ) * clgame.maxRemapInfos );
 	}
+#endif
 
 	ref.dllFuncs.R_ProcessEntData( true, clgame.entities, clgame.maxEntities );
 }
@@ -2732,7 +2734,7 @@ static const char *pfnGetGameDirectory( void )
 {
 	static char	szGetGameDir[MAX_SYSPATH];
 #if XASH_DREAMCAST
-	Q_strncpy( szGetGameDir, "valve", sizeof( szGetGameDir ));
+	Q_strncpy( szGetGameDir, XASH_GAMEDIR, sizeof( szGetGameDir ));
 #else
 	Q_strncpy( szGetGameDir, GI->gamefolder, sizeof( szGetGameDir ));
 #endif
@@ -3586,17 +3588,6 @@ static int GAME_EXPORT NetAPI_CompareAdr( netadr_t *a, netadr_t *b )
 
 /*
 =================
-NetAPI_ValueForKey
-
-=================
-*/
-static const char * GAME_EXPORT NetAPI_ValueForKey( const char *s, const char *key )
-{
-	return Info_ValueForKey( s, key );
-}
-
-/*
-=================
 NetAPI_RemoveKey
 
 =================
@@ -3968,7 +3959,9 @@ void CL_UnloadProgs( void )
 	CL_FreeTempEnts();
 	CL_FreeViewBeams();
 	CL_FreeParticles();
+#if !XASH_DREAMCAST
 	CL_ClearAllRemaps();
+#endif
 	Mod_ClearUserData();
 #if !XASH_DREAMCAST
 	// NOTE: HLFX 0.5 has strange bug: hanging on exit if no map was loaded

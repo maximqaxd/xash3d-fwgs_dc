@@ -414,7 +414,9 @@ void Sys_Error( const char *error, ... )
 		Sys_Print( text );	// print error message
 		Sys_WaitForQuit();
 	}
-
+#if XASH_DREAMCAST
+	getRamStatus(); // for debugging
+#endif
 	Sys_Quit( "caught an error" );
 }
 

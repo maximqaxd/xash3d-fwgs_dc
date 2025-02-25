@@ -24,12 +24,15 @@ static const byte *iff_lastChunk;
 static int iff_chunkLen;
 
 #if XASH_DREAMCAST
+#include <dc/sound/sound.h>
+#include "xash3d_mathlib.h"
+#include <dc/spu.h>
+#include <malloc.h>
 #define CLAMP(x, low, high)  (((x) > (high)) ? (high) : (((x) < (low)) ? (low) : (x)))
 
 static const int aica_step_table[8] = {
     230, 230, 230, 230, 307, 409, 512, 614
 };
-#include "xash3d_mathlib.h"
 
 typedef struct {
     int16_t step_size;
@@ -369,13 +372,12 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
     iff_dataPtr += 4;
 
 #if XASH_DREAMCAST
-      if(fmt == 32 || fmt == 20)  // Yamaha ADPCM format
+    if(fmt == 32 || fmt == 20)  // Yamaha ADPCM format
     {
         uint32_t raw_samples = GetLittleLong();
         
         // ADPCM block alignment
         #define ADPCM_BLOCK_SIZE 32
-        #define ADPCM_SAMPLES_PER_BLOCK 64
 
         // Calculate aligned size (keep original size)
         size_t aligned_size = ALIGN(raw_samples, ADPCM_BLOCK_SIZE);
@@ -401,9 +403,6 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
             memcpy(aligned_buffer, src, raw_samples);
             if(aligned_size > raw_samples)
                 memset((uint8_t*)aligned_buffer + raw_samples, 0, aligned_size - raw_samples);
-
-            // Flush cache before DMA
-            dcache_flush_range(aligned_buffer, aligned_size);
 
             // Transfer using DMA
             if(spu_dma_transfer(aligned_buffer, aica_addr, aligned_size, 1, NULL, NULL) < 0)

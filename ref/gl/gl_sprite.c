@@ -19,8 +19,6 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "entity_types.h"
 
-// it's a Valve default value for LoadMapSprite (probably must be power of two)
-#define MAPSPRITE_SIZE	128
 #define GLARE_FALLOFF	19000.0f
 
 char		sprite_name[MAX_QPATH];
@@ -65,9 +63,10 @@ static const byte *R_SpriteLoadFrame( model_t *mod, const void *pin, mspritefram
 		Q_snprintf( texname, sizeof( texname ), "#HUD/%s(%s:%i%i).spr", sprite_name, group_suffix, num / 10, num % 10 );
 		gl_texturenum = GL_LoadTexture( texname, pin, pinframe.width * pinframe.height * bytes, r_texFlags );
 	}
+
 	else
 	{
-		// partial HD-textures support
+#if !XASH_DREAMCAST		// partial HD-textures support
 		if( Mod_AllowMaterials( ))
 		{
 			if( R_SearchForTextureReplacement( texname, sizeof( texname ), sprite_name, "materials/%s/%s%i%i.tga", sprite_name, group_suffix, num / 10, num % 10 ))
@@ -76,13 +75,14 @@ static const byte *R_SpriteLoadFrame( model_t *mod, const void *pin, mspritefram
 				R_TextureReplacementReport( sprite_name, gl_texturenum, texname );
 			}
 		}
-
+#endif // !XASH_DREAMCAST
 		if( gl_texturenum == 0 )
 		{
 			Q_snprintf( texname, sizeof( texname ), "#%s(%s:%i%i).spr", sprite_name, group_suffix, num / 10, num % 10 );
 			gl_texturenum = GL_LoadTexture( texname, pin, pinframe.width * pinframe.height * bytes, r_texFlags );
 		}
 	}
+
 
 	// setup frame description
 	pspriteframe = Mem_Malloc( mod->mempool, sizeof( mspriteframe_t ));
@@ -154,11 +154,11 @@ load sprite model
 */
 void Mod_LoadSpriteModel( model_t *mod, const void *buffer, qboolean *loaded, uint texFlags )
 {
-	const dsprite_t		*pin;
-	const short		*numi = NULL;
-	const byte	*pframetype;
-	msprite_t		*psprite;
-	int		i;
+	const dsprite_t *pin;
+	const short     *numi = NULL;
+	const byte      *pframetype;
+	msprite_t       *psprite;
+	int i;
 
 	pin = buffer;
 	psprite = mod->cache.data;
@@ -166,7 +166,7 @@ void Mod_LoadSpriteModel( model_t *mod, const void *buffer, qboolean *loaded, ui
 	if( pin->version == SPRITE_VERSION_Q1 || pin->version == SPRITE_VERSION_32 )
 		numi = NULL;
 	else if( pin->version == SPRITE_VERSION_HL )
-		numi = (const short *)((const byte*)buffer + sizeof( dsprite_hl_t ));
+		numi = (const short *)((const byte *)buffer + sizeof( dsprite_hl_t ));
 
 	r_texFlags = texFlags;
 	sprite_version = pin->version;
@@ -181,31 +181,32 @@ void Mod_LoadSpriteModel( model_t *mod, const void *buffer, qboolean *loaded, ui
 		pframetype = ((const byte*)buffer + sizeof( dsprite_q1_t )); // pinq1 + 1
 		gEngfuncs.FS_FreeImage( pal ); // palette installed, no reason to keep this data
 	}
-	else if( *numi == 256 )
+	else if( *numi <= 256 )
 	{
 		const byte	*src = (const byte *)(numi+1);
 		rgbdata_t	*pal;
+		size_t pal_bytes = *numi * 3;
 
 		// install palette
 		switch( psprite->texFormat )
 		{
 		case SPR_INDEXALPHA:
-			pal = gEngfuncs.FS_LoadImage( "#gradient.pal", src, 768 );
+			pal = gEngfuncs.FS_LoadImage( "#gradient.pal", src, pal_bytes );
 			break;
 		case SPR_ALPHTEST:
-			pal = gEngfuncs.FS_LoadImage( "#masked.pal", src, 768 );
+			pal = gEngfuncs.FS_LoadImage( "#masked.pal", src, pal_bytes );
 			break;
 		default:
-			pal = gEngfuncs.FS_LoadImage( "#normal.pal", src, 768 );
+			pal = gEngfuncs.FS_LoadImage( "#normal.pal", src, pal_bytes );
 			break;
 		}
 
-		pframetype = (const byte *)(src + 768);
+		pframetype = (const byte *)(src + pal_bytes);
 		gEngfuncs.FS_FreeImage( pal ); // palette installed, no reason to keep this data
 	}
 	else
 	{
-		gEngfuncs.Con_DPrintf( S_ERROR "%s has wrong number of palette colors %i (should be 256)\n", mod->name, *numi );
+		gEngfuncs.Con_DPrintf( S_ERROR "%s has wrong number of palette colors %i (should be less or equal than 256)\n", mod->name, *numi );
 		return;
 	}
 
@@ -244,129 +245,6 @@ void Mod_LoadSpriteModel( model_t *mod, const void *buffer, qboolean *loaded, ui
 
 /*
 ====================
-Mod_LoadMapSprite
-
-Loading a bitmap image as sprite with multiple frames
-as pieces of input image
-====================
-*/
-void Mod_LoadMapSprite( model_t *mod, const void *buffer, size_t size, qboolean *loaded )
-{
-	byte		*src, *dst;
-	rgbdata_t		*pix, temp;
-	char		texname[128];
-	int		i, j, x, y, w, h;
-	int		xl, yl, xh, yh;
-	int		linedelta, numframes;
-	mspriteframe_t	*pspriteframe;
-	msprite_t		*psprite;
-	char		poolname[MAX_VA_STRING];
-
-	if( loaded ) *loaded = false;
-	Q_snprintf( texname, sizeof( texname ), "#%s", mod->name );
-	gEngfuncs.Image_SetForceFlags( IL_OVERVIEW );
-	pix = gEngfuncs.FS_LoadImage( texname, buffer, size );
-	gEngfuncs.Image_ClearForceFlags();
-	if( !pix ) return;	// bad image or something else
-
-	mod->type = mod_sprite;
-	r_texFlags = 0; // no custom flags for map sprites
-
-	if( pix->width % MAPSPRITE_SIZE )
-		w = pix->width - ( pix->width % MAPSPRITE_SIZE );
-	else w = pix->width;
-
-	if( pix->height % MAPSPRITE_SIZE )
-		h = pix->height - ( pix->height % MAPSPRITE_SIZE );
-	else h = pix->height;
-
-	if( w < MAPSPRITE_SIZE ) w = MAPSPRITE_SIZE;
-	if( h < MAPSPRITE_SIZE ) h = MAPSPRITE_SIZE;
-
-	// resample image if needed
-	gEngfuncs.Image_Process( &pix, w, h, IMAGE_FORCE_RGBA|IMAGE_RESAMPLE, 0.0f );
-
-	w = h = MAPSPRITE_SIZE;
-
-	// check range
-	if( w > pix->width ) w = pix->width;
-	if( h > pix->height ) h = pix->height;
-
-	// determine how many frames we needs
-	numframes = (pix->width * pix->height) / (w * h);
-	Q_snprintf( poolname, sizeof( poolname ), "^2%s^7", mod->name );
-	mod->mempool = Mem_AllocPool( poolname );
-	psprite = Mem_Calloc( mod->mempool, sizeof( msprite_t ) + ( numframes - 1 ) * sizeof( psprite->frames ));
-	mod->cache.data = psprite;	// make link to extradata
-
-	psprite->type = SPR_FWD_PARALLEL_ORIENTED;
-	psprite->texFormat = SPR_ALPHTEST;
-	psprite->numframes = mod->numframes = numframes;
-	psprite->radius = sqrt(((w >> 1) * (w >> 1)) + ((h >> 1) * (h >> 1)));
-
-	mod->mins[0] = mod->mins[1] = -w / 2;
-	mod->maxs[0] = mod->maxs[1] = w / 2;
-	mod->mins[2] = -h / 2;
-	mod->maxs[2] = h / 2;
-
-	// create a temporary pic
-	memset( &temp, 0, sizeof( temp ));
-	temp.width = w;
-	temp.height = h;
-	temp.type = pix->type;
-	temp.flags = pix->flags;
-	temp.size = w * h * gEngfuncs.Image_GetPFDesc(temp.type)->bpp;
-	temp.buffer = Mem_Malloc( r_temppool, temp.size );
-	temp.palette = NULL;
-
-	// chop the image and upload into video memory
-	for( i = xl = yl = 0; i < numframes; i++ )
-	{
-		xh = xl + w;
-		yh = yl + h;
-
-		src = pix->buffer + ( yl * pix->width + xl ) * 4;
-		linedelta = ( pix->width - w ) * 4;
-		dst = temp.buffer;
-
-		// cut block from source
-		for( y = yl; y < yh; y++ )
-		{
-			for( x = xl; x < xh; x++ )
-				for( j = 0; j < 4; j++ )
-					*dst++ = *src++;
-			src += linedelta;
-		}
-
-		// build uinque frame name
-		Q_snprintf( texname, sizeof( texname ), "#MAP/%s_%i%i.spr", mod->name, i / 10, i % 10 );
-
-		psprite->frames[i].frameptr = Mem_Calloc( mod->mempool, sizeof( mspriteframe_t ));
-		pspriteframe = psprite->frames[i].frameptr;
-		pspriteframe->width = w;
-		pspriteframe->height = h;
-		pspriteframe->up = ( h >> 1 );
-		pspriteframe->left = -( w >> 1 );
-		pspriteframe->down = ( h >> 1 ) - h;
-		pspriteframe->right = w + -( w >> 1 );
-		pspriteframe->gl_texturenum = GL_LoadTextureInternal( texname, &temp, TF_IMAGE );
-
-		xl += w;
-		if( xl >= pix->width )
-		{
-			xl = 0;
-			yl += h;
-		}
-	}
-
-	gEngfuncs.FS_FreeImage( pix );
-	Mem_Free( temp.buffer );
-
-	if( loaded ) *loaded = true;
-}
-
-/*
-====================
 Mod_UnloadSpriteModel
 
 release sprite model and frames
@@ -374,32 +252,31 @@ release sprite model and frames
 */
 void Mod_SpriteUnloadTextures( void *data )
 {
-	msprite_t		*psprite;
-	mspritegroup_t	*pspritegroup;
-	mspriteframe_t	*pspriteframe;
-	int		i, j;
+	msprite_t *psprite = data;
+	int i;
 
-	psprite = data;
+	if( !data )
+		return;
 
-	if( psprite )
+	// release all textures
+	for( i = 0; i < psprite->numframes; i++ )
 	{
-		// release all textures
-		for( i = 0; i < psprite->numframes; i++ )
-		{
-			if( psprite->frames[i].type == SPR_SINGLE )
-			{
-				pspriteframe = psprite->frames[i].frameptr;
-				GL_FreeTexture( pspriteframe->gl_texturenum );
-			}
-			else
-			{
-				pspritegroup = (mspritegroup_t *)psprite->frames[i].frameptr;
+		if( !psprite->frames[i].frameptr )
+			continue;
 
-				for( j = 0; j < pspritegroup->numframes; j++ )
-				{
-					pspriteframe = pspritegroup->frames[i];
-					GL_FreeTexture( pspriteframe->gl_texturenum );
-				}
+		if( psprite->frames[i].type == SPR_SINGLE )
+		{
+			GL_FreeTexture( psprite->frames[i].frameptr->gl_texturenum );
+		}
+		else
+		{
+			mspritegroup_t *pspritegroup = (mspritegroup_t *)psprite->frames[i].frameptr;
+			int j;
+
+			for( j = 0; j < pspritegroup->numframes; j++ )
+			{
+				if( pspritegroup->frames[j] )
+					GL_FreeTexture( pspritegroup->frames[j]->gl_texturenum );
 			}
 		}
 	}

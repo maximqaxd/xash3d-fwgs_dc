@@ -28,6 +28,138 @@ GNU General Public License for more details.
 #define Y_SPACING 24
 #include <dc/video.h>
 #include <arch/arch.h>
+#include <dc/sound/sound.h>
+#include <glkos.h>
+
+/*
+ * OpenBOR - http://www.LavaLit.com
+ * -----------------------------------------------------------------------
+ * Licensed under the BSD license, see LICENSE in OpenBOR root for details.
+ *
+ * Copyright (c) 2004 - 2009 OpenBOR Team
+ */
+
+/*
+ * This library is used for calculating how much memory is available/used.
+ * Certain platforms offer physical memory statistics, we obviously wrap
+ * around those functions.  For platforms where we can't retrieve this
+ * information we then calculate the estimated sizes based on a few key
+ * variables and symbols.  These estimated values should tolerable.......
+ */
+
+/////////////////////////////////////////////////////////////////////////////
+// Libraries
+
+#include <malloc.h>
+#include <string.h>
+#include <stdio.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+// Globals
+
+static unsigned long systemRam = 0x00000000;
+static unsigned long elfOffset = 0x00000000;
+static unsigned long stackSize = 0x00000000;
+
+/////////////////////////////////////////////////////////////////////////////
+// Symbols
+
+#if defined(_arch_dreamcast)
+extern unsigned long end;
+extern unsigned long start;
+#define _END end
+#define _START start
+#else
+extern unsigned long end;
+extern unsigned long _start;
+#define _END end
+#define _START _executable_start
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+//  Functions
+
+unsigned long getFreeRam(void)
+{
+#if defined(_WIN32) || XBOX
+	MEMORYSTATUS stat;
+	memset(&stat, 0, sizeof(MEMORYSTATUS));
+	stat.dwLength = sizeof(MEMORYSTATUS);
+	GlobalMemoryStatus(&stat);
+	return stat.dwAvailPhys - stackSize;
+#elif LINUX
+	struct sysinfo info;
+	sysinfo(&info);
+	return info.freeram - stackSize;
+#else
+    struct mallinfo mi = mallinfo();
+    return systemRam - (mi.usmblks + stackSize);
+#endif
+}
+
+void setSystemRam(void)
+{
+#if defined(_arch_dreamcast)
+	// 16 MBytes - ELF Memory Map:
+	systemRam = 0x8d000000 - 0x8c000000;
+	elfOffset = 0x8c000000;
+#elif PSP
+	// 24 MBytes - ELF Memory Map:
+	systemRam = 0x01800000 - 0x00000000;
+	elfOffset = 0x00000000;
+	if (getHardwareModel() == 1) systemRam += 32 * 1024 * 1024;
+#elif GP2X
+	// 32 MBytes - ELF Memory Map:
+	systemRam = 0x02000000 - 0x00000000;
+	elfOffset = 0x00000000;
+	if (gp2x_init() == 2) systemRam += 32 * 1024 * 1024;
+#else
+	systemRam = getFreeRam();
+#endif
+	stackSize = (int)&_END - (int)&_START + ((int)&_START - elfOffset);
+}
+
+unsigned long getSystemRam(void)
+{
+	return systemRam;
+}
+
+unsigned long getUsedRam(void)
+{
+	return (systemRam - getFreeRam());
+}
+
+void getRamStatus(void)
+{
+
+	GLint free_mem = 0;
+    GLint used_mem = 0;
+    GLint free_contiguous = 0;
+
+    // Query memory values
+    glGetIntegerv(GL_FREE_TEXTURE_MEMORY_KOS, &free_mem);
+    glGetIntegerv(GL_USED_TEXTURE_MEMORY_KOS, &used_mem);
+    glGetIntegerv(GL_FREE_CONTIGUOUS_TEXTURE_MEMORY_KOS, &free_contiguous);
+	
+	Con_Printf("stack: start:%x end:%x\n", (int)&_START, (int)&_END);
+	Con_Printf("System RAM - Total: %.1f MB (%d KB), Free: %.1f MB (%d KB), Used: %.1f MB (%d KB)\n",
+		(float)getSystemRam() / (1024*1024),    // MB
+		getSystemRam() / 1024,                   // KB
+		(float)getFreeRam() / (1024*1024),      // MB
+		getFreeRam() / 1024,                     // KB
+		(float)getUsedRam() / (1024*1024),      // MB
+		getUsedRam() / 1024);                    // KB
+	Con_Printf("GLDC Texture RAM: (KB) - Free: %d, Used: %d, Free Contiguous: %d\n",
+              free_mem / 1024,   
+              used_mem / 1024,
+              free_contiguous / 1024);
+	Con_Printf("SPU: Free: %d\n",snd_mem_available());
+}
+
 //-----------------------------------------------------------------------------
 extern void bfont_draw_str(uint16_t *buffer, int bufwidth, int opaque, char *str);
 static void drawtext(int x, int y, char *string) {

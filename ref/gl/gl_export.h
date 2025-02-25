@@ -20,20 +20,20 @@ GNU General Public License for more details.
 #endif
 
 #ifndef APIENTRY_LINKAGE
-#define APIENTRY_LINKAGE extern
+	#define APIENTRY_LINKAGE extern
 #endif
 
-#if defined XASH_NANOGL || defined XASH_WES || defined XASH_REGAL
-#define XASH_GLES
-#define XASH_GL_STATIC
-#define REF_GL_KEEP_MANGLED_FUNCTIONS
-#elif defined XASH_GLES3COMPAT
-#ifdef SOFTFP_LINK
-#undef APIENTRY
-#define APIENTRY __attribute__((pcs("aapcs")))
-#endif
-#define XASH_GLES
-#endif
+#if XASH_NANOGL || XASH_WES || XASH_REGAL
+	#define XASH_GLES 1
+	#define XASH_GL_STATIC 1
+	#define REF_GL_KEEP_MANGLED_FUNCTIONS 1
+#elif XASH_GLES3COMPAT
+	#ifdef SOFTFP_LINK
+		#undef APIENTRY
+		#define APIENTRY __attribute__((pcs("aapcs")))
+	#endif // SOFTFP_LINK
+	#define XASH_GLES 1
+#endif // XASH_GLES3COMPAT
 
 typedef uint GLenum;
 typedef byte GLboolean;
@@ -896,17 +896,74 @@ typedef float GLmatrix[16];
 #define WGL_SAMPLE_BUFFERS_ARB		0x2041
 #define WGL_SAMPLES_ARB			0x2042
 
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-variable"
+#if XASH_DREAMCAST
+/* Pass to glTexParameteri to set the shared bank */
+#define GL_SHARED_TEXTURE_BANK_KOS                  0xEF3C
+
+/* glGet extensions */
+#define GL_FREE_TEXTURE_MEMORY_KOS                  0xEF3D
+#define GL_USED_TEXTURE_MEMORY_KOS                  0xEF3E
+#define GL_FREE_CONTIGUOUS_TEXTURE_MEMORY_KOS       0xEF3F
+
+//for palette internal format (glfcConfig)
+#define GL_RGB565_KOS                               0xEF40
+#define GL_ARGB4444_KOS                             0xEF41
+#define GL_ARGB1555_KOS                             0xEF42
+#define GL_RGB565_TWID_KOS                          0xEF43
+#define GL_ARGB4444_TWID_KOS                        0xEF44
+#define GL_ARGB1555_TWID_KOS                        0xEF45
+#define GL_COLOR_INDEX8_TWID_KOS                    0xEF46
+#define GL_COLOR_INDEX4_TWID_KOS                    0xEF47
+#define GL_RGB_TWID_KOS                             0xEF48
+#define GL_RGBA_TWID_KOS                            0xEF49
+
+/* glGet extensions */
+#define GL_TEXTURE_INTERNAL_FORMAT_KOS              0xEF50
+
+/* If enabled, will twiddle texture uploads where possible */
+#define GL_TEXTURE_TWIDDLE_KOS                      0xEF51
+
+/*
+ * Dreamcast specific compressed + twiddled formats.
+ * We use constants from the range 0xEEE0 onwards
+ * to avoid trampling any real GL constants (this is in the middle of the
+ * any_vendor_future_use range defined in the GL enum.spec file.
+*/
+#define GL_UNSIGNED_SHORT_5_6_5_TWID_KOS            0xEEE0
+#define GL_UNSIGNED_SHORT_1_5_5_5_REV_TWID_KOS      0xEEE2
+#define GL_UNSIGNED_SHORT_4_4_4_4_REV_TWID_KOS      0xEEE3
+
+#define GL_COMPRESSED_RGB_565_VQ_KOS                0xEEE4
+#define GL_COMPRESSED_ARGB_1555_VQ_KOS              0xEEE6
+#define GL_COMPRESSED_ARGB_4444_VQ_KOS              0xEEE7
+
+#define GL_COMPRESSED_RGB_565_VQ_TWID_KOS           0xEEE8
+#define GL_COMPRESSED_ARGB_1555_VQ_TWID_KOS         0xEEEA
+#define GL_COMPRESSED_ARGB_4444_VQ_TWID_KOS         0xEEEB
+
+#define GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS                0xEEEC
+#define GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS              0xEEED
+#define GL_COMPRESSED_ARGB_4444_VQ_MIPMAP_KOS              0xEEEE
+
+#define GL_COMPRESSED_RGB_565_VQ_MIPMAP_TWID_KOS           0xEEEF
+#define GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_TWID_KOS         0xEEF0
+#define GL_COMPRESSED_ARGB_4444_VQ_MIPMAP_TWID_KOS         0xEEF1
+
+#define GL_NEARZ_CLIPPING_KOS                       0xEEFA
+
 #endif
 
-#if defined( XASH_GL_STATIC ) && !defined( REF_GL_KEEP_MANGLED_FUNCTIONS )
-#define GL_FUNCTION( name ) name
-#elif defined( XASH_GL_STATIC ) && defined( REF_GL_KEEP_MANGLED_FUNCTIONS )
-#define GL_FUNCTION( name ) APIENTRY p##name
+#ifdef __GNUC__
+	#pragma GCC diagnostic push
+	#pragma GCC diagnostic ignored "-Wunused-variable"
+#endif
+
+#if XASH_GL_STATIC && !REF_GL_KEEP_MANGLED_FUNCTIONS
+	#define GL_FUNCTION( name ) name
+#elif XASH_GL_STATIC && REF_GL_KEEP_MANGLED_FUNCTIONS
+	#define GL_FUNCTION( name ) APIENTRY p##name
 #else
-#define GL_FUNCTION( name ) (APIENTRY *p##name)
+	#define GL_FUNCTION( name ) (APIENTRY *p##name)
 #endif
 
 // helper opengl functions
@@ -1387,11 +1444,11 @@ APIENTRY_LINKAGE void GL_FUNCTION( glFlushMappedBufferRange )(GLenum target, GLs
 APIENTRY_LINKAGE void *GL_FUNCTION( glMapBufferRange )(GLenum target, GLsizei offset, GLsizei length, GLbitfield access);
 APIENTRY_LINKAGE void GL_FUNCTION( glDrawRangeElementsBaseVertex )( GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const GLvoid *indices, GLuint vertex );
 
-#if !defined( XASH_GL_STATIC ) || (!defined( XASH_GLES ) && !defined( XASH_GL4ES ))
+#if !XASH_GL_STATIC || ( !XASH_GLES && !XASH_GL4ES )
 APIENTRY_LINKAGE void GL_FUNCTION( glTexImage2DMultisample )(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height, GLboolean fixedsamplelocations);
 #endif /* !XASH_GLES && !XASH_GL4ES */
 
-#if defined( XASH_GL_STATIC ) && !defined( REF_GL_KEEP_MANGLED_FUNCTIONS )
+#if XASH_GL_STATIC && !REF_GL_KEEP_MANGLED_FUNCTIONS
 #define pglGetError glGetError
 #define pglGetString glGetString
 #define pglAccum glAccum
@@ -1735,7 +1792,11 @@ APIENTRY_LINKAGE void GL_FUNCTION( glTexImage2DMultisample )(GLenum target, GLsi
 #define pglDrawRangeElements glDrawRangeElements
 #define pglDrawRangeElementsEXT glDrawRangeElementsEXT
 #define pglMultiTexCoord1f glMultiTexCoord1f
+#if XASH_DREAMCAST
+#define pglMultiTexCoord2f glMultiTexCoord2fARB
+#else
 #define pglMultiTexCoord2f glMultiTexCoord2f
+#endif
 #define pglMultiTexCoord3f glMultiTexCoord3f
 #define pglMultiTexCoord4f glMultiTexCoord4f
 #define pglActiveTexture glActiveTexture
@@ -1857,7 +1918,7 @@ APIENTRY_LINKAGE void GL_FUNCTION( glTexImage2DMultisample )(GLenum target, GLsi
 #endif
 
 #ifdef __GNUC__
-#pragma GCC diagnostic pop
+	#pragma GCC diagnostic pop
 #endif
 
 #endif//GL_EXPORT_H

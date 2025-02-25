@@ -923,7 +923,7 @@ static void SV_Info( netadr_t from, int protocolVersion )
 		Info_SetValueForKeyf( s, "numcl", sizeof( s ), "%i", count );
 		Info_SetValueForKeyf( s, "maxcl", sizeof( s ), "%i", svs.maxclients );
 #if XASH_DREAMCAST
-		Info_SetValueForKey( s, "gamedir", "valve", sizeof( s ));
+		Info_SetValueForKey( s, "gamedir", XASH_GAMEDIR, sizeof( s ));
 #else
 		Info_SetValueForKey( s, "gamedir", GI->gamefolder, sizeof( s ));
 #endif
@@ -1053,7 +1053,7 @@ static void SV_BuildNetAnswer( netadr_t from )
 		// should match SV_SourceQuery_Details
 		Info_SetValueForKey( string, "hostname", hostname.string, sizeof( string ));
 #if XASH_DREAMCAST
-		Info_SetValueForKey( string, "gamedir", "valve", sizeof( string ));
+		Info_SetValueForKey( string, "gamedir", XASH_GAMEDIR, sizeof( string ));
 #else
 		Info_SetValueForKey( string, "gamedir", GI->gamefolder, sizeof( string ));
 #endif
@@ -1614,7 +1614,7 @@ void SV_SendServerdata( sizebuf_t *msg, sv_client_t *cl )
 	MSG_WriteString( msg, STRING( svgame.edicts->v.message )); // Map Message
 	MSG_WriteOneBit( msg, sv.background ); // tell client about background map
 #if XASH_DREAMCAST
-	MSG_WriteString( msg, "valve" );
+	MSG_WriteString( msg, XASH_GAMEDIR );
 #else
 	MSG_WriteString( msg, GI->gamefolder );
 #endif			   									 
@@ -2887,14 +2887,20 @@ static qboolean SV_EntCreate_f( sv_client_t *cl )
 	// XashXT does not implement SV_CreateEntity, use saverestore export
 	if( !ent && svgame.physFuncs.pfnCreateEntitiesInRestoreList )
 	{
-		SAVERESTOREDATA data = { 0 };
-		ENTITYTABLE table = { 0 };
-		data.tableCount = 1;
-		data.pTable = &table;
-		table.classname = classname;
-		table.id = -1;
-		table.size = 1;
-		svgame.physFuncs.pfnCreateEntitiesInRestoreList( &data, 0, false );
+		ENTITYTABLE table = {
+			.classname = classname,
+			.id = -1,
+			.size = 1,
+			.flags = 1337,
+		};
+
+		SAVERESTOREDATA data = {
+			.tableCount = 1,
+			.pTable = &table
+		};
+
+		svgame.physFuncs.pfnCreateEntitiesInRestoreList( &data, table.flags, false );
+
 		ent = table.pent;
 	}
 

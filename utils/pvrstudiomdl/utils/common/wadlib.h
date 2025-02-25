@@ -22,6 +22,8 @@
 #define	TYP_LABEL		1
 #define	TYP_LUMPY		64				// 64 + grab command number
 
+#include <stdint.h>
+
 typedef struct
 {
 	char		identification[4];		// should be WAD2 or 2DAW
@@ -62,3 +64,17 @@ void	NewWad (char *pathname, qboolean bigendien);
 void	AddLump (char *name, void *buffer, int length, int type, int compress);
 void	WriteWad (int wad3);
 
+#define PVRTSIGN (('T'<<24)+('R'<<16)+('V'<<8)+'P') // little-endian "PVRT"
+
+typedef struct pvrt_s
+{
+	uint32_t version;          // "PVRT" in ASCII
+	uint32_t textureDataSize;  // Size of rest of the file
+	uint8_t colorFormat;       // 0x01 for RGB565
+	uint8_t imageFormat;       // 0x01=twiddled, 0x03=VQ, 0x09=rectangle
+	uint16_t zeroes;          // Always 0
+	uint16_t width;
+	uint16_t height;
+} pvrt_t;
+
+void LoadScreenPVR(char* name);

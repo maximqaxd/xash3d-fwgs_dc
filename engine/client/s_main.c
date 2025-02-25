@@ -836,7 +836,6 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
         cmd->cmd_id = target_chan->aica_channel;
         chan->cmd = AICA_CH_CMD_STOP;
         snd_sh4_to_aica(tmp, cmd->size);
-        snd_poll_resp();  // Wait for AICA to process
     }
 #endif
 
@@ -903,7 +902,6 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
         chan->pan = 128;  // Will be updated by spatialize
         
         snd_sh4_to_aica(tmp, cmd->size);
-        snd_poll_resp();  // Wait for AICA to process
         
         aica_channels_in_use[target_chan->aica_channel] = true;
         target_chan->active = true;
@@ -962,7 +960,6 @@ void S_RestoreSound(const vec3_t pos, int ent, int chan, sound_t handle, float f
         cmd->cmd_id = saved_aica_channel;
         chan->cmd = AICA_CH_CMD_STOP;
         snd_sh4_to_aica(tmp, cmd->size);
-        snd_poll_resp();
     }
 #endif
 
@@ -1029,7 +1026,6 @@ void S_RestoreSound(const vec3_t pos, int ent, int chan, sound_t handle, float f
         chan->pan = 128;  // Will be updated by spatialize
         
         snd_sh4_to_aica(tmp, cmd->size);
-        snd_poll_resp();
         
         aica_channels_in_use[target_chan->aica_channel] = true;
         target_chan->active = true;
@@ -1095,7 +1091,6 @@ void S_AmbientSound(const vec3_t pos, int ent, sound_t handle, float fvol, float
         cmd->cmd_id = ch->aica_channel;
         chan->cmd = AICA_CH_CMD_STOP;
         snd_sh4_to_aica(tmp, cmd->size);
-        snd_poll_resp();
     }
 #endif
 
@@ -1158,7 +1153,6 @@ void S_AmbientSound(const vec3_t pos, int ent, sound_t handle, float fvol, float
         chan->pan = 128;  // Will be updated by spatialize
         
         snd_sh4_to_aica(tmp, cmd->size);
-        snd_poll_resp();
         
         aica_channels_in_use[ch->aica_channel] = true;
         ch->active = true;
@@ -2280,7 +2274,9 @@ static void S_VoiceRecordStart_f( void )
 	if( cls.state != ca_active )
 		return;
 	
+#if !XASH_DREAMCAST
 	Voice_RecordStart();
+#endif
 }
 
 /*
@@ -2290,11 +2286,13 @@ S_VoiceRecordStop_f
 */
 static void S_VoiceRecordStop_f( void )
 {
+#if !XASH_DREAMCAST
 	if( cls.state != ca_active || !Voice_IsRecording() )
 		return;
-	
+
 	CL_AddVoiceToDatagram();
 	Voice_RecordStop();
+#endif
 }
 
 /*

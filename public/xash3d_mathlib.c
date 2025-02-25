@@ -146,6 +146,9 @@ rsqrt
 */
 float rsqrt( float number )
 {
+#if XASH_DREAMCAST
+	return frsqrt(number);
+#else
 	int	i;
 	float	x, y;
 
@@ -159,6 +162,7 @@ float rsqrt( float number )
 	y = y * (1.5f - (x * y * y));	// first iteration
 
 	return y;
+#endif
 }
 
 void VectorVectors( const vec3_t forward, vec3_t right, vec3_t up )

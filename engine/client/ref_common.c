@@ -370,8 +370,8 @@ static const ref_api_t gEngfuncs =
 	Mod_ForName,
 	pfnMod_Extradata,
 
-	CL_EntitySetRemapColors,
-	CL_GetRemapInfoForEntity,
+	NULL,
+	NULL,
 
 	CL_ExtraUpdate,
 	Host_Error,

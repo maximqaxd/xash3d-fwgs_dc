@@ -193,10 +193,9 @@ GNU General Public License for more details.
 #undef MAX_CLIENTS
 #undef MAX_WEAPONS
 #undef MAX_USER_MESSAGES
-#define MAX_USER_MESSAGES 128
-#define MAX_WEAPONS 32
-#define MAX_CLIENTS 			16
-#define DC_MAX_EDICTS				128
+#define MAX_USER_MESSAGES 		128
+#define MAX_WEAPONS 			32
+#define MAX_CLIENTS 			8
 #define MAX_VISIBLE_PACKET      128     
 #define MAX_VISIBLE_PACKET_VIS_BYTES    ((MAX_VISIBLE_PACKET + 7) / 8)
 #define MAX_EVENTS          32      
@@ -204,10 +203,14 @@ GNU General Public License for more details.
 #define MAX_SOUNDS          512     
 #define MAX_CUSTOM          32      
 #define MAX_DLIGHTS         8       
-#define MAX_ELIGHTS         32     
-#define MAX_RENDER_DECALS      16      
-#define MAX_RESOURCES       1024    
+#define MAX_ELIGHTS         16     
+#define MAX_RENDER_DECALS   16      
+#define MAX_RESOURCES       (MAX_MODELS + MAX_SOUNDS + MAX_CUSTOM + MAX_EVENTS)    
 #define MAX_LIGHTSTYLES		64
+#define DC_MAX_EDICTS		512
+#define DC_MAX_TENTS 		32
+#define DC_MAX_PARTICLES 	64
+#define DC_MAX_BEAMS 		4
 #else
 #if XASH_LOW_MEMORY == 2
 #undef MAX_VISIBLE_PACKET
@@ -310,11 +313,11 @@ GNU General Public License for more details.
 #define SU_WEAPON		(1<<14)
 
 extern const char *const svc_strings[svc_lastmsg+1];
-extern const char *const svc_legacy_strings[svc_lastmsg+1];
 #if !XASH_DREAMCAST
+extern const char *const svc_legacy_strings[svc_lastmsg+1];
 extern const char *const svc_quake_strings[svc_lastmsg+1];
-#endif
 extern const char *const svc_goldsrc_strings[svc_lastmsg+1];
+#endif
 extern const char *const clc_strings[clc_lastmsg+1];
 
 // FWGS extensions

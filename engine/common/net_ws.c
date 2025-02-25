@@ -1748,7 +1748,7 @@ NET_OpenIP
 static void NET_OpenIP( qboolean change_port, int *sockets, const char *net_iface, int hostport, int clientport, int family )
 {
 	int port;
-	qboolean sv_nat = Cvar_VariableInteger( "sv_nat" );
+	qboolean sv_nat = 1;
 	qboolean cl_nat = Cvar_VariableInteger( "cl_nat" );
 
 	if( change_port && ( FBitSet( net_hostport.flags, FCVAR_CHANGED ) || sv_nat ))

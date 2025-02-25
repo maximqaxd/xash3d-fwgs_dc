@@ -1178,7 +1178,7 @@ static void GAME_EXPORT pfnGetGameDir( char *out )
 	if( !out )
 		return;
 #if XASH_DREAMCAST
-	Q_strncpy( out, "valve", sizeof( "valve" ));
+	Q_strncpy( out, XASH_GAMEDIR, sizeof( XASH_GAMEDIR ));
 #else
 	Q_strncpy( out, GI->gamefolder, sizeof( GI->gamefolder ));
 #endif
@@ -1252,7 +1252,7 @@ static const ui_enginefuncs_t gEngfuncs =
 	pfnGetOldGameInfo,
 	pfnGetGamesList,
 	pfnGetFilesList,
-	SV_GetSaveComment,
+	NULL,
 	CL_GetDemoComment,
 	pfnCheckGameDll,
 	pfnGetClipboardData,
@@ -1264,7 +1264,7 @@ static const ui_enginefuncs_t gEngfuncs =
 	COM_RandomFloat,
 	COM_RandomLong,
 	pfnSetCursor,
-	pfnIsMapValid,
+	NULL,
 	GL_ProcessTexture,
 	pfnCompareFileTime,
 	VID_GetModeString,

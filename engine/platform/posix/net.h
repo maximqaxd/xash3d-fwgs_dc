@@ -90,6 +90,9 @@ static int ioctl_stub( int d, unsigned long r, ... )
 #define closesocket close
 #endif
 #define SOCKET int
+#if XASH_DREAMCAST
+typedef long unsigned int WSAsize_t;
+#else
 typedef int WSAsize_t;
-
+#endif
 #endif // NET_H

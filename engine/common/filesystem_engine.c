@@ -25,7 +25,10 @@ GNU General Public License for more details.
 #endif 
 
 fs_api_t g_fsapi;
-#if !XASH_DREAMCAST
+#if XASH_DREAMCAST
+fs_globals_t *FI_engine;
+#define FI FI_engine	
+#else
 fs_globals_t *FI;
 #endif
 

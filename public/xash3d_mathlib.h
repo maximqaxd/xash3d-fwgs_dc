@@ -24,6 +24,10 @@ GNU General Public License for more details.
 
 #include "build.h"
 #include "xash3d_types.h"
+#if XASH_DREAMCAST
+#include <dc/fmath.h>
+#include <dc/matrix.h>
+#endif
 
 /*
 ===========================

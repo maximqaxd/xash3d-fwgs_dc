@@ -24,6 +24,7 @@ GNU General Public License for more details.
 
 static int num_vidmodes = 0;
 static void GL_SetupAttributes( void );
+static qboolean vsync;
 
 
 /*
@@ -185,7 +186,7 @@ qboolean R_Init_Video( const int type )
     // RGBA4444 is the fastest general format - 8888 will cause a perf issue
     config.internal_palette_format = GL_RGBA4;
 
-    config.texture_twiddle = GL_FALSE;
+    config.texture_twiddle = GL_TRUE;
 
     glKosInitEx(&config);
 
@@ -214,10 +215,10 @@ qboolean VID_SetMode(void) {
             dm = DM_640x480_VGA; // VGA mode
             break;
         case CT_RGB:
-            dm = DM_640x480_NTSC_IL; // RGB mode
+            dm = DM_640x480; // RGB mode
             break;
         case CT_COMPOSITE:
-            dm = DM_640x480_NTSC_IL; // Composite mode
+            dm = DM_640x480; // Composite mode
             break;
         case CT_NONE:
         default:
@@ -269,7 +270,18 @@ void* GL_GetProcAddress( const char *name ) // RenderAPI requirement
 
 void GL_UpdateSwapInterval( void )
 {
-	// stub
+	// disable VSync while level is loading
+	if( cls.state < ca_active )
+	{
+		// setup vsync here
+		vsync = false;
+		SetBits( gl_vsync.flags, FCVAR_CHANGED );
+	}
+	else if( FBitSet( gl_vsync.flags, FCVAR_CHANGED ))
+	{
+		ClearBits( gl_vsync.flags, FCVAR_CHANGED );
+		vsync = true;
+	}
 }
 
 void *SW_LockBuffer( void )
