@@ -26,11 +26,9 @@ XASH_CLIENT_OBJS = \
 	engine/client/cl_tent.o \
 	engine/client/cl_video.o \
 	engine/client/cl_view.o \
-	engine/client/cl_mobile.o \
 	engine/client/console.o \
 	engine/client/gamma.o \
 	engine/client/in_joy.o \
-	engine/client/in_touch.o \
 	engine/client/input.o \
 	engine/client/keys.o \
 	engine/client/mod_dbghulls.o \

@@ -1978,8 +1978,9 @@ void CL_ParseVoiceInit( sizebuf_t *msg )
 {
 	char *pszCodec = MSG_ReadString( msg );
 	int quality = MSG_ReadByte( msg );
-
+#if !XASH_DREAMCAST
 	Voice_Init( pszCodec, quality, false ); // init requested codec and the device
+#endif
 }
 
 /*
@@ -1990,6 +1991,7 @@ CL_ParseVoiceData
 */
 void CL_ParseVoiceData( sizebuf_t *msg, connprotocol_t proto )
 {
+#if !XASH_DREAMCAST
 	int size, idx, frames;
 	byte received[8192];
 
@@ -2029,6 +2031,7 @@ void CL_ParseVoiceData( sizebuf_t *msg, connprotocol_t proto )
 		return;
 
 	Voice_AddIncomingData( idx, received, size, frames );
+#endif
 }
 
 /*

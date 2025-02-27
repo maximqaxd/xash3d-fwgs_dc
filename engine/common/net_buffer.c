@@ -253,6 +253,7 @@ const char *const svc_strings[svc_lastmsg+1] =
 	"svc_exec",
 };
 
+#if !XASH_DREAMCAST
 const char *const svc_legacy_strings[svc_lastmsg+1] =
 {
 	[svc_legacy_changing] = "svc_legacy_changing",
@@ -297,7 +298,7 @@ const char *const svc_quake_strings[svc_lastmsg+1] =
 	[svc_skyboxsize] = "svc_quake_skyboxsize",
 	[svc_fog] = "svc_quake_fog",
 };
-
+#endif
 void MSG_WriteUBitLong( sizebuf_t *sb, uint curData, int numbits )
 {
 	int	nBitsLeft = numbits;

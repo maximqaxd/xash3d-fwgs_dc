@@ -82,6 +82,7 @@ int main( int argc, char **argv )
 #endif // XASH_PSVITA
 #if XASH_DREAMCAST
 	setSystemRam();
+	getRamStatus();
 #endif
 	return Sys_Start();
 }

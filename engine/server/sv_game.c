@@ -2565,7 +2565,11 @@ static void GAME_EXPORT pfnMessageBegin( int msg_dest, int msg_num, const float 
 		if( SV_CanRewriteMessage( msg_num ))
 		{
 			svgame.msg_index = -SV_CanRewriteMessage( msg_num );
+#if XASH_DREAMCAST
+			svgame.msg_name = svc_strings[msg_num];
+#else
 			svgame.msg_name = svc_goldsrc_strings[msg_num] ? svc_goldsrc_strings[msg_num] : svc_strings[msg_num];
+#endif
 			svgame.msg_rewrite_index = msg_num;
 			svgame.msg_rewrite_pos = MSG_TellBit( &sv.multicast );
 		}
@@ -2986,7 +2990,7 @@ static void *GAME_EXPORT pfnPvEntPrivateData( edict_t *pEdict )
 	return NULL;
 }
 
-
+#if !XASH_DREAMCAST
 static struct str64_s
 {
 	size_t maxstringarray;
@@ -3003,7 +3007,7 @@ static struct str64_s
 	size_t numoverflows;
 	size_t totalalloc;
 } str64;
-
+#endif
 /*
 ==================
 SV_EmptyStringPool

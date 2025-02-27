@@ -21,9 +21,17 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "pm_local.h"
 #include "pmtrace.h"
+#if XASH_DREAMCAST
+#include "img_pvr.h"
+#endif	
 
 #define EVENT_CLIENT	5000	// less than this value it's a server-side studio events
 #define MAX_LOCALLIGHTS	4
+
+#if XASH_DREAMCAST
+#undef MAXSTUDIOVERTS
+#define MAXSTUDIOVERTS 1024
+#endif
 
 typedef struct
 {
@@ -33,9 +41,9 @@ typedef struct
 } player_model_t;
 
 // never gonna change, just shut up const warning
-cvar_t r_shadows = { (char *)"r_shadows", (char *)"0", 0 };
+CVAR_DEFINE_AUTO( r_shadows, "0", 0, "draw ugly shadows" );
 
-static vec3_t hullcolor[8] =
+static const vec3_t hullcolor[8] =
 {
 { 1.0f, 1.0f, 1.0f },
 { 1.0f, 0.5f, 0.5f },
@@ -111,6 +119,7 @@ typedef struct
 	// playermodels
 	player_model_t  player_models[MAX_CLIENTS];
 
+#if !XASH_DREAMCAST
 	// drawelements renderer
 	vec3_t			arrayverts[MAXSTUDIOVERTS];
 	vec2_t			arraycoord[MAXSTUDIOVERTS];
@@ -118,6 +127,7 @@ typedef struct
 	GLubyte			arraycolor[MAXSTUDIOVERTS][4];
 	uint			numverts;
 	uint			numelems;
+#endif
 } studio_draw_state_t;
 
 // studio-related cvars
@@ -147,15 +157,12 @@ R_StudioInit
 void R_StudioInit( void )
 {
 
-#if XASH_PSVITA
+#if XASH_PSVITA || XASH_DREAMCAST
 	// don't do the same array-building work twice since that's what our FFP shim does anyway
 	gEngfuncs.Cvar_FullSet( "r_studio_drawelements", "0", FCVAR_READ_ONLY );
 #endif
 
 	Matrix3x4_LoadIdentity( g_studio.rotationmatrix );
-
-	// g-cont. cvar disabled by Valve
-//	gEngfuncs.Cvar_RegisterVariable( &r_shadows );
 
 	g_studio.interpolate = true;
 	g_studio.framecount = 0;
@@ -1434,14 +1441,14 @@ static void R_StudioDynamicLight( cl_entity_t *ent, alight_t *plight )
 			VectorCopy( g_studio.lightvec, lightDir );
 		}
 	}
-
+#if !XASH_DREAMCAST
 	if( ent->curstate.renderfx == kRenderFxLightMultiplier && ent->curstate.iuser4 != 10 )
 	{
 		light.r *= ent->curstate.iuser4 / 10.0f;
 		light.g *= ent->curstate.iuser4 / 10.0f;
 		light.b *= ent->curstate.iuser4 / 10.0f;
 	}
-
+#endif
 	VectorSet( finalLight, light.r, light.g, light.b );
 	ent->cvFloorColor = light;
 
@@ -1453,7 +1460,7 @@ static void R_StudioDynamicLight( cl_entity_t *ent, alight_t *plight )
 
 	for( lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
 	{
-		dl = gEngfuncs.GetDynamicLight( lnum );
+		dl = &tr.dlights[lnum];
 
 		if( dl->die < g_studio.time || !r_dynamic->value )
 			continue;
@@ -1520,7 +1527,6 @@ static void R_StudioEntityLight( alight_t *lightinfo )
 	float		lstrength[MAX_LOCALLIGHTS];
 	cl_entity_t	*ent = RI.currententity;
 	vec3_t		mid, origin, pos;
-	dlight_t		*el;
 
 	g_studio.numlocallights = 0;
 
@@ -1536,7 +1542,7 @@ static void R_StudioEntityLight( alight_t *lightinfo )
 
 	for( lnum = 0; lnum < MAX_ELIGHTS; lnum++ )
 	{
-		el = gEngfuncs.GetEntityLight( lnum );
+		dlight_t *el = &tr.elights[lnum];
 
 		if( el->die < g_studio.time || el->radius <= 0.0f )
 			continue;
@@ -1575,9 +1581,9 @@ static void R_StudioEntityLight( alight_t *lightinfo )
 
 			if( k != -1 )
 			{
-				g_studio.locallightcolor[k][0] = gEngfuncs.LinearGammaTable( el->color.r << 2 );
-				g_studio.locallightcolor[k][1] = gEngfuncs.LinearGammaTable( el->color.g << 2 );
-				g_studio.locallightcolor[k][2] = gEngfuncs.LinearGammaTable( el->color.b << 2 );
+				g_studio.locallightcolor[k][0] = LinearGammaTable( el->color.r << 2 );
+				g_studio.locallightcolor[k][1] = LinearGammaTable( el->color.g << 2 );
+				g_studio.locallightcolor[k][2] = LinearGammaTable( el->color.b << 2 );
 				g_studio.locallightR2[k] = r2;
 				g_studio.locallight[k] = el;
 				lstrength[k] = minstrength;
@@ -1673,7 +1679,7 @@ static void R_StudioLighting( float *lv, int bone, int flags, vec3_t normal )
 
 	illum = Q_min( illum, 255.0f );
 
-	*lv = gEngfuncs.LightToTexGammaEx( illum * 4 ) / 1023.0f;
+	*lv = LightToTexGamma( illum * 4 ) / 1023.0f;
 }
 
 /*
@@ -1728,12 +1734,12 @@ static void R_LightLambert( vec4_t light[MAX_LOCALLIGHTS], const vec3_t normal, 
 	{
 		for( i = 0; i < 3; i++ )
 		{
-			float c = finalLight[i] + gEngfuncs.LinearGammaTable( color[i] * 1023.0f );
+			float c = finalLight[i] + LinearGammaTable( color[i] * 1023.0f );
 
 			if( c > 1023.0f )
 				out[i] = 255;
 			else
-				out[i] = gEngfuncs.ScreenGammaTable( c ) >> 2;
+				out[i] = ScreenGammaTable( c ) >> 2;
 		}
 	}
 	else
@@ -1802,8 +1808,10 @@ static void R_StudioSetupSkin( studiohdr_t *ptexturehdr, int index )
 	if( ptexturehdr == NULL )
 		return;
 
+#if !XASH_DREAMCAST
 	// NOTE: user may ignore to call StudioRemapColors and remap_info will be unavailable
 	if( m_fDoRemap ) ptexture = gEngfuncs.CL_GetRemapInfoForEntity( RI.currententity )->ptexture;
+#endif
 	if( !ptexture ) ptexture = (mstudiotexture_t *)((byte *)ptexturehdr + ptexturehdr->textureindex); // fallback
 
 	if( r_lightmap->value && !r_fullbright->value )
@@ -1829,8 +1837,11 @@ mstudiotexture_t *R_StudioGetTexture( cl_entity_t *e )
 	thdr = m_pStudioHeader;
 	if( !thdr ) return NULL;
 
+#if !XASH_DREAMCAST
 	if( m_fDoRemap ) ptexture = gEngfuncs.CL_GetRemapInfoForEntity( e )->ptexture;
-	else ptexture = (mstudiotexture_t *)((byte *)thdr + thdr->textureindex);
+	else
+#endif
+	ptexture = (mstudiotexture_t *)((byte *)thdr + thdr->textureindex);
 
 	return ptexture;
 }
@@ -1869,7 +1880,11 @@ static void R_StudioRenderShadow( int iSprite, float *p1, float *p2, float *p3, 
 
 	if( TriSpriteTexture( CL_ModelHandle( iSprite ), 0 ))
 	{
+#if XASH_DREAMCAST
+		R_TriRenderMode( kRenderTransAlpha );
+#else
 		TriRenderMode( kRenderTransAlpha );
+#endif
 		TriColor4f( 0.0f, 0.0f, 0.0f, 1.0f );
 
 		pglBegin( GL_QUADS );
@@ -1882,8 +1897,11 @@ static void R_StudioRenderShadow( int iSprite, float *p1, float *p2, float *p3, 
 			pglTexCoord2f( 1.0f, 0.0f );
 			pglVertex3fv( p4 );
 		pglEnd();
-
+#if XASH_DREAMCAST
+		R_TriRenderMode( kRenderNormal );
+#else
 		TriRenderMode( kRenderNormal );
+#endif
 	}
 }
 
@@ -1914,6 +1932,54 @@ generic path
 */
 static void R_StudioDrawNormalMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t )
 {
+#if XASH_DREAMCAST
+    int i;
+    static fast_vert_aligned_t vertices[MAXSTUDIOVERTS];
+    
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    
+    while ((i = *(ptricmds++)))
+    {
+        int vertCount = abs(i);
+        if (vertCount > MAXSTUDIOVERTS) continue;
+        
+        GLenum primType = (i < 0) ? GL_TRIANGLE_FAN : GL_TRIANGLE_STRIP;
+        short *tempptricmds = ptricmds;  // Store start of vertex data
+        
+        // First pass: fill vertices sequentially
+        for (int j = 0; j < vertCount; j++, ptricmds += 4)
+        {
+            byte color[4];
+            R_StudioSetColorArray(ptricmds, pstudionorms, color);
+            
+            vertices[j] = (fast_vert_aligned_t){
+                .flags = (j == vertCount-1) ? VERTEX_EOL : VERTEX,
+                .vert = {
+                    g_studio.verts[ptricmds[0]][0],
+                    g_studio.verts[ptricmds[0]][1],
+                    g_studio.verts[ptricmds[0]][2]
+                },
+                .texture = {
+                    ptricmds[2] * s,
+                    ptricmds[3] * t
+                },
+                .color = {color[2], color[1], color[0], color[3]},
+                .pad0 = {0}
+            };
+        }
+
+        glVertexPointer(3, GL_FLOAT, sizeof(fast_vert_aligned_t), &vertices[0].vert);
+        glTexCoordPointer(2, GL_FLOAT, sizeof(fast_vert_aligned_t), &vertices[0].texture);
+        glColorPointer(GL_BGRA, GL_UNSIGNED_BYTE, sizeof(fast_vert_aligned_t), &vertices[0].color);
+        glDrawArrays(primType, 0, vertCount);
+    }
+
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_COLOR_ARRAY);
+#else
 	int	i;
 
 	while(( i = *( ptricmds++ )))
@@ -1935,6 +2001,7 @@ static void R_StudioDrawNormalMesh( short *ptricmds, vec3_t *pstudionorms, float
 
 		pglEnd();
 	}
+#endif
 }
 
 /*
@@ -1946,6 +2013,52 @@ generic path
 */
 static void R_StudioDrawFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 {
+#if XASH_DREAMCAST
+    int  i;
+    static fast_vert_aligned_t vertices[MAXSTUDIOVERTS];
+    
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    
+	 while ((i = *(ptricmds++)))
+    {
+        int vertCount = abs(i);
+        if (vertCount > MAXSTUDIOVERTS) continue;
+        
+        GLenum primType = (i < 0) ? GL_TRIANGLE_FAN : GL_TRIANGLE_STRIP;
+        
+        for (int j = 0; j < vertCount; j++, ptricmds += 4)
+        {
+            byte color[4];
+            R_StudioSetColorArray(ptricmds, pstudionorms, color);
+            
+            vertices[j] = (fast_vert_aligned_t){
+                .flags = (j == vertCount-1) ? VERTEX_EOL : VERTEX,
+                .vert = {
+                    g_studio.verts[ptricmds[0]][0],
+                    g_studio.verts[ptricmds[0]][1],
+                    g_studio.verts[ptricmds[0]][2]
+                },
+                .texture = {
+                    HalfToFloat(ptricmds[2]),
+                    HalfToFloat(ptricmds[3])
+                },
+                .color = {color[2], color[1], color[0], color[3]},
+                .pad0 = {0}
+            };
+        }
+
+        glVertexPointer(3, GL_FLOAT, sizeof(fast_vert_aligned_t), &vertices[0].vert);
+        glTexCoordPointer(2, GL_FLOAT, sizeof(fast_vert_aligned_t), &vertices[0].texture);
+        glColorPointer(GL_BGRA, GL_UNSIGNED_BYTE, sizeof(fast_vert_aligned_t), &vertices[0].color);
+        glDrawArrays(primType, 0, vertCount);
+    }
+
+		glDisableClientState(GL_VERTEX_ARRAY);
+		glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+		glDisableClientState(GL_COLOR_ARRAY);
+#else
 	int	i;
 
 	while(( i = *( ptricmds++ )))
@@ -1966,6 +2079,7 @@ static void R_StudioDrawFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 
 		pglEnd();
 	}
+#endif
 }
 
 /*
@@ -1977,6 +2091,76 @@ generic path
 */
 static void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t, float scale )
 {
+#if XASH_DREAMCAST
+ 	int i;
+    static fast_vert_aligned_t vertices[MAXSTUDIOVERTS];
+    qboolean glowShell = (scale > 0.0f) ? true : false;
+    vec3_t vert;
+    
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    
+        while ((i = *(ptricmds++)))
+    {
+        int vertCount = abs(i);
+        if (vertCount > MAXSTUDIOVERTS) continue;
+        
+        GLenum primType = (i < 0) ? GL_TRIANGLE_FAN : GL_TRIANGLE_STRIP;
+        
+        for (int j = 0; j < vertCount; j++, ptricmds += 4)
+        {
+            if (glowShell)
+            {
+                color24 *clr = &RI.currententity->curstate.rendercolor;
+                int idx = g_studio.normaltable[ptricmds[0]];
+                VectorMA(g_studio.verts[ptricmds[0]], scale, g_studio.norms[ptricmds[0]], vert);
+
+                vertices[j] = (fast_vert_aligned_t){
+                    .flags = (j == vertCount-1) ? VERTEX_EOL : VERTEX,
+                    .vert = {vert[0], vert[1], vert[2]},
+                    .texture = {
+                        g_studio.chrome[idx][0] * s,
+                        g_studio.chrome[idx][1] * t
+                    },
+                    .color = {clr->b, clr->g, clr->r, 255},
+                    .pad0 = {0}
+                };
+            }
+            else
+            {
+                int idx = ptricmds[1];
+                byte color[4];
+                R_StudioSetColorArray(ptricmds, pstudionorms, color);
+
+                vertices[j] = (fast_vert_aligned_t){
+                    .flags = (j == vertCount-1) ? VERTEX_EOL : VERTEX,
+                    .vert = {
+                        g_studio.verts[ptricmds[0]][0],
+                        g_studio.verts[ptricmds[0]][1],
+                        g_studio.verts[ptricmds[0]][2]
+                    },
+                    .texture = {
+                        g_studio.chrome[idx][0] * s,
+                        g_studio.chrome[idx][1] * t
+                    },
+                    .color = {color[2], color[1], color[0], color[3]},
+                    .pad0 = {0}
+                };
+            }
+        }
+
+        glVertexPointer(3, GL_FLOAT, sizeof(fast_vert_aligned_t), &vertices[0].vert);
+        glTexCoordPointer(2, GL_FLOAT, sizeof(fast_vert_aligned_t), &vertices[0].texture);
+        glColorPointer(GL_BGRA, GL_UNSIGNED_BYTE, sizeof(fast_vert_aligned_t), &vertices[0].color);
+        glDrawArrays(primType, 0, vertCount);
+    }
+
+
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glDisableClientState(GL_COLOR_ARRAY);
+#else
 	float	*lv, *av;
 	int	i, idx;
 	qboolean	glowShell = (scale > 0.0f) ? true : false;
@@ -2017,11 +2201,13 @@ static void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, float
 
 		pglEnd();
 	}
+#endif
 }
 
 
 static int R_StudioBuildIndices( qboolean tri_strip, int vertexState )
 {
+#if !XASH_DREAMCAST
 	// build in indices
 	if( vertexState++ < 3 )
 	{
@@ -2054,6 +2240,7 @@ static int R_StudioBuildIndices( qboolean tri_strip, int vertexState )
 	}
 
 	return vertexState;
+#endif
 }
 
 /*
@@ -2065,6 +2252,7 @@ generic path
 */
 static void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t )
 {
+#if !XASH_DREAMCAST
 	float	*lv;
 	int	i;
 	float alpha = tr.blend;
@@ -2097,6 +2285,7 @@ static void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms,
 			g_studio.numverts++;
 		}
 	}
+#endif
 }
 
 /*
@@ -2108,6 +2297,7 @@ generic path
 */
 static void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 {
+#if !XASH_DREAMCAST
 	float	*lv;
 	int	i;
 	float alpha = tr.blend;
@@ -2140,6 +2330,7 @@ static void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 			g_studio.numverts++;
 		}
 	}
+#endif
 }
 
 /*
@@ -2151,6 +2342,7 @@ generic path
 */
 static void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t, float scale )
 {
+#if !XASH_DREAMCAST
 	float	*lv, *av;
 	int	i, idx;
 	qboolean	glowShell = (scale > 0.0f) ? true : false;
@@ -2204,10 +2396,12 @@ static void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms,
 			g_studio.numverts++;
 		}
 	}
+#endif
 }
 
 static void R_StudioDrawArrays( uint startverts, uint startelems )
 {
+#if !XASH_DREAMCAST
 	pglEnableClientState( GL_VERTEX_ARRAY );
 	pglVertexPointer( 3, GL_FLOAT, 12, g_studio.arrayverts );
 
@@ -2220,17 +2414,21 @@ static void R_StudioDrawArrays( uint startverts, uint startelems )
 		pglColorPointer( 4, GL_UNSIGNED_BYTE, 0, g_studio.arraycolor );
 	}
 
+#if !XASH_DREAMCAST
+
 #if !defined XASH_NANOGL || defined XASH_WES && XASH_EMSCRIPTEN // WebGL need to know array sizes
 	if( pglDrawRangeElements )
 		pglDrawRangeElements( GL_TRIANGLES, startverts, g_studio.numverts,
 			g_studio.numelems - startelems, GL_UNSIGNED_SHORT, &g_studio.arrayelems[startelems] );
 	else
 #endif
+#endif
 		pglDrawElements( GL_TRIANGLES, g_studio.numelems - startelems, GL_UNSIGNED_SHORT, &g_studio.arrayelems[startelems] );
 	pglDisableClientState( GL_VERTEX_ARRAY );
 	pglDisableClientState( GL_TEXTURE_COORD_ARRAY );
 	if( !( g_nForceFaceFlags & STUDIO_NF_CHROME ) )
 		pglDisableClientState( GL_COLOR_ARRAY );
+#endif
 }
 
 /*
@@ -2255,9 +2453,9 @@ static void R_StudioDrawPoints( void )
 
 	if( !m_pStudioHeader ) return;
 
-
+#if !XASH_DREAMCAST
 	g_studio.numverts = g_studio.numelems = 0;
-
+#endif
 	m_skinnum = RI.currententity->curstate.skin;
 	ptexture = (mstudiotexture_t *)((byte *)m_pStudioHeader + m_pStudioHeader->textureindex);
 	pvertbone = ((byte *)m_pStudioHeader + m_pSubModel->vertinfoindex);
@@ -2367,8 +2565,10 @@ static void R_StudioDrawPoints( void )
 	for( j = 0; j < m_pSubModel->nummesh; j++ )
 	{
 		float	oldblend = tr.blend;
+	#if !XASH_DREAMCAST
 		uint startArrayVerts = g_studio.numverts;
 		uint startArrayElems = g_studio.numelems;
+	#endif
 		short	*ptricmds;
 		float	s, t;
 
@@ -2402,6 +2602,7 @@ static void R_StudioDrawPoints( void )
 
 		R_StudioSetupSkin( m_pStudioHeader, pskinref[pmesh->skinref] );
 
+#if !XASH_DREAMCAST
 		if( r_studio_drawelements.value )
 		{
 			if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
@@ -2413,6 +2614,7 @@ static void R_StudioDrawPoints( void )
 			R_StudioDrawArrays( startArrayVerts, startArrayElems );
 		}
 		else
+#endif
 		{
 			if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 				R_StudioDrawChromeMesh( ptricmds, pstudionorms, s, t, shellscale );
@@ -2512,7 +2714,11 @@ static void R_StudioDrawAbsBBox( void )
 
 	GL_Bind( XASH_TEXTURE0, tr.whiteTexture );
 	TriColor4f( 0.5f, 0.5f, 1.0f, 0.5f );
+#if XASH_DREAMCAST
+	R_TriRenderMode( kRenderTransAdd );
+#else
 	TriRenderMode( kRenderTransAdd );
+#endif
 
 	TriBegin( TRI_QUADS );
 	for( i = 0; i < 6; i++ )
@@ -2528,7 +2734,12 @@ static void R_StudioDrawAbsBBox( void )
 		TriVertex3fv( p[boxpnt[i][3]] );
 	}
 	TriEnd();
+
+#if XASH_DREAMCAST
+	R_TriRenderMode( kRenderNormal );
+#else
 	TriRenderMode( kRenderNormal );
+#endif
 }
 
 /*
@@ -2640,8 +2851,10 @@ R_StudioSetRemapColors
 */
 static void R_StudioSetRemapColors( int newTop, int newBottom )
 {
+#if !XASH_DREAMCAST
 	if( gEngfuncs.CL_EntitySetRemapColors( RI.currententity, RI.currentmodel, newTop, newBottom ))
 		m_fDoRemap = true;
+#endif
 }
 
 void R_StudioResetPlayerModels( void )
@@ -2657,8 +2870,11 @@ R_StudioSetupPlayerModel
 */
 static model_t *R_StudioSetupPlayerModel( int index )
 {
-	player_info_t	*info = gEngfuncs.pfnPlayerInfo( index );
-	player_model_t	*state;
+	player_info_t  *info = gEngfuncs.pfnPlayerInfo( index );
+	player_model_t *state;
+
+	if( index < 0 || index >= gp_cl->maxclients )
+		return NULL;
 
 	state = &g_studio.player_models[index];
 
@@ -2674,7 +2890,8 @@ static model_t *R_StudioSetupPlayerModel( int index )
 
 			if( gEngfuncs.fsapi->FileExists( state->modelname, false ))
 				state->model = gEngfuncs.Mod_ForName( state->modelname, false, true );
-			else state->model = NULL;
+			else
+				state->model = NULL;
 
 			if( !state->model )
 				state->model = RI.currententity->model;
@@ -2699,18 +2916,20 @@ check for texture flags
 */
 int R_GetEntityRenderMode( cl_entity_t *ent )
 {
-	int		i, opaque, trans;
-	mstudiotexture_t	*ptexture;
-	cl_entity_t	*oldent;
-	model_t		*model;
-	studiohdr_t	*phdr;
+	int              i, opaque, trans;
+	mstudiotexture_t *ptexture;
+	cl_entity_t      *oldent;
+	model_t          *model = NULL;
+	studiohdr_t      *phdr;
 
 	oldent = RI.currententity;
 	RI.currententity = ent;
 
 	if( ent->player ) // check it for real playermodel
 		model = R_StudioSetupPlayerModel( ent->curstate.number - 1 );
-	else model = ent->model;
+
+	if( !model )
+		model = ent->model;
 
 	RI.currententity = oldent;
 
@@ -3085,14 +3304,14 @@ static void R_StudioRenderFinal( void )
 			GL_StudioDrawShadow();
 		}
 	}
-
+#if !XASH_DREAMCAST
 	if( r_drawentities->value == 4 )
 	{
 		TriRenderMode( kRenderTransAdd );
 		R_StudioDrawHulls( );
 		TriRenderMode( kRenderNormal );
 	}
-
+#endif
 	if( r_drawentities->value == 5 )
 	{
 		R_StudioDrawAbsBBox( );
@@ -3704,9 +3923,11 @@ void R_DrawViewModel( void )
 
 	switch( RI.currententity->model->type )
 	{
+#if !XASH_DREAMCAST
 	case mod_alias:
 		R_DrawAliasModel( RI.currententity );
 		break;
+#endif
 	case mod_studio:
 		R_StudioSetupTimings();
 		R_StudioDrawModelInternal( RI.currententity, STUDIO_RENDER );
@@ -3792,6 +4013,7 @@ static void R_StudioLoadTexture( model_t *mod, studiohdr_t *phdr, mstudiotexture
 	if( FBitSet( gp_host->features, ENGINE_IMPROVED_LINETRACE ) && FBitSet( ptexture->flags, STUDIO_NF_MASKED ))
 		flags |= TF_KEEP_SOURCE; // Paranoia2 texture alpha-tracing
 
+#if !XASH_DREAMCAST
 	// NOTE: colormaps must have the palette for properly work. Ignore them
 	if( Mod_AllowMaterials( ) && !FBitSet( ptexture->flags, STUDIO_NF_COLORMAP ))
 	{
@@ -3803,7 +4025,52 @@ static void R_StudioLoadTexture( model_t *mod, studiohdr_t *phdr, mstudiotexture
 				ptexture->index = gl_texturenum;
 		}
 	}
+#endif // !XASH_DREAMCAST
 
+#if XASH_DREAMCAST
+	if( !load_external )
+	{
+		// NOTE: replace index with pointer to start of imagebuffer, ImageLib expected it
+		gEngfuncs_gl.Image_SetMDLPointer((byte *)phdr + ptexture->index);
+		if (*(uint32_t*)((byte *)phdr + ptexture->index) == GBIXHEADER)
+		{
+			// Skip GBIX header to get format
+			gbix_t *gbix = (gbix_t*)((byte *)phdr + ptexture->index);
+			byte *texture_data = (byte*)gbix + sizeof(gbix_t) + gbix->nextTagOffset;
+			uint32_t format = *(uint32_t*)texture_data;
+			uint8_t texture_format = (format >> 8) & 0xFF;
+
+			// PVR texture case
+			if (texture_format == 0x03) // PVR_VQ = 0x03
+			{
+				size = sizeof(mstudiotexture_t) + 2048 + ((ptexture->width * ptexture->height) / 4);
+			}
+			else
+			{
+				size = sizeof(mstudiotexture_t) + (ptexture->width * ptexture->height * 2);
+			}
+		}
+		else if (*(uint32_t*)((byte *)phdr + ptexture->index) == PVRTSIGN)
+		{
+			pvrt_t *pvrt = (pvrt_t*)((byte *)phdr + ptexture->index);
+			
+			if ((pvrt->imageFormat >> 8) == PVR_VQ)
+				size = sizeof(mstudiotexture_t) + 2048 + ((ptexture->width * ptexture->height) / 4);
+
+			else if ((pvrt->imageFormat >> 8) == PVR_RECT)
+				// Regular format:width * height * 2 bytes per pixel
+				size = sizeof(mstudiotexture_t) + (ptexture->width * ptexture->height * 2);
+		}
+		else
+		{
+			size = sizeof( mstudiotexture_t ) + ptexture->width * ptexture->height + 768;
+		}
+
+		// build the texname
+		Q_snprintf( texname, sizeof( texname ), "#%s/%s.mdl", mdlname, name );
+		ptexture->index = GL_LoadTexture( texname, (byte *)ptexture, size, flags );
+	}
+#else
 	if( !load_external )
 	{
 		// NOTE: replace index with pointer to start of imagebuffer, ImageLib expected it
@@ -3814,6 +4081,7 @@ static void R_StudioLoadTexture( model_t *mod, studiohdr_t *phdr, mstudiotexture
 		Q_snprintf( texname, sizeof( texname ), "#%s/%s.mdl", mdlname, name );
 		ptexture->index = GL_LoadTexture( texname, (byte *)ptexture, size, flags );
 	}
+#endif // XASH_DREAMCAT
 
 	if( !ptexture->index )
 	{

@@ -546,7 +546,9 @@ void V_PostRender( void )
 		UI_UpdateMenu( host.realtime );
 		Con_DrawVersion();
 		Con_DrawDebug(); // must be last
+#if !XASH_DREAMCAST
 		Touch_Draw();
+#endif
 		OSK_Draw();
 
 		S_ExtraUpdate();

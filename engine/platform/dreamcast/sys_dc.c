@@ -161,7 +161,7 @@ void getRamStatus(void)
 }
 
 //-----------------------------------------------------------------------------
-extern void bfont_draw_str(uint16_t *buffer, int bufwidth, int opaque, char *str);
+extern void bfont_draw_str(void *b, uint32_t width, bool opaque, const char *str);
 static void drawtext(int x, int y, char *string) {
   printf("%s\n", string);
   fflush(stdout);

@@ -949,7 +949,9 @@ typedef float GLmatrix[16];
 #define GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_TWID_KOS         0xEEF0
 #define GL_COMPRESSED_ARGB_4444_VQ_MIPMAP_TWID_KOS         0xEEF1
 
-#define GL_NEARZ_CLIPPING_KOS                       0xEEFA
+#define GL_NEARZ_CLIPPING_KOS                       		0xEEFA
+#define GL_COLOR_INDEX8_EXT                					0x80E5
+
 
 #endif
 

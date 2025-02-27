@@ -57,8 +57,9 @@ typedef enum
 	event_up,
 	event_motion
 } touchEventType;
-
+#if !XASH_DREAMCAST
 extern convar_t touch_enable;
+#endif
 
 void Touch_Draw( void );
 void Touch_SetClientOnly( byte state );

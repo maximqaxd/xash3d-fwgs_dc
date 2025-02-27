@@ -56,18 +56,19 @@ const char *CL_MsgInfo( int cmd )
 		{
 		case PROTO_CURRENT:
 			svc_string = svc_strings[cmd];
+#if !XASH_DREAMCAST
 			break;
 		case PROTO_LEGACY:
 			svc_string = svc_legacy_strings[cmd];
 			break;
-#if !XASH_DREAMCAST
+
 		case PROTO_QUAKE:
 			svc_string = svc_quake_strings[cmd];
 			break;
-#endif
 		case PROTO_GOLDSRC:
 			svc_string = svc_goldsrc_strings[cmd];
 			break;
+#endif
 		}
 
 		// fall back to current protocol strings

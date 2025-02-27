@@ -3699,13 +3699,17 @@ void CL_Shutdown( void )
 	{
 		Host_WriteOpenGLConfig ();
 		Host_WriteVideoConfig ();
+#if !XASH_DREAMCAST
 		Touch_WriteConfig();
+#endif
 	}
 	// IN_TouchShutdown ();
 	Joy_Shutdown ();
 	CL_CloseDemoHeader ();
 	IN_Shutdown ();
+#if !XASH_DREAMCAST
 	Mobile_Shutdown ();
+#endif
 	SCR_Shutdown ();
 	CL_UnloadProgs ();
 	cls.initialized = false;
