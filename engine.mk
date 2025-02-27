@@ -158,8 +158,15 @@ INCLUDE = -I. \
 -I3rdparty/dreamcast/FatFs/include \
 -I$(KOS_PORTS)/include/bzlib 
 
+GIT_VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+GIT_COMMIT_DATE := $(shell git log -1 --format=%cd --date=short 2>/dev/null || echo "unknown")
 
-DEFINES = -DENGINE_DLL -D_KOS_ -D_SH4_ -DXASH_BUILD_COMMIT=\"64726f13-dirty\" -DXASH_GAMEDIR=\"valve\" -DXASH_BUILD_BRANCH=\"master\" -DFRAME_POINTERS=1 -DXASH_STATIC_LIBS=1 -DXASH_LOW_MEMORY=2 -DXASH_ENABLE_MAIN=1 -DXASH_REF_SOFT_ENABLED=0  -DXASH_REF_GL_ENABLED=1 -DHAVE_TGMATH_H=0 -DHAVE_STRNICMP=1 -DHAVE_STRICMP=1 -D_snprintf=snprintf 
+DEFINES = -DENGINE_DLL -D_KOS_ -D_SH4_ -DXASH_GAMEDIR=\"valve\" -DFRAME_POINTERS=1 -DXASH_STATIC_LIBS=1 -DXASH_LOW_MEMORY=2 -DXASH_ENABLE_MAIN=1 -DXASH_REF_SOFT_ENABLED=0  -DXASH_REF_GL_ENABLED=1 -DHAVE_TGMATH_H=0 -DHAVE_STRNICMP=1 -DHAVE_STRICMP=1 -D_snprintf=snprintf 
+DEFINES += -DXASH_BUILD_COMMIT=\"$(GIT_VERSION)\" \
+          -DXASH_BUILD_BRANCH=\"$(GIT_BRANCH)\" \
+          -DXASH_BUILD_COMMIT_DATE=\"$(GIT_COMMIT_DATE)\"
+		  
 FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -freorder-blocks-algorithm=simple -flto=auto
 CFLAGS +=  $(INCLUDE) $(DEFINES) $(FLAGS)  
 # -O3 math and phys
