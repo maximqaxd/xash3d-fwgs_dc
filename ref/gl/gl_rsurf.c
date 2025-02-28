@@ -1861,31 +1861,6 @@ void R_DrawBrushModel( cl_entity_t *e )
 
 	psurf = &clmodel->surfaces[clmodel->firstmodelsurface];
 
-#if XASH_DREAMCAST
-	// sorting is not required, +Z_Realloc in Mod_LoadSubmodels (mod_bmodel.c)
-	for( i = 0; i < clmodel->nummodelsurfaces; i++, psurf++ )
-	{
-		if( FBitSet( psurf->flags, SURF_DRAWTURB ) && !ENGINE_GET_PARM( PARM_QUAKE_COMPATIBLE ))
-		{
-			if( psurf->plane->type != PLANE_Z && !FBitSet( e->curstate.effects, EF_WATERSIDES ))
-				continue;
-			if( mins[2] + 1.0f >= psurf->plane->dist )
-				continue;
-		}
-
-		cull_type = R_CullSurface( psurf, &RI.frustum, RI.frustum.clipFlags );
-
-		if( cull_type >= CULL_FRUSTUM )
-			continue;
-
-		if( cull_type == CULL_BACKSIDE )
-		{
-			if( !FBitSet( psurf->flags, SURF_DRAWTURB ) && !( psurf->pdecals && e->curstate.rendermode == kRenderTransTexture ))
-				continue;
-		}
-		R_RenderBrushPoly( psurf, cull_type );
-	}
-#else
 	num_sorted = 0;
 
 	for( i = 0; i < clmodel->nummodelsurfaces; i++, psurf++ )
@@ -1926,7 +1901,6 @@ void R_DrawBrushModel( cl_entity_t *e )
 		if( !allow_vbo || !R_AddSurfToVBO( gpGlobals->draw_surfaces[i].surf, true ) )
 			R_RenderBrushPoly( gpGlobals->draw_surfaces[i].surf, gpGlobals->draw_surfaces[i].cull );
 	R_DrawVBO( R_HasLightmap(), true );
-#endif
 	if( e->curstate.rendermode == kRenderTransColor )
 		pglEnable( GL_TEXTURE_2D );
 
