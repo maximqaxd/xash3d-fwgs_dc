@@ -1441,17 +1441,18 @@ static void R_StudioDynamicLight( cl_entity_t *ent, alight_t *plight )
 			VectorCopy( g_studio.lightvec, lightDir );
 		}
 	}
-#if !XASH_DREAMCAST
+
 	if( ent->curstate.renderfx == kRenderFxLightMultiplier && ent->curstate.iuser4 != 10 )
 	{
 		light.r *= ent->curstate.iuser4 / 10.0f;
 		light.g *= ent->curstate.iuser4 / 10.0f;
 		light.b *= ent->curstate.iuser4 / 10.0f;
 	}
-#endif
+	
 	VectorSet( finalLight, light.r, light.g, light.b );
+#if !XASH_DREAMCAST
 	ent->cvFloorColor = light;
-
+#endif
 	total = Q_max( Q_max( light.r, light.g ), light.b );
 	if( total == 0.0f ) total = 1.0f;
 

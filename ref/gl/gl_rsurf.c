@@ -1290,6 +1290,7 @@ R_RenderDetails
 */
 static void R_RenderDetails( int passes )
 {
+#if !XASH_DREAMCAST
 	gl_texture_t	*glt;
 	mextrasurf_t	*es, *p;
 	msurface_t	*fa;
@@ -1340,6 +1341,7 @@ static void R_RenderDetails( int passes )
 
 	// restore fog here
 	GL_ResetFogColor();
+#endif
 }
 
 static void R_RenderFullbrightForSurface( msurface_t *fa, texture_t *t )
@@ -2441,6 +2443,7 @@ enable detail tmu if availiable
 */
 static void R_EnableDetail( void )
 {
+#if !XASH_DREAMCAST
 	if( mtst.details_enabled && mtst.tmu_dt != -1 )
 	{
 		GL_SelectTexture( mtst.tmu_dt );
@@ -2462,6 +2465,7 @@ static void R_EnableDetail( void )
 		pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof(vbovertex_t, dt_tc ) );
 #endif
 	}
+#endif
 }
 
 /*
@@ -2690,6 +2694,7 @@ draw details when not enough tmus
 */
 static void R_AdditionalPasses( vboarray_t *vbo, int indexlen, void *indexarray, texture_t *tex, qboolean resetvbo, size_t offset )
 {
+#if !XASH_DREAMCAST
 	if( !indexlen )
 		return;
 
@@ -2746,6 +2751,7 @@ static void R_AdditionalPasses( vboarray_t *vbo, int indexlen, void *indexarray,
 		else
 			R_SetupVBOArrayStatic( vbo, true, true );
 	}
+#endif
 }
 
 

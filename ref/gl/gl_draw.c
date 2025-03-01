@@ -88,6 +88,7 @@ R_DrawStretchRaw
 */
 void R_DrawStretchRaw( float x, float y, float w, float h, int cols, int rows, const byte *data, qboolean dirty )
 {
+#if !XASH_DREAMCAST
 	byte		*raw = NULL;
 	gl_texture_t	*tex;
 
@@ -151,6 +152,7 @@ void R_DrawStretchRaw( float x, float y, float w, float h, int cols, int rows, c
 	pglTexCoord2f( 0, 1 );
 	pglVertex2f( x, y + h );
 	pglEnd();
+#endif
 }
 
 /*

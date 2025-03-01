@@ -249,10 +249,12 @@ static int GL_RefGetParm( int parm, int arg )
 
 static void R_GetDetailScaleForTexture( int texture, float *xScale, float *yScale )
 {
+#if !XASH_DREAMCAST
 	gl_texture_t *glt = R_GetTexture( texture );
 
 	if( xScale ) *xScale = glt->xscale;
 	if( yScale ) *yScale = glt->yscale;
+#endif
 }
 
 static void R_GetExtraParmsForTexture( int texture, byte *red, byte *green, byte *blue, byte *density )
