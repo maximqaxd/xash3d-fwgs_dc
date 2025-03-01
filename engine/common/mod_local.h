@@ -37,6 +37,7 @@ GNU General Public License for more details.
 
 #define WORLD_INDEX			(1)	// world index is always 1
 
+#if !XASH_DREAMCAST
 typedef struct consistency_s
 {
 	const char	*filename;
@@ -47,7 +48,7 @@ typedef struct consistency_s
 	vec3_t		mins;
 	vec3_t		maxs;
 } consistency_t;
-
+#endif
 #define FCRC_SHOULD_CHECKSUM	BIT( 0 )
 #define FCRC_CHECKSUM_DONE	BIT( 1 )
 

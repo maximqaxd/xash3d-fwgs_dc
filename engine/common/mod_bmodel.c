@@ -16,7 +16,9 @@ GNU General Public License for more details.
 #include "mod_local.h"
 #include "sprite.h"
 #include "xash3d_mathlib.h"
+#if !XASH_DREAMCAST
 #include "alias.h"
+#endif
 #include "studio.h"
 #include "wadfile.h"
 #include "world.h"

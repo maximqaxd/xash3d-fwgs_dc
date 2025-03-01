@@ -16,7 +16,9 @@ GNU General Public License for more details.
 #include "mod_local.h"
 #include "sprite.h"
 #include "xash3d_mathlib.h"
+#if !XASH_DREAMCAST
 #include "alias.h"
+#endif
 #include "studio.h"
 #include "wadfile.h"
 #include "world.h"
@@ -306,12 +308,12 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 		Mod_LoadSpriteModel( mod, buf, &loaded );
 #endif
 		break;
+#if !XASH_DREAMCAST
 	case IDALIASHEADER:
-	#if !XASH_DREAMCAST
 		Mod_LoadAliasModel( mod, buf, &loaded );
 		return NULL;
-	#endif
 		break;
+#endif
 	case Q1BSP_VERSION:
 	case HLBSP_VERSION:
 	case QBSP2_VERSION:
