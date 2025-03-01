@@ -263,6 +263,7 @@ typedef enum ref_screen_rotation_e
 	REF_ROTATE_CCW = 3,
 } ref_screen_rotation_t;
 
+#if !XASH_DREAMCAST
 typedef struct remap_info_s
 {
 	unsigned short	textures[MAX_SKINS];// alias textures
@@ -272,6 +273,7 @@ typedef struct remap_info_s
 	short		bottomcolor;	// cached value
 	model_t		*model;		// for catch model changes
 } remap_info_t;
+#endif // XASH_DREAMCAST we don't need quake alias models anyway
 
 typedef struct convar_s convar_t;
 struct con_nprint_s;
