@@ -34,7 +34,7 @@ half-life implementation of saverestore system
 #define CLIENT_SAVEGAME_VERSION	0x0067				// Version 0.67
 
 #if XASH_DREAMCAST
-#define SAVE_HEAPSIZE		0x100000				// reserve 1Mb for now
+#define SAVE_HEAPSIZE		0x020000				// reserve 1Mb for now
 #else
 #define SAVE_HEAPSIZE		0x400000				// reserve 4Mb for now
 #endif
@@ -892,6 +892,16 @@ static SAVERESTOREDATA *LoadSaveData( const char *level )
 	SAVERESTOREDATA	*pSaveData;
 	int		totalSize;
 	dc_file_t		*pFile;
+#if XASH_DREAMCAST
+	Q_snprintf( name, sizeof( name ), "/ram/%s.HL1", level );
+	Con_Printf( "Loading game from %s...\n", name );
+
+	if(( pFile = FS_SysOpen( name, "rb")) == NULL )
+	{
+		Con_Printf( S_ERROR "Couldn't open save data file %s.\n", name );
+		return NULL;
+	}
+#else
 	Q_snprintf( name, sizeof( name ), DEFAULT_SAVE_DIRECTORY "%s.HL1", level );
 	Con_Printf( "Loading game from %s...\n", name );
 
@@ -900,6 +910,7 @@ static SAVERESTOREDATA *LoadSaveData( const char *level )
 		Con_Printf( S_ERROR "Couldn't open save data file %s.\n", name );
 		return NULL;
 	}
+#endif
 	// Read the header
 	FS_Read( pFile, &id, sizeof( int ));
 	FS_Read( pFile, &version, sizeof( int ));
@@ -1456,8 +1467,11 @@ static SAVERESTOREDATA *SaveGameState( int changelevel )
 		return NULL;
 
 	pSaveData = SaveInit( SAVE_HEAPSIZE, SAVE_HASHSTRINGS );
-
+#if XASH_DREAMCAST
+	Q_snprintf( name, sizeof( name ), "/ram/%s.HL1", sv.name );
+#else
 	Q_snprintf( name, sizeof( name ), DEFAULT_SAVE_DIRECTORY "%s.HL1", sv.name );
+#endif
 	COM_FixSlashes( name );
 
 	// initialize entity table to count moved entities
@@ -1548,14 +1562,22 @@ static SAVERESTOREDATA *SaveGameState( int changelevel )
 	// Write entity string token table
 	pTokenData = StoreHashTable( pSaveData );
 
+#if XASH_DREAMCAST
 	// output to disk
+	if(( pFile = FS_SysOpen( name, "wb")) == NULL )
+	{
+		// something bad is happens
+		SaveFinish( pSaveData );
+		return NULL;
+	}
+#else
 	if(( pFile = FS_Open( name, "wb", true )) == NULL )
 	{
 		// something bad is happens
 		SaveFinish( pSaveData );
 		return NULL;
 	}
-
+#endif
 	// Write the header -- THIS SHOULD NEVER CHANGE STRUCTURE, USE SAVE_HEADER FOR NEW HEADER INFORMATION
 	// THIS IS ONLY HERE TO IDENTIFY THE FILE AND GET IT'S SIZE.
 	version = SAVEGAME_VERSION;
