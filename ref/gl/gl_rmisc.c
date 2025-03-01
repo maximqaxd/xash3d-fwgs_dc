@@ -20,6 +20,7 @@ GNU General Public License for more details.
 
 static void R_ParseDetailTextures( const char *filename )
 {
+#if !XASH_DREAMCAST
 	byte *afile;
 	char *pfile;
 	string	token, texname;
@@ -101,6 +102,7 @@ static void R_ParseDetailTextures( const char *filename )
 	}
 
 	Mem_Free( afile );
+#endif
 }
 
 void R_NewMap( void )

@@ -111,7 +111,7 @@ extern poolhandle_t r_temppool;
 	#undef MAX_LIGHTMAPS
 	#define MAX_LIGHTMAPS 64
 	#define BLOCK_SIZE_MAX 128
-	#define MAX_TEXTURES 1024
+	#define MAX_TEXTURES 768
 	#define MAX_DECAL_SURFS 32
 	#define MAX_DETAILTEXTURES 16	
 	
@@ -182,11 +182,11 @@ typedef struct gltexture_s
 
 	// debug info
 	size_t		size;		// upload size for debug targets
-
+#if !XASH_DREAMCAST
 	// detail textures stuff
 	float		xscale;
 	float		yscale;
-
+#endif
 	uint		hashValue;
 	struct gltexture_s	*nextHash;
 } gl_texture_t;
