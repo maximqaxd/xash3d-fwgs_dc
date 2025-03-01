@@ -504,6 +504,7 @@ ALIAS MODELS
 Alias models are position independent, so the cache manager can move them.
 ==============================================================================
 */
+#ifndef XASH_DREAMCAST
 #define MAXALIASVERTS	2048
 #define MAXALIASFRAMES	256
 #define MAXALIASTRIS	4096
@@ -561,6 +562,7 @@ typedef struct
 	maliasframedesc_t	frames[1];	// variable sized
 } aliashdr_t;
 
+#endif
 
 
 // remapping info
