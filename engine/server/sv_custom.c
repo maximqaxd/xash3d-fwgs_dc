@@ -60,7 +60,7 @@ static void SV_CreateCustomizationList( sv_client_t *cl )
 		}
 	}
 }
-
+#if !XASH_DREAMCAST
 static qboolean SV_FileInConsistencyList( const char *filename, consistency_t **ppout )
 {
 	int	i;
@@ -82,10 +82,9 @@ static qboolean SV_FileInConsistencyList( const char *filename, consistency_t **
 			return true;
 		}
 	}
-
 	return false;
 }
-
+#endif
 void SV_ParseConsistencyResponse( sv_client_t *cl, sizebuf_t *msg )
 {
 	int		i, c, idx, value;
@@ -195,6 +194,7 @@ void SV_ParseConsistencyResponse( sv_client_t *cl, sizebuf_t *msg )
 
 void SV_TransferConsistencyInfo( void )
 {
+#if !XASH_DREAMCAST
 	vec3_t		mins, maxs;
 	int		i, total = 0;
 	resource_t	*pResource;
@@ -244,6 +244,7 @@ void SV_TransferConsistencyInfo( void )
 	}
 
 	sv.num_consistency = total;
+#endif
 }
 
 static void SV_SendConsistencyList( sv_client_t *cl, sizebuf_t *msg )

@@ -1593,7 +1593,11 @@ void SV_SendServerdata( sizebuf_t *msg, sv_client_t *cl )
 	if(( host_developer.value ) || ( svs.maxclients > 1 ))
 	{
 		MSG_BeginServerCmd( msg, svc_print );
+#if XASH_DREAMCAST
+		Q_snprintf( message, sizeof( message ), "\n^3BUILD %d SERVER (%i CRC)\nServer #%i\n", Q_buildnum(), 0, svs.spawncount );
+#else
 		Q_snprintf( message, sizeof( message ), "\n^3BUILD %d SERVER (%i CRC)\nServer #%i\n", Q_buildnum(), sv.progsCRC, svs.spawncount );
+#endif
 		MSG_WriteString( msg, message );
 	}
 

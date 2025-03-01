@@ -4517,6 +4517,7 @@ pfnForceUnmodified
 */
 static void GAME_EXPORT pfnForceUnmodified( FORCE_TYPE type, float *mins, float *maxs, const char *filename )
 {
+#if !XASH_DREAMCAST
 	consistency_t	*pc;
 	int		i;
 
@@ -4554,6 +4555,7 @@ static void GAME_EXPORT pfnForceUnmodified( FORCE_TYPE type, float *mins, float 
 		}
 		Con_Printf( S_ERROR "Failed to enforce consistency for %s: was not precached\n", filename );
 	}
+#endif
 }
 
 /*
