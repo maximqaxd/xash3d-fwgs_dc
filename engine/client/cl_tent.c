@@ -3115,6 +3115,7 @@ e.g. by demo request
 */
 void CL_ClearStaticEntities( void )
 {
+#if !XASH_DREAMCAST
 	int	i;
 
 	if( host.type == HOST_DEDICATED )
@@ -3127,6 +3128,7 @@ void CL_ClearStaticEntities( void )
 	clgame.numStatics = 0;
 
 	CL_ClearEfrags ();
+#endif
 }
 
 /*
@@ -3136,7 +3138,9 @@ CL_ClearEffects
 */
 void CL_ClearEffects( void )
 {
+#if !XASH_DREAMCAST
 	CL_ClearEfrags ();
+#endif
 	CL_ClearDlights ();
 	CL_ClearTempEnts ();
 	CL_ClearViewBeams ();

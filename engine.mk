@@ -9,7 +9,6 @@ XASH_CLIENT_OBJS = \
 	engine/client/cl_custom.o \
 	engine/client/cl_debug.o \
 	engine/client/cl_demo.o \
-	engine/client/cl_efrag.o \
 	engine/client/cl_efx.o \
 	engine/client/cl_events.o \
 	engine/client/cl_font.o \
@@ -38,7 +37,6 @@ XASH_CLIENT_OBJS = \
 	engine/client/s_dsp.o \
 	engine/client/s_load.o \
 	engine/client/s_main.o \
-	engine/client/s_mouth.o \
 	engine/client/s_stream.o \
 	engine/client/s_utils.o \
 	engine/client/titles.o \

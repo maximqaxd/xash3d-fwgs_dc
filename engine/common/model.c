@@ -235,8 +235,13 @@ model_t *Mod_FindName( const char *filename, qboolean trackCRC )
 	if( i == mod_numknown )
 	{
 		if( mod_numknown == MAX_MODELS )
-			Host_Error( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
+#if XASH_DREAMCAST
+			Con_DPrintf( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
 		mod_numknown++;
+#else
+	Host_Error( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
+		mod_numknown++;
+#endif
 	}
 
 	// copy name, so model loader can find model file

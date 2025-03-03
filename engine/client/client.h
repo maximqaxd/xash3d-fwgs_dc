@@ -1054,12 +1054,13 @@ lightstyle_t *CL_GetLightStyle( int number );
 int R_FatPVS( const vec3_t org, float radius, byte *visbuffer, qboolean merge, qboolean fullvis );
 const ref_overview_t *GL_GetOverviewParms( void );
 
+#if !XASH_DREAMCAST
 //
 // cl_efrag.c
 //
 void R_StoreEfrags( efrag_t **ppefrag, int framecount );
 void R_AddEfrags( cl_entity_t *ent );
-
+#endif
 //
 // cl_tent.c
 //

@@ -1356,6 +1356,7 @@ static void R_RenderFullbrightForSurface( msurface_t *fa, texture_t *t )
 
 static void R_RenderDetailsForSurface( msurface_t *fa, texture_t *t )
 {
+#if !XASH_DREAMCAST
 	if( !r_detailtextures.value )
 		return;
 
@@ -1378,6 +1379,7 @@ static void R_RenderDetailsForSurface( msurface_t *fa, texture_t *t )
 		detail_surfaces[t->dt_texturenum] = fa->info;
 		R_AddToSeparatePass( &draw_details, t->dt_texturenum );
 	}
+#endif
 }
 
 static void R_RenderDecalsForSurface( msurface_t *fa, int cull_type )
@@ -3416,6 +3418,7 @@ void R_DrawVBO( qboolean drawlightmap, qboolean drawtextures )
 
 qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
 {
+#if !XASH_DREAMCAST
 	const int idx = surf - WORLDMODEL->surfaces;
 	vbotexture_t *vbotex;
 	int texturenum;
@@ -3485,6 +3488,7 @@ qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
 	r_stats.c_world_polys++;
 
 	return true;
+#endif
 }
 
 /*

@@ -287,6 +287,7 @@ static qboolean R_RecursiveLightPoint( model_t *model, mnode_t *node, float p1f,
 		size = smax * tmax;
 		dm = NULL;
 
+#if !XASH_DREAMCAST
 		if( surf->info->deluxemap )
 		{
 			vec3_t	faceNormal;
@@ -310,7 +311,7 @@ static qboolean R_RecursiveLightPoint( model_t *model, mnode_t *node, float p1f,
 			VectorNormalize( tbn[2] );
 			dm = surf->info->deluxemap + Q_rint( dt ) * smax + Q_rint( ds );
 		}
-
+#endif
 		for( map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++ )
 		{
 			uint	scale = tr.lightstylevalue[surf->styles[map]];

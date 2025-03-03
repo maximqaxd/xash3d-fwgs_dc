@@ -40,6 +40,13 @@ typedef struct mstudiocache_s
 #define STUDIO_CACHESIZE		16
 #define STUDIO_CACHEMASK		(STUDIO_CACHESIZE - 1)
 
+#if XASH_DREAMCAST
+#undef MAXSTUDIOGROUPS
+#undef MAXSTUDIOCONTROLLERS
+#define MAXSTUDIOCONTROLLERS 	8
+#define MAXSTUDIOGROUPS			4
+#endif
+
 // trace global variables
 static sv_blending_interface_t	*pBlendAPI = NULL;
 static studiohdr_t			*mod_studiohdr;

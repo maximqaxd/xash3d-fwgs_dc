@@ -34,7 +34,7 @@ half-life implementation of saverestore system
 #define CLIENT_SAVEGAME_VERSION	0x0067				// Version 0.67
 
 #if XASH_DREAMCAST
-#define SAVE_HEAPSIZE		0x020000				// reserve 1Mb for now
+#define SAVE_HEAPSIZE		0x020000				// reserve 200kb for now
 #else
 #define SAVE_HEAPSIZE		0x400000				// reserve 4Mb for now
 #endif

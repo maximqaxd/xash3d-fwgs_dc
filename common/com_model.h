@@ -240,11 +240,15 @@ typedef struct mextrasurf_s
 	short		lightextents[2];
 	float		lmvecs[2][4];
 
+#if !XASH_DREAMCAST
 	color24		*deluxemap;	// note: this is the actual deluxemap data for this surface
 	byte		*shadowmap;	// note: occlusion map for this surface
+#endif
 // begin userdata
 	struct msurface_s	*lightmapchain;	// lightmapped polys
+#if !XASH_DREAMCAST
 	struct mextrasurf_s	*detailchain;	// for detail textures drawing
+#endif
 	mfacebevel_t	*bevel;		// for exact face traceline
 	struct mextrasurf_s	*lumachain;	// draw fullbrights
 	struct cl_entity_s	*parent;		// upcast to owner entity
@@ -252,8 +256,10 @@ typedef struct mextrasurf_s
 	int		mirrortexturenum;	// gl texnum
 	float		mirrormatrix[4][4];
 
+#if !XASH_DREAMCAST
 	struct grasshdr_s	*grass;		// grass that linked by this surface
 	unsigned short	grasscount;	// number of bushes per polygon (used to determine total VBO size)
+#endif
 	unsigned short	numverts;		// world->vertexes[]
 	int		firstvertex;	// fisrt look up in tr.tbn_vectors[], then acess to world->vertexes[]
 
@@ -592,7 +598,9 @@ typedef struct
 #define MAX_REQUESTS	64
 
 STATIC_CHECK_SIZEOF( mnode_t, 52, 72 );
+#if !XASH_DREAMCAST
 STATIC_CHECK_SIZEOF( mextrasurf_t, 324, 496 );
+#endif
 STATIC_CHECK_SIZEOF( decal_t, 60, 88 );
 STATIC_CHECK_SIZEOF( mfaceinfo_t, 176, 304 );
 

@@ -121,7 +121,11 @@ int SV_ModelIndex( const char *filename )
 
 	if( i == MAX_MODELS )
 	{
+#if XASH_DREAMCAST
+		Con_DPrintf( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
+#else
 		Host_Error( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
+#endif
 		return 0;
 	}
 

@@ -1779,6 +1779,7 @@ static void Mod_SetupHull( dbspmodel_t *bmod, model_t *mod, poolhandle_t mempool
 
 static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_size, color24 **out, size_t *outsize )
 {
+#if !XASH_DREAMCAST
 	char        modelname[64], path[64];
 	int         iCompare;
 	fs_offset_t datasize;
@@ -1840,6 +1841,7 @@ static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_
 cleanup_and_error:
 	FS_Close( f );
 	return false;
+#endif
 }
 
 /*
@@ -3551,6 +3553,7 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 
 	Con_Reportf( "lighting: %s\n", FBitSet( mod->flags, MODEL_COLORED_LIGHTING ) ? "colored" : "monochrome" );
 
+#if !XASH_DREAMCAST
 	// not supposed to be load ?
 	if( FBitSet( host.features, ENGINE_LOAD_DELUXEDATA ))
 	{
@@ -3560,7 +3563,7 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 		if( bmod->isworld && bmod->deluxdatasize )
 			SetBits( world.flags, FWORLD_HAS_DELUXEMAP );
 	}
-
+#endif
 	// setup lightdata pointers
 	if( !mod->lightdata )
 		return;
@@ -3581,7 +3584,7 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 			// NOTE: we divide offset by three because lighting and deluxemap keep their pointers
 			// into three-bytes structs and shadowmap just monochrome
 			mod->surfaces[i].samples = mod->lightdata + offset;
-
+#if !XASH_DREAMCAST
 			// if deluxemap is present setup it too
 			if( bmod->deluxedata_out )
 				mod->surfaces[i].info->deluxemap = bmod->deluxedata_out + offset;
@@ -3589,6 +3592,7 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 			// will be used by mods
 			if( bmod->shadowdata_out )
 				mod->surfaces[i].info->shadowmap = bmod->shadowdata_out + offset;
+#endif
 		}
 	}
 }

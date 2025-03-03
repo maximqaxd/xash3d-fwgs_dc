@@ -30,7 +30,7 @@ GNU General Public License for more details.
 
 #if XASH_DREAMCAST
 #undef MAXSTUDIOVERTS
-#define MAXSTUDIOVERTS 1024
+#define MAXSTUDIOVERTS 512
 #endif
 
 typedef struct
@@ -822,8 +822,9 @@ static void R_StudioCalcRotations( cl_entity_t *e, float pos[][3], vec4_t *q, ms
 
 	// add in programtic controllers
 	pbone = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
-
+#if !XASH_DREAMCAST
 	R_StudioCalcBoneAdj( dadt, adj, e->curstate.controller, e->latched.prevcontroller, e->mouth.mouthopen );
+#endif // we are not latching mouths since we are speechless for now
 
 	for( i = 0; i < m_pStudioHeader->numbones; i++, pbone++, panim++ )
 	{

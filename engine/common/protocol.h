@@ -208,8 +208,8 @@ GNU General Public License for more details.
 #define MAX_RESOURCES       1024
 #define MAX_LIGHTSTYLES		64
 #define DC_MAX_EDICTS		600
-#define DC_MAX_TENTS 		16
-#define DC_MAX_PARTICLES 	16
+#define DC_MAX_TENTS 		8
+#define DC_MAX_PARTICLES 	8
 #define DC_MAX_BEAMS 		4
 #else
 #if XASH_LOW_MEMORY == 2

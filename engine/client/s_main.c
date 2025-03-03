@@ -152,8 +152,9 @@ void S_FreeChannel( channel_t *ch )
 
     // clear mixer
     memset( &ch->pMixer, 0, sizeof( ch->pMixer ));
-
+#if !XASH_DREAMCAST
     SND_CloseMouth( ch );
+#endif
 }
 /*
 =================
@@ -909,8 +910,10 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
     }
 #endif
 
+#ifndef XASH_DREAMCAST
     // Init client entity mouth movement vars
     SND_InitMouth( ent, chan );
+#endif
 }
 /*
 ====================
@@ -1032,9 +1035,10 @@ void S_RestoreSound(const vec3_t pos, int ent, int chan, sound_t handle, float f
         target_chan->start_time = Sys_DoubleTime();
     }
 #endif
-
+#ifndef XASH_DREAMCAST
     // Init client entity mouth movement vars
-    SND_InitMouth(ent, chan);
+    SND_InitMouth( ent, chan );
+#endif
 }
 
 /*
@@ -1619,10 +1623,10 @@ static void S_FreeIdleRawChannels( void )
 
 		if( ch->s_rawend >= paintedtime )
 			continue;
-		
+#if !XASH_DREAMCAST		
 		if ( ch->entnum > 0 )
 			SND_ForceCloseMouth( ch->entnum );
-
+#endif
 		if(( paintedtime - ch->s_rawend ) / SOUND_DMA_SPEED >= S_RAW_SOUND_IDLE_SEC )
 		{
 			raw_channels[i] = NULL;
