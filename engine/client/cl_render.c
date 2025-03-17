@@ -269,7 +269,7 @@ static render_api_t gRenderAPI =
 	NULL, // R_UploadStretchRaw,
 	(void*)AVI_FreeVideo,
 	(void*)AVI_IsActive,
-	S_StreamAviSamples,
+	NULL,
 	NULL,
 	NULL,
 	NULL, // GL_Bind,
