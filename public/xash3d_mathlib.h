@@ -146,7 +146,7 @@ CONSTANTS GLOBALS
 // a1ba: we never return pointers to these globals
 // so help compiler optimize constants away
 #if XASH_DREAMCAST
-static const vec3_t vec3_origin = { 0.0f, 0.0f, 0.0f };
+static vec3_t vec3_origin = { 0.0f, 0.0f, 0.0f };
 #else
 #define vec3_origin ((vec3_t){ 0.0f, 0.0f, 0.0f })
 #endif 
@@ -175,8 +175,8 @@ void VectorsAngles( const vec3_t forward, const vec3_t right, const vec3_t up, v
 void PlaneIntersect( const mplane_t *plane, const vec3_t p0, const vec3_t p1, vec3_t out );
 qboolean SphereIntersect( const vec3_t vSphereCenter, float fSphereRadiusSquared, const vec3_t vLinePt, const vec3_t vLineDir );
 void QuaternionSlerp( const vec4_t p, const vec4_t q, float t, vec4_t qt );
-void R_StudioCalcBoneQuaternion( int frame, float s, const mstudiobone_t *pbone, const mstudioanim_t *panim, const float *adj, vec4_t q );
-void R_StudioCalcBonePosition( int frame, float s, const mstudiobone_t *pbone, const mstudioanim_t *panim, const vec3_t adj, vec3_t pos );
+
+void R_StudioCalcBones( int frame, float s, const mstudiobone_t *pbone, const mstudioanim_t *panim, const float *adj, vec3_t pos, vec4_t q );
 int BoxOnPlaneSide( const vec3_t emins, const vec3_t emaxs, const mplane_t *p );
 #define BOX_ON_PLANE_SIDE( emins, emaxs, p )           \
 	((( p )->type < 3 ) ?                              \
@@ -192,7 +192,7 @@ int BoxOnPlaneSide( const vec3_t emins, const vec3_t emaxs, const mplane_t *p );
 //
 static inline void Matrix3x4_LoadIdentity( matrix3x4 m )
 {
-	memset( m, 0, sizeof( *m ));
+	memset( m, 0, sizeof( matrix3x4 ));
 	m[0][0] = m[1][1] = m[2][2] = 1.0f;
 }
 #define Matrix3x4_Copy( out, in )		memcpy( out, in, sizeof( matrix3x4 ))
@@ -208,7 +208,7 @@ void Matrix3x4_AnglesFromMatrix( const matrix3x4 in, vec3_t out );
 
 static inline void Matrix4x4_LoadIdentity( matrix4x4 m )
 {
-	memset( m, 0, sizeof( *m ));
+	memset( m, 0, sizeof( matrix4x4 ));
 	m[0][0] = m[1][1] = m[2][2] = m[3][3] = 1.0f;
 }
 #define Matrix4x4_Copy( out, in )	memcpy( out, in, sizeof( matrix4x4 ))
