@@ -409,6 +409,7 @@ void Host_Credits( void )
 
 static void UI_ConvertGameInfo( gameinfo2_t *out, const gameinfo_t *in )
 {
+#if !XASH_DREAMCAST
 	out->gi_version = GAMEINFO_VERSION;
 
 	Q_strncpy( out->gamefolder, in->gamefolder, sizeof( out->gamefolder ));
@@ -437,6 +438,7 @@ static void UI_ConvertGameInfo( gameinfo2_t *out, const gameinfo_t *in )
 		SetBits( out->flags, GFL_HD_BACKGROUND );
 	if( in->animated_title )
 		SetBits( out->flags, GFL_ANIMATED_TITLE );
+#endif
 }
 
 static void UI_ToOldGameInfo( GAMEINFO *out, const gameinfo2_t *in )
@@ -457,11 +459,13 @@ static void UI_ToOldGameInfo( GAMEINFO *out, const gameinfo2_t *in )
 
 static void UI_GetModsInfo( void )
 {
+#if !XASH_DREAMCAST
 	int i;
 
 	gameui.modsInfo = Mem_Calloc( gameui.mempool, sizeof( *gameui.modsInfo ) * FI->numgames );
 	for( i = 0; i < FI->numgames; i++ )
 		UI_ConvertGameInfo( &gameui.modsInfo[i], FI->games[i] );
+#endif
 }
 
 /*
@@ -1252,7 +1256,7 @@ static const ui_enginefuncs_t gEngfuncs =
 	pfnGetOldGameInfo,
 	pfnGetGamesList,
 	pfnGetFilesList,
-	NULL,
+	SV_GetSaveComment,
 	CL_GetDemoComment,
 	pfnCheckGameDll,
 	pfnGetClipboardData,
@@ -1264,7 +1268,7 @@ static const ui_enginefuncs_t gEngfuncs =
 	COM_RandomFloat,
 	COM_RandomLong,
 	pfnSetCursor,
-	NULL,
+	pfnIsMapValid,
 	GL_ProcessTexture,
 	pfnCompareFileTime,
 	VID_GetModeString,
@@ -1298,14 +1302,17 @@ static char *pfnParseFileSafe( char *data, char *buf, const int size, unsigned i
 
 static gameinfo2_t *pfnGetGameInfo( int gi_version )
 {
+#if !XASH_DREAMCAST
 	if( gi_version != gameui.gameInfo.gi_version )
 		return NULL;
 
 	return &gameui.gameInfo;
+#endif
 }
 
 static gameinfo2_t *pfnGetModInfo( int gi_version, int i )
 {
+#if !XASH_DREAMCAST
 	if( i < 0 || i >= FI->numgames )
 		return NULL;
 
@@ -1316,6 +1323,7 @@ static gameinfo2_t *pfnGetModInfo( int gi_version, int i )
 		return NULL;
 
 	return &gameui.modsInfo[i];
+#endif
 }
 
 static int pfnIsCvarReadOnly( const char *name )
@@ -1463,9 +1471,9 @@ qboolean UI_LoadProgs( void )
 
 	Cvar_FullSet( "host_gameuiloaded", "1", FCVAR_READ_ONLY );
 	Cmd_AddRestrictedCommand( "ui_allowconsole", UI_ToggleAllowConsole_f, "unlocks developer console" );
-
+#if !XASH_DREAMCAST
 	UI_ConvertGameInfo( &gameui.gameInfo, FI->GameInfo ); // current gameinfo
-
+#endif
 	// setup globals
 	gameui.globals->developer = host.allow_console;
 
