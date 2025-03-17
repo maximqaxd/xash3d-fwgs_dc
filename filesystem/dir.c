@@ -453,6 +453,52 @@ static void FS_Search_DIR( searchpath_t *search, stringlist_t *list, const char 
             }
         }
     }
+	stringlistfreecontents(&dirlist);
+
+	Q_snprintf(netpath, sizeof(netpath), "/vmu/a1/%s", basepath);
+    stringlistinit(&dirlist);
+    listdirectory(&dirlist, netpath, false);
+
+    for (dirlistindex = 0; dirlistindex < dirlist.numstrings; dirlistindex++)
+    {
+        Q_snprintf(temp, sizeof(temp), "%s%s", basepath, dirlist.strings[dirlistindex]);
+        if (matchpattern(temp, (char *)pattern, true))
+        {
+            for (resultlistindex = 0; resultlistindex < list->numstrings; resultlistindex++)
+            {
+                if (!Q_strcmp(list->strings[resultlistindex], temp))
+                    break;
+            }
+            if( resultlistindex == list->strings )
+            {
+                stringlistappend(list, temp);
+            }
+        }
+    }
+
+	stringlistfreecontents(&dirlist);
+
+    // Search in /ram/
+    Q_snprintf(netpath, sizeof(netpath), "/ram/%s", basepath);
+    stringlistinit(&dirlist);
+    listdirectory(&dirlist, netpath, false);
+
+    for (dirlistindex = 0; dirlistindex < dirlist.numstrings; dirlistindex++)
+    {
+        Q_snprintf(temp, sizeof(temp), "%s%s", basepath, dirlist.strings[dirlistindex]);
+        if (matchpattern(temp, (char *)pattern, true))
+        {
+            for (resultlistindex = 0; resultlistindex < list->numstrings; resultlistindex++)
+            {
+                if (!Q_strcmp(list->strings[resultlistindex], temp))
+                    break;
+            }
+            if( resultlistindex == list->strings )
+            {
+                stringlistappend(list, temp);
+            }
+        }
+    }	
 #else
 	if( !FS_FixFileCase( search->dir, basepath, netpath, sizeof( netpath ), false ))
 	{
