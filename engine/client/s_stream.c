@@ -16,10 +16,39 @@ GNU General Public License for more details.
 #include "common.h"
 #include "sound.h"
 #include "client.h"
-
+#include "soundlib.h"
 static bg_track_t		s_bgTrack;
 static musicfade_t		musicfade;	// controlled by game dlls
 
+void *music_callback(snd_stream_hnd_t hnd, int len, int *used)
+{
+    if (!s_bgTrack.stream)
+	{
+        *used = 0;
+        return NULL;
+    }
+
+    if (len > MUSIC_BUFFER_SIZE) 
+        len = MUSIC_BUFFER_SIZE;
+    int r = FS_ReadStream(s_bgTrack.stream, len, music_buffer);
+
+    if (r < len && s_bgTrack.loopName[0])
+	{
+        FS_FreeStream(s_bgTrack.stream);
+        s_bgTrack.stream = FS_OpenStream(s_bgTrack.loopName);
+
+        if (s_bgTrack.stream) 
+		{
+            Q_strncpy(s_bgTrack.current, s_bgTrack.loopName, sizeof(s_bgTrack.current));
+            r = FS_ReadStream(s_bgTrack.stream, len, music_buffer);
+        } else {
+            r = 0;
+        }
+    }
+
+    *used = r;
+    return r > 0 ? music_buffer : NULL;
+}
 /*
 =================
 S_PrintBackgroundTrackState
@@ -77,7 +106,7 @@ float S_GetMusicVolume( void )
 S_StartBackgroundTrack
 =================
 */
-void S_StartBackgroundTrack( const char *introTrack, const char *mainTrack, int position, qboolean fullpath )
+void S_StartBackgroundTrack(const char *introTrack, const char *mainTrack, int position, qboolean fullpath)
 {
 	S_StopBackgroundTrack();
 
@@ -112,8 +141,50 @@ void S_StartBackgroundTrack( const char *introTrack, const char *mainTrack, int 
 		// restore message, update song position
 		FS_SetStreamPos( s_bgTrack.stream, position );
 	}
-}
+#if XASH_DREAMCAST
+    if (music_stream != SND_STREAM_INVALID) 
+	{
+        snd_stream_stop(music_stream);
+        snd_stream_destroy(music_stream);
+        music_stream = SND_STREAM_INVALID;
+    }
 
+    wavdata_t *info = FS_StreamInfo(s_bgTrack.stream);
+
+    if (!info) 
+	{
+        Con_Printf("Failed to get stream info\n");
+        FS_FreeStream(s_bgTrack.stream);
+        s_bgTrack.stream = NULL;
+        return;
+    }
+
+    if (info->width != 2) 
+	{
+        Con_Printf("Unsupported audio format: width=%d (expected 2 for 16-bit)\n", info->width);
+        FS_FreeStream(s_bgTrack.stream);
+        s_bgTrack.stream = NULL;
+        return;
+    }
+
+
+    music_stream = snd_stream_alloc(music_callback, SND_STREAM_BUFFER_MAX_ADPCM);
+
+    if (music_stream == SND_STREAM_INVALID) 
+	{
+        Con_Printf("S_StartBackgroundTrack: Stream allocation failed\n");
+        FS_FreeStream(s_bgTrack.stream);
+        s_bgTrack.stream = NULL;
+        return;
+    }
+
+    snd_stream_set_userdata(music_stream, info);
+    snd_stream_prefill(music_stream);
+    snd_stream_start(music_stream, info->rate, info->channels - 1);
+    snd_stream_volume(music_stream, (int)(s_musicvolume.value * 255));
+    snd_stream_pan(music_stream, 128, 128);
+#endif
+}
 /*
 =================
 S_StopBackgroundTrack
@@ -125,6 +196,16 @@ void S_StopBackgroundTrack( void )
 
 	if( !dma.initialized ) return;
 	if( !s_bgTrack.stream ) return;
+
+#if XASH_DREAMCAST
+    if (music_stream != SND_STREAM_INVALID) 
+	{
+        snd_stream_stop(music_stream);
+        snd_stream_destroy(music_stream);
+        music_stream = SND_STREAM_INVALID;
+    }
+#endif
+
 
 	FS_FreeStream( s_bgTrack.stream );
 	memset( &s_bgTrack, 0, sizeof( bg_track_t ));
@@ -178,8 +259,38 @@ qboolean S_StreamGetCurrentState( char *currentTrack, size_t currentTrackSize, c
 S_StreamBackgroundTrack
 =================
 */
-void S_StreamBackgroundTrack( void )
+void S_StreamBackgroundTrack(void) 
 {
+#if XASH_DREAMCAST
+	static double last_time = 0;
+    double current_time = Sys_DoubleTime();
+
+    if (!dma.initialized || !s_bgTrack.stream || s_listener.streaming || music_stream == SND_STREAM_INVALID) 
+        return;
+    
+    float volume = S_GetMusicVolume();
+
+    if (s_listener.paused || s_listener.stream_paused)
+        volume = 0.0f;
+
+	else if (!cl.background)
+	{
+        if ((s_bgTrack.source == key_game && cls.key_dest == key_menu) ||
+            (s_bgTrack.source == key_menu && cls.key_dest != key_menu))
+            volume = 0.0f;
+
+    } else if (cls.key_dest == key_console)
+        	volume = 0.0f;
+
+    snd_stream_volume(music_stream, (int)(volume * 255));
+
+    int poll_result = snd_stream_poll(music_stream);
+
+    if (poll_result < 0) 
+        S_StopBackgroundTrack();
+
+    last_time = current_time;
+#else
 	int	bufferSamples;
 	int	fileSamples;
 	byte	raw[MAX_RAW_SAMPLES];
@@ -262,6 +373,7 @@ void S_StreamBackgroundTrack( void )
 		}
 
 	}
+#endif
 }
 
 /*
