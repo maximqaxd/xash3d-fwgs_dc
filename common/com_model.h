@@ -252,18 +252,15 @@ typedef struct mextrasurf_s
 	mfacebevel_t	*bevel;		// for exact face traceline
 	struct mextrasurf_s	*lumachain;	// draw fullbrights
 	struct cl_entity_s	*parent;		// upcast to owner entity
-
+#if !XASH_DREAMCAST
 	int		mirrortexturenum;	// gl texnum
 	float		mirrormatrix[4][4];
-
-#if !XASH_DREAMCAST
 	struct grasshdr_s	*grass;		// grass that linked by this surface
 	unsigned short	grasscount;	// number of bushes per polygon (used to determine total VBO size)
-#endif
 	unsigned short	numverts;		// world->vertexes[]
 	int		firstvertex;	// fisrt look up in tr.tbn_vectors[], then acess to world->vertexes[]
-
 	intptr_t	reserved[32];	// just for future expansions or mod-makers
+#endif
 } mextrasurf_t;
 
 #ifdef SUPPORT_HL25_EXTENDED_STRUCTS
