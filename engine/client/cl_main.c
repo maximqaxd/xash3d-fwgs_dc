@@ -1540,7 +1540,9 @@ void CL_ClearState( void )
 	Cvar_SetValue( "scr_download", -1.0f );
 	Cvar_SetValue( "scr_loading", 0.0f );
 	host.allow_console = host.allow_console_init;
+#if !XASH_DREAMCAST
 	HTTP_ClearCustomServers();
+#endif
 }
 
 /*
@@ -1798,9 +1800,11 @@ CL_SendMasterServerScanRequest
 */
 static void CL_SendMasterServerScanRequest( void )
 {
+#if !XASH_DREAMCAST
 	cls.internetservers_wait = NET_SendToMasters( NS_CLIENT,
 		cls.internetservers_query_len, cls.internetservers_query );
 	cls.internetservers_pending = true;
+#endif
 }
 
 /*
@@ -2456,12 +2460,13 @@ static void CL_Reject( const char *c, const char *args, netadr_t from )
 
 static void CL_ServerList( netadr_t from, sizebuf_t *msg )
 {
+#if !XASH_DREAMCAST
 	if( !NET_IsMasterAdr( from ))
 	{
 		Con_Printf( S_WARN "unexpected server list packet from %s\n", NET_AdrToString( from ));
 		return;
 	}
-
+#endif
 	// check the extra header
 	if( MSG_ReadByte( msg ) == 0x7f )
 	{

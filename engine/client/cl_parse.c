@@ -612,8 +612,9 @@ static void CL_StartResourceDownloading( const char *pszMessage, qboolean bCusto
 	}
 	else
 	{
+#if !XASH_DREAMCAST
 		HTTP_ResetProcessState();
-
+#endif
 		cls.state = ca_validate;
 		cls.dl.custom = false;
 	}
@@ -2061,7 +2062,9 @@ void CL_ParseResLocation( sizebuf_t *msg )
 	{
 		Con_Reportf( "Adding %s as download location\n", token );
 		cl.http_download = true;
+#if !XASH_DREAMCAST
 		HTTP_AddCustomServer( token );
+#endif
 	}
 }
 

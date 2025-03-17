@@ -74,7 +74,9 @@ qboolean CL_CheckFile( sizebuf_t *msg, resource_t *pResource )
 
 	if( cl.http_download )
 	{
+#if !XASH_DREAMCAST
 		HTTP_AddDownload( filepath, pResource->nDownloadSize, true, pResource );
+#endif
 	}
 	else
 	{
