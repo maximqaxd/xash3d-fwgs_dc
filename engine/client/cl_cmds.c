@@ -236,6 +236,7 @@ static scrshot_t CL_GetScreenshotTypeFromString( const char *string )
 
 void CL_GenericShot_f( void )
 {
+#if !XASH_DREAMCAST
 	const char *argv0 = Cmd_Argv( 0 );
 	scrshot_t type;
 
@@ -315,6 +316,7 @@ void CL_GenericShot_f( void )
 	cls.scrshot_action = type; // build new frame for saveshot
 	cls.envshot_vieworg = NULL;
 	cls.envshot_viewsize = 0;
+#endif
 }
 
 /*
