@@ -26,7 +26,6 @@ static gl_texture_t		gl_textures[MAX_TEXTURES];
 static gl_texture_t*	gl_texturesHashTable[TEXTURES_HASH_SIZE];
 static uint		gl_numTextures;
 static uint		vq_codebook_sz = 2048;
-static uint 	vq_small_codebook_sz = 256;
 
 static byte    dottexture[8][8] =
 {
@@ -226,12 +225,7 @@ void GL_ApplyTextureParams( gl_texture_t *tex )
 
 		if( tex->target == GL_TEXTURE_3D || tex->target == GL_TEXTURE_CUBE_MAP_ARB )
 			pglTexParameteri( tex->target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER );
-#if XASH_DREAMCAST
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR, border[0]); // Red
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 1, border[1]); // Green
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 2, border[2]); // Blue
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 3, border[3]); // Alpha
-#else
+#if !XASH_DREAMCAST
 		pglTexParameterfv( tex->target, GL_TEXTURE_BORDER_COLOR, border );
 #endif // !XASH_DREAMCAST
 	}
@@ -404,6 +398,7 @@ static size_t GL_CalcImageSize( pixformat_t format, int width, int height, int d
 	case PF_ARGB_1555:
 		size = width * height * depth * 2;
 		break;
+	case PF_VQ_MIPMAP_ARGB_1555:
 	case PF_VQ_MIPMAP_RGB_5650:
 		int main_size = (width * height) / 4;
         int mip1_size = main_size / 4;
@@ -526,6 +521,7 @@ static size_t GL_CalcTextureSize( GLenum format, int width, int height, int dept
 		size = width * height * depth * 4;
 		break;
 #if XASH_DREAMCAST
+    case GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS:
 	case GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS:
 		int main_size = (width * height) / 4;
         int mip1_size = main_size / 4;
@@ -778,6 +774,7 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 		case PF_VQ_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_KOS; break;
 		case PF_VQ_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_KOS; break;
 		case PF_VQ_MIPMAP_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS; break;
+		case PF_VQ_MIPMAP_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS; break;
 #endif
 		case PF_DXT1: tex->format = GL_COMPRESSED_RGB_S3TC_DXT1_EXT; break;	// never use DXT1 with 1-bit alpha
 		case PF_DXT3: tex->format = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; break;
