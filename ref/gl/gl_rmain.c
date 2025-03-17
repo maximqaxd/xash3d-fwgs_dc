@@ -522,13 +522,11 @@ static void R_SetupFrame( void )
 	// NOTE: this request is the fps-killer on some NVidia drivers
 	glState.isFogEnabled = pglIsEnabled( GL_FOG );
 
-#if !XASH_DREAMCAST
 	if( !gl_nosort.value )
 	{
 		// sort translucents entities by rendermode and distance
 		qsort( tr.draw_list->trans_entities, tr.draw_list->num_trans_entities, sizeof( cl_entity_t* ), R_TransEntityCompare );
 	}
-#endif
 	// current viewleaf
 	if( RI.drawWorld )
 	{
@@ -1050,6 +1048,7 @@ static void R_CheckCvars( void )
 		rebuild = true;
 	}
 
+#if !XASH_DREAMCAST
 	if( FBitSet( r_vbo.flags, FCVAR_CHANGED ))
 	{
 		ClearBits( r_vbo.flags, FCVAR_CHANGED );
@@ -1067,6 +1066,7 @@ static void R_CheckCvars( void )
 		ClearBits( r_vbo_overbrightmode.flags, FCVAR_CHANGED );
 		rebuild = true;
 	}
+#endif
 
 	if( rebuild )
 		R_GammaChanged( false );

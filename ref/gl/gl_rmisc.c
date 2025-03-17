@@ -114,6 +114,7 @@ void R_NewMap( void )
 
 	R_StudioResetPlayerModels();
 
+#if !XASH_DREAMCAST
 	// upload detailtextures
 	if( r_detailtextures.value )
 	{
@@ -125,7 +126,7 @@ void R_NewMap( void )
 
 		R_ParseDetailTextures( filepath );
 	}
-
+#endif
 	// clear out efrags in case the level hasn't been reloaded
 	for( i = 0; i < WORLDMODEL->numleafs; i++ )
 		WORLDMODEL->leafs[i+1].efrags = NULL;
@@ -150,9 +151,11 @@ void R_NewMap( void )
 
 	GL_BuildLightmaps ();
 
+#if !XASH_DREAMCAST
 	R_ClearVBO();
 	if( R_HasEnabledVBO( ))
 		R_GenerateVBO();
+#endif
 	R_ResetRipples();
 
 	if( gEngfuncs.drawFuncs->R_NewMap != NULL )

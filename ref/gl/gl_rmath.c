@@ -23,7 +23,7 @@ GNU General Public License for more details.
 
 ========================================================================
 */
-void Matrix4x4_Concat(matrix4x4 out, const matrix4x4 in1, const matrix4x4 in2)
+void Matrix4x4_Concat( matrix4x4 out, const matrix4x4 in1, const matrix4x4 in2 )
 {
 #if XASH_DREAMCAST
     unsigned int prefetch_scratch;
@@ -146,24 +146,24 @@ void Matrix4x4_CreateModelview( matrix4x4 out )
 	out[1][2] = 1.0f;
 }
 
-void Matrix4x4_ToArrayFloatGL(const matrix4x4 in, float out[16])
+void Matrix4x4_ToArrayFloatGL( const matrix4x4 in, float out[16] )
 {
-    out[ 0] = in[0][0];
-    out[ 1] = in[1][0];
-    out[ 2] = in[2][0];
-    out[ 3] = in[3][0];
-    out[ 4] = in[0][1];
-    out[ 5] = in[1][1];
-    out[ 6] = in[2][1];
-    out[ 7] = in[3][1];
-    out[ 8] = in[0][2];
-    out[ 9] = in[1][2];
-    out[10] = in[2][2];
-    out[11] = in[3][2];
-    out[12] = in[0][3];
-    out[13] = in[1][3];
-    out[14] = in[2][3];
-    out[15] = in[3][3];
+	out[ 0] = in[0][0];
+	out[ 1] = in[1][0];
+	out[ 2] = in[2][0];
+	out[ 3] = in[3][0];
+	out[ 4] = in[0][1];
+	out[ 5] = in[1][1];
+	out[ 6] = in[2][1];
+	out[ 7] = in[3][1];
+	out[ 8] = in[0][2];
+	out[ 9] = in[1][2];
+	out[10] = in[2][2];
+	out[11] = in[3][2];
+	out[12] = in[0][3];
+	out[13] = in[1][3];
+	out[14] = in[2][3];
+	out[15] = in[3][3];
 }
 static void Matrix4x4_CreateTranslate( matrix4x4 out, float x, float y, float z )
 {

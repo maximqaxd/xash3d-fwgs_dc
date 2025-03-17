@@ -335,16 +335,16 @@ void GL_SubdivideSurface( model_t *loadmodel, msurface_t *fa )
 GL_BuildPolygonFromSurface
 ================
 */
-void GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
+static int GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
 {
-	int		i, lnumverts;
+	int		i, lnumverts, nColinElim = 0;
 	float		sample_size;
 	texture_t		*tex;
 	gl_texture_t	*glt;
 	glpoly2_t		*poly;
 
 	if( !mod || !fa->texinfo || !fa->texinfo->texture )
-		return; // bad polygon ?
+		return nColinElim; // bad polygon ?
 
 	if( FBitSet( fa->flags, SURF_CONVEYOR ) && fa->texinfo->texture->gl_texturenum != 0 )
 	{
@@ -417,6 +417,7 @@ void GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
 	}
 
 	poly->numverts = lnumverts;
+	return nColinElim;
 }
 
 /*
@@ -700,7 +701,7 @@ static void LM_UploadDynamicBlock( void )
 			height = gl_lms.allocated[i];
 	}
 
-	pglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, BLOCK_SIZE, height, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, gl_lms.lightmap_buffer );
+	pglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, BLOCK_SIZE, height, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, gl_lms.lightmap_buffer );
 }
 
 static void LM_UploadBlock( qboolean dynamic )
@@ -1452,7 +1453,7 @@ dynamic:
 			GL_Bind( XASH_TEXTURE0, tr.lightmapTextures[fa->lightmaptexturenum] );
 #endif
 
-			pglTexSubImage2D( GL_TEXTURE_2D, 0, fa->light_s, fa->light_t, smax, tmax, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, temp );
+			pglTexSubImage2D( GL_TEXTURE_2D, 0, fa->light_s, fa->light_t, smax, tmax, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, temp );
 
 #if XASH_WES
 			GL_SelectTexture( XASH_TEXTURE0 );
@@ -1551,9 +1552,9 @@ static void R_DrawTextureChains( void )
 			R_DrawClouds();
 		skychain = NULL;
 	}
-
+#if !XASH_DREAMCAST
 	R_DrawVBO( !r_fullbright->value && !!WORLDMODEL->lightdata, true );
-
+#endif
 	for( i = 0; i < WORLDMODEL->numtextures; i++ )
 	{
 		t = WORLDMODEL->textures[i];
@@ -1900,11 +1901,18 @@ void R_DrawBrushModel( cl_entity_t *e )
 	if( !FBitSet( clmodel->flags, MODEL_LIQUID ) && e->curstate.rendermode == kRenderTransTexture && !gl_nosort.value )
 		qsort( gpGlobals->draw_surfaces, num_sorted, sizeof( sortedface_t ), R_SurfaceCompare );
 
+#if XASH_DREAMCAST
+		for( i = 0; i < num_sorted; i++ )
+			R_RenderBrushPoly( gpGlobals->draw_surfaces[i].surf, gpGlobals->draw_surfaces[i].cull );
+#else
 	// draw sorted translucent surfaces
 	for( i = 0; i < num_sorted; i++ )
 		if( !allow_vbo || !R_AddSurfToVBO( gpGlobals->draw_surfaces[i].surf, true ) )
 			R_RenderBrushPoly( gpGlobals->draw_surfaces[i].surf, gpGlobals->draw_surfaces[i].cull );
+#endif
+#if !XASH_DREAMCAST
 	R_DrawVBO( R_HasLightmap(), true );
+#endif
 	if( e->curstate.rendermode == kRenderTransColor )
 		pglEnable( GL_TEXTURE_2D );
 
@@ -1959,6 +1967,18 @@ For each texture build index arrays (vbotexture_t) every frame.
 */
 // vertex attribs
 //#define NO_TEXTURE_MATRIX // need debug
+
+qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
+{
+	return false;
+}
+
+qboolean R_HasEnabledVBO( void )
+{
+	return false;
+}
+
+#if !XASH_DREAMCAST
 typedef struct vbovertex_s
 {
 	vec3_t pos;
@@ -3490,7 +3510,7 @@ qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
 	return true;
 #endif
 }
-
+#endif
 /*
 =============================================================
 
@@ -3839,8 +3859,9 @@ void R_DrawWorld( void )
 		GL_ResetFogColor();
 		R_BlendLightmaps();
 		R_RenderFullbrights();
+#if !XASH_DREAMCAST
 		R_RenderDetails( R_HasEnabledVBO() ? 2 : 3 );
-
+#endif
 		if( skychain )
 			R_DrawSkyBox();
 	}
@@ -4035,7 +4056,7 @@ with all the surfaces from all brush models
 */
 void GL_BuildLightmaps( void )
 {
-	int	i, j;
+	int	i, j, nColinElim = 0;
 	model_t	*m;
 
 	// release old lightmaps
@@ -4063,7 +4084,6 @@ void GL_BuildLightmaps( void )
 	gl_lms.current_lightmap_texture = 0;
 	tr.modelviewIdentity = false;
 	tr.realframecount = 1;
-	nColinElim = 0;
 
 	// setup the texture for dlights
 	R_InitDlightTexture();
@@ -4092,7 +4112,7 @@ void GL_BuildLightmaps( void )
 			if( m->surfaces[j].flags & SURF_DRAWTURB )
 				continue;
 
-			GL_BuildPolygonFromSurface( m, m->surfaces + j );
+			nColinElim += GL_BuildPolygonFromSurface( m, m->surfaces + j );
 		}
 
 		// clearing visframe
