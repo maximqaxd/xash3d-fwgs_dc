@@ -451,8 +451,6 @@ void Sys_Quit( const char *reason )
 	Host_ShutdownWithReason( reason );
 #if XASH_ANDROID
 	Host_ExitInMain();
-#elif XASH_DREAMCAST
-	arch_menu();
 #else
 	exit( error_on_exit );
 #endif
