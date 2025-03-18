@@ -26,6 +26,11 @@ GNU General Public License for more details.
 #include "client.h"
 #include "server.h"			// LUMP_ error codes
 #include "ref_common.h"
+#if XASH_DREAMCAST
+#include "alloc/alloc.h"
+typedef void* pvr_ptr_t;
+extern uint8_t *pvr_pool; // Defined in zone.c
+#endif
 #if defined( HAVE_OPENMP )
 #include <omp.h>
 #endif // HAVE_OPENMP
@@ -2193,28 +2198,62 @@ static void Mod_LoadVertexes( model_t *mod, dbspmodel_t *bmod )
 	int	i;
 
 	in = bmod->vertexes;
-	out = mod->vertexes = Mem_Malloc( mod->mempool, bmod->numvertexes * sizeof( mvertex_t ));
-	mod->numvertexes = bmod->numvertexes;
 
-	if( bmod->isworld ) ClearBounds( world.mins, world.maxs );
+#ifdef XASH_DREAMCAST
+    size_t vertex_size = bmod->numvertexes * sizeof(mvertex_t);
+    size_t pvr_free = alloc_count_free(pvr_pool);
+    void *alloc_base = alloc_base_address(pvr_pool);
+    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
 
-	for( i = 0; i < bmod->numvertexes; i++, in++, out++ )
-	{
-		if( bmod->isworld )
-			AddPointToBounds( in->point, world.mins, world.maxs );
-		VectorCopy( in->point, out->position );
-	}
+    // Free existing PVR-allocated vertexes
+    if (mod->vertexes && 
+        (uint8_t *)mod->vertexes >= (uint8_t *)alloc_base && 
+        (uint8_t *)mod->vertexes < (uint8_t *)alloc_base + alloc_size)
+    {
+        Con_Printf("Freeing old PVR vertexes: %p\n", mod->vertexes);
+        alloc_free(pvr_pool, mod->vertexes);
+        mod->vertexes = NULL;
+        pvr_free = alloc_count_free(pvr_pool);
+    }
 
-	if( !bmod->isworld ) return;
+    Con_Printf("Loading vertexes: %zu bytes, PVR free: %zu bytes\n", vertex_size, pvr_free);
 
-	VectorSubtract( world.maxs, world.mins, world.size );
+    out = mod->vertexes = (mvertex_t *)alloc_malloc(pvr_pool, vertex_size);
+    if (!mod->vertexes)
+    {
+        Con_Printf("PVR alloc failed for vertexes: %zu bytes, falling back to main RAM\n", vertex_size);
+        out = mod->vertexes = (mvertex_t *)Mem_Malloc(mod->mempool, vertex_size);
+        if (!mod->vertexes)
+        {
+            Host_Error("Failed to allocate memory for vertexes\n");
+            return;
+        }
+    }
+#else
+    out = mod->vertexes = Mem_Malloc(mod->mempool, bmod->numvertexes * sizeof(mvertex_t));
+#endif
 
-	for( i = 0; i < 3; i++ )
-	{
-		// spread the mins / maxs by a pixel
-		world.mins[i] -= 1.0f;
-		world.maxs[i] += 1.0f;
-	}
+    mod->numvertexes = bmod->numvertexes;
+
+    if (bmod->isworld) ClearBounds(world.mins, world.maxs);
+
+    for (i = 0; i < bmod->numvertexes; i++, in++, out++)
+    {
+        if (bmod->isworld)
+            AddPointToBounds(in->point, world.mins, world.maxs);
+        VectorCopy(in->point, out->position);
+    }
+
+    if (!bmod->isworld) return;
+
+    VectorSubtract(world.maxs, world.mins, world.size);
+
+    for (i = 0; i < 3; i++)
+    {
+        // Spread the mins / maxs by a pixel
+        world.mins[i] -= 1.0f;
+        world.maxs[i] += 1.0f;
+    }
 }
 
 /*
@@ -2228,30 +2267,95 @@ static void Mod_LoadEdges( model_t *mod, dbspmodel_t *bmod )
 
 	mod->numedges = bmod->numedges;
 
-	if( bmod->version == QBSP2_VERSION )
-	{
-		dedge32_t *in = bmod->edges32;
-		medge32_t *out;
-		mod->edges32 = out = Mem_Malloc( mod->mempool, bmod->numedges * sizeof( *out ));
+#ifdef XASH_DREAMCAST
+    size_t edge_size = (bmod->version == QBSP2_VERSION) ? 
+                       bmod->numedges * sizeof(medge32_t) : 
+                       bmod->numedges * sizeof(medge16_t);
+    size_t pvr_free = alloc_count_free(pvr_pool);
+    void *alloc_base = alloc_base_address(pvr_pool);
+    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
 
-		for( i = 0; i < bmod->numedges; i++, in++, out++ )
-		{
-			out->v[0] = in->v[0];
-			out->v[1] = in->v[1];
-		}
-	}
-	else
-	{
-		dedge_t	*in = bmod->edges;
-		medge16_t *out;
-		mod->edges16 = out = Mem_Malloc( mod->mempool, bmod->numedges * sizeof( *out ));
+    // Free existing PVR-allocated edges
+    if (bmod->version == QBSP2_VERSION && mod->edges32)
+    {
+        if ((uint8_t *)mod->edges32 >= (uint8_t *)alloc_base && 
+            (uint8_t *)mod->edges32 < (uint8_t *)alloc_base + alloc_size)
+        {
+            Con_Printf("Freeing old PVR edges32: %p\n", mod->edges32);
+            alloc_free(pvr_pool, mod->edges32);
+            mod->edges32 = NULL;
+            pvr_free = alloc_count_free(pvr_pool);
+        }
+    }
+    else if (mod->edges16)
+    {
+        if ((uint8_t *)mod->edges16 >= (uint8_t *)alloc_base && 
+            (uint8_t *)mod->edges16 < (uint8_t *)alloc_base + alloc_size)
+        {
+            Con_Printf("Freeing old PVR edges16: %p\n", mod->edges16);
+            alloc_free(pvr_pool, mod->edges16);
+            mod->edges16 = NULL;
+            pvr_free = alloc_count_free(pvr_pool);
+        }
+    }
 
-		for( i = 0; i < bmod->numedges; i++, in++, out++ )
-		{
-			out->v[0] = (word)in->v[0];
-			out->v[1] = (word)in->v[1];
-		}
-	}
+    Con_Printf("Loading edges: %zu bytes, PVR free: %zu bytes\n", edge_size, pvr_free);
+#endif
+
+    if (bmod->version == QBSP2_VERSION)
+    {
+        dedge32_t *in = bmod->edges32;
+        medge32_t *out;
+#ifdef XASH_DREAMCAST
+        mod->edges32 = out = (medge32_t *)alloc_malloc(pvr_pool, bmod->numedges * sizeof(medge32_t));
+        if (!mod->edges32)
+        {
+            Con_Printf("PVR alloc failed for edges32: %zu bytes, falling back to main RAM\n", 
+                      bmod->numedges * sizeof(medge32_t));
+            mod->edges32 = out = (medge32_t *)Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge32_t));
+            if (!mod->edges32)
+            {
+                Host_Error("Failed to allocate memory for edges32\n");
+                return;
+            }
+        }
+#else
+        mod->edges32 = out = Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge32_t));
+#endif
+
+        for (i = 0; i < bmod->numedges; i++, in++, out++)
+        {
+            out->v[0] = in->v[0];
+            out->v[1] = in->v[1];
+        }
+    }
+    else
+    {
+        dedge_t *in = bmod->edges;
+        medge16_t *out;
+#ifdef XASH_DREAMCAST
+        mod->edges16 = out = (medge16_t *)alloc_malloc(pvr_pool, bmod->numedges * sizeof(medge16_t));
+        if (!mod->edges16)
+        {
+            Con_Printf("PVR alloc failed for edges16: %zu bytes, falling back to main RAM\n", 
+                      bmod->numedges * sizeof(medge16_t));
+            mod->edges16 = out = (medge16_t *)Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge16_t));
+            if (!mod->edges16)
+            {
+                Host_Error("Failed to allocate memory for edges16\n");
+                return;
+            }
+        }
+#else
+        mod->edges16 = out = Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge16_t));
+#endif
+
+        for (i = 0; i < bmod->numedges; i++, in++, out++)
+        {
+            out->v[0] = (word)in->v[0];
+            out->v[1] = (word)in->v[1];
+        }
+    }
 }
 
 /*
@@ -2261,9 +2365,42 @@ Mod_LoadSurfEdges
 */
 static void Mod_LoadSurfEdges( model_t *mod, dbspmodel_t *bmod )
 {
-	mod->surfedges = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( dsurfedge_t ));
-	memcpy( mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof( dsurfedge_t ));
-	mod->numsurfedges = bmod->numsurfedges;
+#ifdef XASH_DREAMCAST
+    size_t surfedge_size = bmod->numsurfedges * sizeof(dsurfedge_t);
+    size_t pvr_free = alloc_count_free(pvr_pool);
+    void *alloc_base = alloc_base_address(pvr_pool);
+    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
+
+    // Free existing PVR-allocated surfedges
+    if (mod->surfedges && 
+        (uint8_t *)mod->surfedges >= (uint8_t *)alloc_base && 
+        (uint8_t *)mod->surfedges < (uint8_t *)alloc_base + alloc_size)
+    {
+        Con_Printf("Freeing old PVR surfedges: %p\n", mod->surfedges);
+        alloc_free(pvr_pool, mod->surfedges);
+        mod->surfedges = NULL;
+        pvr_free = alloc_count_free(pvr_pool);
+    }
+
+    Con_Printf("Loading surfedges: %zu bytes, PVR free: %zu bytes\n", surfedge_size, pvr_free);
+
+    mod->surfedges = (dsurfedge_t *)alloc_malloc(pvr_pool, surfedge_size);
+    if (!mod->surfedges)
+    {
+        Con_Printf("PVR alloc failed for surfedges: %zu bytes, falling back to main RAM\n", surfedge_size);
+        mod->surfedges = (dsurfedge_t *)Mem_Malloc(mod->mempool, surfedge_size);
+        if (!mod->surfedges)
+        {
+            Host_Error("Failed to allocate memory for surfedges\n");
+            return;
+        }
+    }
+#else
+    mod->surfedges = Mem_Malloc(mod->mempool, bmod->numsurfedges * sizeof(dsurfedge_t));
+#endif
+
+    memcpy(mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof(dsurfedge_t));
+    mod->numsurfedges = bmod->numsurfedges;
 }
 
 /*
@@ -2928,116 +3065,173 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
 	mextrasurf_t	*info;
 	msurface_t	*out;
 
-	mod->surfaces = out = Mem_Calloc( mod->mempool, bmod->numsurfaces * sizeof( msurface_t ));
-	info = Mem_Calloc( mod->mempool, bmod->numsurfaces * sizeof( mextrasurf_t ));
-	mod->numsurfaces = bmod->numsurfaces;
+#ifdef XASH_DREAMCAST
+	size_t surfaces_size = bmod->numsurfaces * sizeof(msurface_t);
+	size_t extrasurf_size = bmod->numsurfaces * sizeof(mextrasurf_t);
+	size_t pvr_free = alloc_count_free(pvr_pool);
+	size_t pvr_contiguous = alloc_count_continuous(pvr_pool);
+	void *alloc_base = alloc_base_address(pvr_pool);
+	size_t alloc_size = alloc_block_count(pvr_pool);
 
-	// predict samplecount based on bspversion
-	if( bmod->version == Q1BSP_VERSION || bmod->version == QBSP2_VERSION )
-		bmod->lightmap_samples = 1;
-	else bmod->lightmap_samples = 3;
+	Con_Printf("Loading surfaces: %zu bytes (main RAM), extrasurf: %zu bytes (PVR), PVR free: %zu bytes, contiguous: %zu bytes, numsurfaces: %d\n", 
+			surfaces_size, extrasurf_size, pvr_free, pvr_contiguous, bmod->numsurfaces);
 
-	for( i = 0; i < bmod->numsurfaces; i++, out++, info++ )
+	out = mod->surfaces = (msurface_t *)Mem_Calloc(mod->mempool, surfaces_size);
+	if (!mod->surfaces)
 	{
-		texture_t	*tex;
+		Host_Error("Failed to allocate memory for surfaces\n");
+		return;
+	}
 
-		// setup crosslinks between two parts of msurface_t
-		out->info = info;
-		info->surf = out;
-
-		if( bmod->version == QBSP2_VERSION )
+	// Try PVR allocation first
+	glDefragmentTextureMemory_KOS();
+	info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
+	if (!info)
+	{
+		// Allocation failed; check if defragmentation could help
+		if (extrasurf_size > pvr_contiguous && pvr_free > extrasurf_size)
 		{
-			dface32_t	*in = &bmod->surfaces32[i];
+			Con_Printf("PVR alloc failed (fragmented): free %zu > request %zu, contiguous %zu < request. Defragmenting...\n", 
+					pvr_free, extrasurf_size, pvr_contiguous);
+			glDefragmentTextureMemory_KOS();
+			pvr_free = alloc_count_free(pvr_pool);
+			pvr_contiguous = alloc_count_continuous(pvr_pool);
+			Con_Printf("Post-defrag: PVR free: %zu bytes, contiguous: %zu bytes\n", pvr_free, pvr_contiguous);
 
-			if(( in->firstedge + in->numedges ) > mod->numsurfedges )
-				continue;	// corrupted level?
-			out->firstedge = in->firstedge;
-			out->numedges = in->numedges;
-			if( in->side ) SetBits( out->flags, SURF_PLANEBACK );
-			out->plane = mod->planes + in->planenum;
-			out->texinfo = mod->texinfo + in->texinfo;
-
-			for( j = 0; j < MAXLIGHTMAPS; j++ )
-				out->styles[j] = in->styles[j];
-			lightofs = in->lightofs;
+			// Try allocation again after defrag
+			info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
 		}
-		else
-		{
-			dface_t	*in = &bmod->surfaces[i];
 
-			if(( in->firstedge + in->numedges ) > mod->numsurfedges )
+		// If still no success, fall back to main RAM
+		if (!info)
+		{
+			Con_Printf("PVR alloc failed for extrasurf: %zu bytes, falling back to main RAM\n", extrasurf_size);
+			info = (mextrasurf_t *)Mem_Calloc(mod->mempool, extrasurf_size);
+			if (!info)
 			{
-				Con_Reportf( S_ERROR "bad surface %i from %zu\n", i, bmod->numsurfaces );
-				continue;
+				Mem_Free(mod->surfaces);
+				mod->surfaces = NULL;
+				Host_Error("Failed to allocate memory for extrasurf\n");
+				return;
 			}
-
-			out->firstedge = in->firstedge;
-			out->numedges = in->numedges;
-			if( in->side ) SetBits( out->flags, SURF_PLANEBACK );
-			out->plane = mod->planes + in->planenum;
-			out->texinfo = mod->texinfo + in->texinfo;
-
-			for( j = 0; j < MAXLIGHTMAPS; j++ )
-				out->styles[j] = in->styles[j];
-			lightofs = in->lightofs;
 		}
+	}
+	else
+	{
+		Con_Printf("PVR alloc succeeded for extrasurf: %zu bytes\n", extrasurf_size);
+	}
+#else
+    mod->surfaces = out = Mem_Calloc(mod->mempool, bmod->numsurfaces * sizeof(msurface_t));
+    info = Mem_Calloc(mod->mempool, bmod->numsurfaces * sizeof(mextrasurf_t));
+#endif
 
-		tex = out->texinfo->texture;
+    mod->numsurfaces = bmod->numsurfaces;
 
-		if( !Q_strncmp( tex->name, "sky", 3 ))
-			SetBits( out->flags, SURF_DRAWSKY );
+    // Predict samplecount based on bspversion
+    if (bmod->version == Q1BSP_VERSION || bmod->version == QBSP2_VERSION)
+        bmod->lightmap_samples = 1;
+    else
+        bmod->lightmap_samples = 3;
 
-		if( Mod_LooksLikeWaterTexture( tex->name ))
-			SetBits( out->flags, SURF_DRAWTURB );
+    for (i = 0; i < bmod->numsurfaces; i++, out++, info++)
+    {
+        texture_t *tex;
 
-		if( !Q_strncmp( tex->name, "scroll", 6 ))
-			SetBits( out->flags, SURF_CONVEYOR );
+        // Setup crosslinks between two parts of msurface_t
+        out->info = info;
+        info->surf = out;
 
-		if( FBitSet( out->texinfo->flags, TEX_SCROLL ))
-			SetBits( out->flags, SURF_CONVEYOR );
+        if (bmod->version == QBSP2_VERSION)
+        {
+            dface32_t *in = &bmod->surfaces32[i];
 
-		// g-cont. added a combined conveyor-transparent
-		if( !Q_strncmp( tex->name, "{scroll", 7 ))
-			SetBits( out->flags, SURF_CONVEYOR|SURF_TRANSPARENT );
+            if ((in->firstedge + in->numedges) > mod->numsurfedges)
+                continue; // Corrupted level?
+            out->firstedge = in->firstedge;
+            out->numedges = in->numedges;
+            if (in->side) SetBits(out->flags, SURF_PLANEBACK);
+            out->plane = mod->planes + in->planenum;
+            out->texinfo = mod->texinfo + in->texinfo;
 
-		if( tex->name[0] == '{' )
-			SetBits( out->flags, SURF_TRANSPARENT );
+            for (j = 0; j < MAXLIGHTMAPS; j++)
+                out->styles[j] = in->styles[j];
+            lightofs = in->lightofs;
+        }
+        else
+        {
+            dface_t *in = &bmod->surfaces[i];
 
-		if( FBitSet( out->texinfo->flags, TEX_SPECIAL ))
-			SetBits( out->flags, SURF_DRAWTILED );
+            if ((in->firstedge + in->numedges) > mod->numsurfedges)
+            {
+                Con_Reportf(S_ERROR "bad surface %i from %zu\n", i, bmod->numsurfaces);
+                continue;
+            }
 
-		Mod_CalcSurfaceBounds( mod, out, bmod );
-		Mod_CalcSurfaceExtents( mod, out, bmod );
-		Mod_CreateFaceBevels( mod, out, bmod );
+            out->firstedge = in->firstedge;
+            out->numedges = in->numedges;
+            if (in->side) SetBits(out->flags, SURF_PLANEBACK);
+            out->plane = mod->planes + in->planenum;
+            out->texinfo = mod->texinfo + in->texinfo;
 
-		// grab the second sample to detect colored lighting
-		if( test_lightsize > 0 && lightofs != -1 )
-		{
-			if( lightofs > prev_lightofs && lightofs < next_lightofs )
-				next_lightofs = lightofs;
-		}
+            for (j = 0; j < MAXLIGHTMAPS; j++)
+                out->styles[j] = in->styles[j];
+            lightofs = in->lightofs;
+        }
 
-		// grab the first sample to determine lightmap size
-		if( lightofs != -1 && test_lightsize == -1 )
-		{
-			int	sample_size = Mod_SampleSizeForFace( out );
-			int	smax = (info->lightextents[0] / sample_size) + 1;
-			int	tmax = (info->lightextents[1] / sample_size) + 1;
-			int	lightstyles = 0;
+        tex = out->texinfo->texture;
 
-			test_lightsize = smax * tmax;
-			// count styles to right compute test_lightsize
-			for( j = 0; j < MAXLIGHTMAPS && out->styles[j] != 255; j++ )
-				lightstyles++;
+        if (!Q_strncmp(tex->name, "sky", 3))
+            SetBits(out->flags, SURF_DRAWSKY);
 
-			test_lightsize *= lightstyles;
-			prev_lightofs = lightofs;
-			next_lightofs = 99999999;
-		}
+        if (Mod_LooksLikeWaterTexture(tex->name))
+            SetBits(out->flags, SURF_DRAWTURB);
 
-#if !XASH_DEDICATED // TODO: Do we need subdivide on server?
-		if( FBitSet( out->flags, SURF_DRAWTURB ) && !Host_IsDedicated() )
-			ref.dllFuncs.GL_SubdivideSurface( mod, out ); // cut up polygon for warps
+        if (!Q_strncmp(tex->name, "scroll", 6))
+            SetBits(out->flags, SURF_CONVEYOR);
+
+        if (FBitSet(out->texinfo->flags, TEX_SCROLL))
+            SetBits(out->flags, SURF_CONVEYOR);
+
+        if (!Q_strncmp(tex->name, "{scroll", 7))
+            SetBits(out->flags, SURF_CONVEYOR | SURF_TRANSPARENT);
+
+        if (tex->name[0] == '{')
+            SetBits(out->flags, SURF_TRANSPARENT);
+
+        if (FBitSet(out->texinfo->flags, TEX_SPECIAL))
+            SetBits(out->flags, SURF_DRAWTILED);
+
+        Mod_CalcSurfaceBounds(mod, out, bmod);
+        Mod_CalcSurfaceExtents(mod, out, bmod);
+        Mod_CreateFaceBevels(mod, out, bmod);
+
+        // Grab the second sample to detect colored lighting
+        if (test_lightsize > 0 && lightofs != -1)
+        {
+            if (lightofs > prev_lightofs && lightofs < next_lightofs)
+                next_lightofs = lightofs;
+        }
+
+        // Grab the first sample to determine lightmap size
+        if (lightofs != -1 && test_lightsize == -1)
+        {
+            int sample_size = Mod_SampleSizeForFace(out);
+            int smax = (info->lightextents[0] / sample_size) + 1;
+            int tmax = (info->lightextents[1] / sample_size) + 1;
+            int lightstyles = 0;
+
+            test_lightsize = smax * tmax;
+            for (j = 0; j < MAXLIGHTMAPS && out->styles[j] != 255; j++)
+                lightstyles++;
+
+            test_lightsize *= lightstyles;
+            prev_lightofs = lightofs;
+            next_lightofs = 99999999;
+        }
+
+#if !XASH_DEDICATED
+        if (FBitSet(out->flags, SURF_DRAWTURB) && !Host_IsDedicated())
+            ref.dllFuncs.GL_SubdivideSurface(mod, out); // Cut up polygon for warps
 #endif
 	}
 
@@ -3528,73 +3722,108 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 	if( !bmod->lightdatasize )
 		return;
 
-	switch( bmod->lightmap_samples )
-	{
-	case 1:
-		if( !Mod_LoadLitfile( mod, "lit", bmod->lightdatasize * 3, &mod->lightdata, &bmod->lightdatasize ))
-		{
-			mod->lightdata = (color24 *)Mem_Malloc( mod->mempool, bmod->lightdatasize * sizeof( color24 ));
+#ifdef XASH_DREAMCAST
+    size_t lightdata_size = (bmod->lightmap_samples == 1) ? bmod->lightdatasize * sizeof(color24) : bmod->lightdatasize;
+    size_t pvr_free = alloc_count_free(pvr_pool);
+    size_t pvr_contiguous = alloc_count_continuous(pvr_pool); // Optional, for consistency
 
-			// expand the white lighting data
-			for( i = 0; i < bmod->lightdatasize; i++ )
-				mod->lightdata[i].r = mod->lightdata[i].g = mod->lightdata[i].b = bmod->lightdata[i];
-		}
-		else SetBits( mod->flags, MODEL_COLORED_LIGHTING );
-		break;
-	case 3:	// load colored lighting
-		mod->lightdata = Mem_Malloc( mod->mempool, bmod->lightdatasize );
-		memcpy( mod->lightdata, bmod->lightdata, bmod->lightdatasize );
-		SetBits( mod->flags, MODEL_COLORED_LIGHTING );
-		break;
-	default:
-		Host_Error( "%s: bad lightmap sample count %i\n", __func__, bmod->lightmap_samples );
-		break;
-	}
+    void *alloc_base = alloc_base_address(pvr_pool);
+    if (!alloc_base)
+    {
+        Con_Printf("PVR allocator not initialized!\n");
+        return;
+    }
+    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
 
-	Con_Reportf( "lighting: %s\n", FBitSet( mod->flags, MODEL_COLORED_LIGHTING ) ? "colored" : "monochrome" );
-
-#if !XASH_DREAMCAST
-	// not supposed to be load ?
-	if( FBitSet( host.features, ENGINE_LOAD_DELUXEDATA ))
-	{
-		Mod_LoadLightVecs( mod, bmod );
-		Mod_LoadShadowmap( mod, bmod );
-
-		if( bmod->isworld && bmod->deluxdatasize )
-			SetBits( world.flags, FWORLD_HAS_DELUXEMAP );
-	}
+    // Free existing PVR lightdata as a safeguard
+    if (mod->lightdata && 
+        (uint8_t *)mod->lightdata >= (uint8_t *)alloc_base && 
+        (uint8_t *)mod->lightdata < (uint8_t *)alloc_base + alloc_size)
+    {
+        alloc_free(pvr_pool, mod->lightdata);
+        mod->lightdata = NULL;
+        pvr_free = alloc_count_free(pvr_pool);
+    }
+    Con_Printf("%s: Loading lighting into VRAM: %zu bytes, PVR free: %zu bytes, contiguous: %zu bytes\n", __func__,
+               lightdata_size, pvr_free, pvr_contiguous);
 #endif
-	// setup lightdata pointers
-	if( !mod->lightdata )
-		return;
 
-	for( i = 0; i < mod->numsurfaces; i++ )
-	{
-		int lightofs;
+    switch (bmod->lightmap_samples)
+    {
+    case 1:
+        if (!Mod_LoadLitfile(mod, "lit", bmod->lightdatasize * 3, &mod->lightdata, &bmod->lightdatasize))
+        {
+#ifdef XASH_DREAMCAST
+            mod->lightdata = (color24 *)alloc_malloc(pvr_pool, bmod->lightdatasize * sizeof(color24));
+            if (!mod->lightdata)
+            {
+                Con_Printf("PVR alloc failed: %zu bytes, falling back to main RAM\n", bmod->lightdatasize * sizeof(color24));
+					glDefragmentTextureMemory_KOS();
+					mod->lightdata = (color24 *)alloc_malloc(pvr_pool, bmod->lightdatasize * sizeof(color24));
 
-		if( bmod->version == QBSP2_VERSION )
-			lightofs = bmod->surfaces32[i].lightofs;
-		else
-			lightofs = bmod->surfaces[i].lightofs;
-
-		if( lightofs != -1 )
-		{
-			int offset = lightofs / bmod->lightmap_samples;
-
-			// NOTE: we divide offset by three because lighting and deluxemap keep their pointers
-			// into three-bytes structs and shadowmap just monochrome
-			mod->surfaces[i].samples = mod->lightdata + offset;
-#if !XASH_DREAMCAST
-			// if deluxemap is present setup it too
-			if( bmod->deluxedata_out )
-				mod->surfaces[i].info->deluxemap = bmod->deluxedata_out + offset;
-
-			// will be used by mods
-			if( bmod->shadowdata_out )
-				mod->surfaces[i].info->shadowmap = bmod->shadowdata_out + offset;
+                if (!mod->lightdata)
+                {
+                    Host_Error("Failed to allocate memory for lightdata\n");
+                    return;
+                }
+            }
+#else
+            mod->lightdata = (color24 *)Mem_Malloc(mod->mempool, bmod->lightdatasize * sizeof(color24));
 #endif
-		}
-	}
+            for (i = 0; i < bmod->lightdatasize; i++)
+                mod->lightdata[i].r = mod->lightdata[i].g = mod->lightdata[i].b = bmod->lightdata[i];
+        }
+        else
+            SetBits(mod->flags, MODEL_COLORED_LIGHTING);
+        break;
+
+    case 3:
+#ifdef XASH_DREAMCAST
+            mod->lightdata = alloc_malloc(pvr_pool, bmod->lightdatasize);
+            if (!mod->lightdata)
+            {
+                Con_Printf("%s: PVR alloc failed: %zu bytes, falling back to main RAM\n", __func__, bmod->lightdatasize);
+				glDefragmentTextureMemory_KOS();
+                mod->lightdata = (color24 *)alloc_malloc(pvr_pool, bmod->lightdatasize);
+                if (!mod->lightdata)
+                {
+                    Con_DPrintf("%s: Failed to defragment, allocating lightdata in RAM\n", __func__);
+					mod->lightdata = Mem_Malloc(mod->mempool, bmod->lightdatasize);
+                    return;
+                }
+            }
+#else
+            mod->lightdata = Mem_Malloc(mod->mempool, bmod->lightdatasize);
+#endif
+            memcpy(mod->lightdata, bmod->lightdata, bmod->lightdatasize);
+            SetBits(mod->flags, MODEL_COLORED_LIGHTING);
+            break;
+
+    default:
+        Host_Error("%s: bad lightmap sample count %i\n", __func__, bmod->lightmap_samples);
+        break;
+    }
+
+    Con_Reportf("lighting: %s\n", FBitSet(mod->flags, MODEL_COLORED_LIGHTING) ? "colored" : "monochrome");
+
+    if (!mod->lightdata)
+        return;
+
+    for (i = 0; i < mod->numsurfaces; i++)
+    {
+        int lightofs;
+
+        if (bmod->version == QBSP2_VERSION)
+            lightofs = bmod->surfaces32[i].lightofs;
+        else
+            lightofs = bmod->surfaces[i].lightofs;
+
+        if (lightofs != -1)
+        {
+            int offset = lightofs / bmod->lightmap_samples;
+            mod->surfaces[i].samples = mod->lightdata + offset;
+        }
+    }
 }
 
 /*

@@ -25,6 +25,9 @@ GNU General Public License for more details.
 #include "enginefeatures.h"
 #include "client.h"
 #include "server.h"
+#if XASH_DREAMCAST
+#include "alloc/alloc.h"
+#endif
 
 static model_info_t	mod_crcinfo[MAX_MODELS];
 static model_t	mod_known[MAX_MODELS];
@@ -105,25 +108,87 @@ void Mod_FreeModel( model_t *mod )
 	if( !mod || !COM_CheckStringEmpty( mod->name ) )
 		return;
 
-	if( mod->type != mod_brush || mod->name[0] != '*' )
-	{
-		Mod_FreeUserData( mod );
-		Mem_FreePool( &mod->mempool );
-	}
+#ifdef XASH_DREAMCAST
+		extern uint8_t *pvr_pool; // Defined in zone.c
+		void *alloc_base = alloc_base_address(pvr_pool);
+		size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
 
-	if( mod->type == mod_brush && FBitSet( mod->flags, MODEL_WORLD ) )
-	{
-		world.version = 0;
-		world.shadowdata = NULL;
-		world.deluxedata = NULL;
+		// Free PVR-allocated lightdata
+		if (mod->lightdata && 
+			(uint8_t *)mod->lightdata >= (uint8_t *)alloc_base && 
+			(uint8_t *)mod->lightdata < (uint8_t *)alloc_base + alloc_size)
+		{
+			alloc_free(pvr_pool, mod->lightdata);
+			mod->lightdata = NULL;
+		}
+		// Free PVR-allocated vertexes
+		if (mod->vertexes && 
+			(uint8_t *)mod->vertexes >= (uint8_t *)alloc_base && 
+			(uint8_t *)mod->vertexes < (uint8_t *)alloc_base + alloc_size)
+		{
+			alloc_free(pvr_pool, mod->vertexes);
+			mod->vertexes = NULL;
+		}
+	
+		// Free PVR-allocated edges
+		if (mod->edges32 && 
+			(uint8_t *)mod->edges32 >= (uint8_t *)alloc_base && 
+			(uint8_t *)mod->edges32 < (uint8_t *)alloc_base + alloc_size)
+		{
+			alloc_free(pvr_pool, mod->edges32);
+			mod->edges32 = NULL;
+		}
+		else if (mod->edges16 && 
+				 (uint8_t *)mod->edges16 >= (uint8_t *)alloc_base && 
+				 (uint8_t *)mod->edges16 < (uint8_t *)alloc_base + alloc_size)
+		{
+			alloc_free(pvr_pool, mod->edges16);
+			mod->edges16 = NULL;
+		}
+	
+		// Free PVR-allocated surfedges
+		if (mod->surfedges && 
+			(uint8_t *)mod->surfedges >= (uint8_t *)alloc_base && 
+			(uint8_t *)mod->surfedges < (uint8_t *)alloc_base + alloc_size)
+		{
+			alloc_free(pvr_pool, mod->surfedges);
+			mod->surfedges = NULL;
+		}
+		if (mod->surfaces)
+		{
+			for (int i = 0; i < mod->numsurfaces; i++)
+			{
+				mextrasurf_t *info = mod->surfaces[i].info;
+				if (info && 
+					(uint8_t *)info >= (uint8_t *)alloc_base && 
+					(uint8_t *)info < (uint8_t *)alloc_base + alloc_size)
+				{
+					alloc_free(pvr_pool, info);
+					mod->surfaces[i].info = NULL;
+				}
+			}
+			// Note: mod->surfaces itself is in main RAM, freed by Mem_FreePool
+		}
+		
+#endif
 
-		// data already freed by Mem_FreePool above
-		world.hull_models = NULL;
-		world.compressed_phs = NULL;
-		world.phsofs = NULL;
-	}
+    if (mod->type != mod_brush || mod->name[0] != '*')
+    {
+        Mod_FreeUserData(mod);
+        Mem_FreePool(&mod->mempool); // Frees main RAM allocations
+    }
 
-	memset( mod, 0, sizeof( *mod ));
+    if (mod->type == mod_brush && FBitSet(mod->flags, MODEL_WORLD))
+    {
+        world.version = 0;
+        world.shadowdata = NULL;
+        world.deluxedata = NULL;
+        world.hull_models = NULL;
+        world.compressed_phs = NULL;
+        world.phsofs = NULL;
+    }
+
+    memset(mod, 0, sizeof(*mod));
 }
 
 /*
