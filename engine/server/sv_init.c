@@ -1155,9 +1155,10 @@ qboolean SV_SpawnServer( const char *mapname, const char *startspot, qboolean ba
 		SV_InitEdict( ent );
 	}
 
+#if !XASH_DREAMCAST
 	// heartbeats will always be sent to the id master
 	NET_MasterClear();
-
+#endif
 	// get actual movevars
 	SV_UpdateMovevars( true );
 

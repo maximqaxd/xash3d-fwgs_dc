@@ -697,9 +697,10 @@ void Host_ServerFrame( void )
 
 	// clear edict flags for next frame
 	SV_PrepWorldFrame ();
-
+#if !XASH_DREAMCAST
 	// send a heartbeat to the master if needed
 	NET_MasterHeartbeat ();
+#endif
 }
 
 //============================================================================
@@ -719,12 +720,13 @@ void SV_AddToMaster( netadr_t from, sizebuf_t *msg )
 	double last_heartbeat;
 	const int len = sizeof( s );
 
+#if !XASH_DREAMCAST
 	if( !NET_GetMaster( from, &heartbeat_challenge, &last_heartbeat ))
 	{
 		Con_Printf( S_WARN "unexpected master server info query packet from %s\n", NET_AdrToString( from ));
 		return;
 	}
-
+#endif
 	if( last_heartbeat + sv_master_response_timeout.value < host.realtime )
 	{
 		Con_Printf( S_WARN "unexpected master server info query packet (too late? try increasing sv_master_response_timeout value)\n");
@@ -1104,10 +1106,10 @@ void SV_Shutdown( const char *finalmsg )
 
 	if( svs.clients )
 		SV_FinalMessage( finalmsg, false );
-
+#if !XASH_DREAMCAST
 	if( public_server.value && svs.maxclients != 1 )
 		NET_MasterShutdown();
-
+#endif
 	NET_Config( false, false );
 	SV_DeactivateServer();
 	CL_Drop();

@@ -386,7 +386,11 @@ static void SV_HazardCourse_f( void )
 		Cbuf_AddTextf( "wait; movie %s\n", GI->trainmap );
 		Host_EndGame( true, DEFAULT_ENDGAME_MESSAGE );
 	}
+#if XASH_DREAMCAST
+	else COM_NewGame( "t0a0" );
+#else
 	else COM_NewGame( GI->trainmap );
+#endif
 }
 
 /*
@@ -713,7 +717,9 @@ SV_Heartbeat_f
 */
 static void SV_Heartbeat_f( void )
 {
+#if !XASH_DREAMCAST
 	NET_MasterClear();
+#endif
 }
 
 /*
