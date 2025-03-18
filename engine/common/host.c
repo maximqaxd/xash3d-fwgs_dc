@@ -801,8 +801,9 @@ void Host_Frame( double time )
 	Host_GetCommands (); // dedicated in
 	Host_ServerFrame (); // server frame
 	Host_ClientFrame (); // client frame
+#if !XASH_DREAMCAST
 	HTTP_Run();			 // both server and client
-
+#endif
 	host.framecount++;
 	host.pureframetime = Sys_DoubleTime() - t1;
 }
@@ -1240,7 +1241,9 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 
 	Mod_Init();
 	NET_Init();
+#if !XASH_DREAMCAST
 	NET_InitMasters();
+#endif
 	Netchan_Init();
 
 	// allow to change game from the console
@@ -1257,7 +1260,9 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	SV_Init();
 	CL_Init();
 
+#if !XASH_DREAMCAST
 	HTTP_Init();
+#endif
 	ID_Init();
 	SoundList_Init();
 
@@ -1398,7 +1403,9 @@ void Host_ShutdownWithReason( const char *reason )
 	SoundList_Shutdown();
 	Mod_Shutdown();
 	NET_Shutdown();
+#if !XASH_DREAMCAST
 	HTTP_Shutdown();
+#endif
 	Host_FreeCommon();
 	Platform_Shutdown();
 #if !XASH_DREAMCAST
