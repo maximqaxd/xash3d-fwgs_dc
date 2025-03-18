@@ -97,7 +97,7 @@ GNU General Public License for more details.
 	#define MULTIPLAYER_BACKUP		4	
 	#define SINGLEPLAYER_BACKUP		4
 	#define NUM_PACKET_ENTITIES		16
-	#define MAX_CUSTOM_BASELINES    8  
+	#define MAX_CUSTOM_BASELINES    4  
 	#define NET_MAX_FRAGMENT		8192
 #else
 #if XASH_LOW_MEMORY == 2
