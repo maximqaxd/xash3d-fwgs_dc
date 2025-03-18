@@ -1422,8 +1422,9 @@ void Host_WriteConfig( void )
 		Host_FinalizeConfig( f, "config.cfg" );
 	}
 	else Con_DPrintf( S_ERROR "Couldn't write config.cfg.\n" );
-
+#if !XASH_DREAMCAST
 	NET_SaveMasters();
+#endif
 }
 
 /*
