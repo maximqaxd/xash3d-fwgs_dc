@@ -16,7 +16,6 @@ XASH_CLIENT_OBJS = \
 	engine/client/cl_game.o \
 	engine/client/cl_gameui.o \
 	engine/client/cl_main.o \
-	engine/client/cl_netgraph.o \
 	engine/client/cl_parse.o \
 	engine/client/cl_pmove.o \
 	engine/client/cl_render.o \
@@ -38,6 +37,7 @@ XASH_CLIENT_OBJS = \
 	engine/client/s_load.o \
 	engine/client/s_main.o \
 	engine/client/s_stream.o \
+	engine/client/s_vox.o \
 	engine/client/s_utils.o \
 	engine/client/titles.o \
 	engine/client/vid_common.o \
@@ -65,7 +65,6 @@ XASH_OBJS = \
 	engine/common/ipv6text.o \
 	engine/common/launcher.o \
 	engine/common/lib_common.o \
-	engine/common/masterlist.o \
 	engine/common/mod_bmodel.o\
 	engine/common/mod_sprite.o \
 	engine/common/mod_studio.o \
@@ -75,7 +74,6 @@ XASH_OBJS = \
 	engine/common/net_chan.o \
 	engine/common/net_encode.o \
 	engine/common/net_ws.o \
-	engine/common/net_http.o \
 	engine/common/pm_surface.o \
 	engine/common/pm_trace.o \
 	engine/common/soundlib/snd_utils.o \
@@ -106,7 +104,6 @@ XASH_SERVER_OBJS =	\
 	engine/server/sv_move.o \
 	engine/server/sv_phys.o \
 	engine/server/sv_pmove.o \
-	engine/server/sv_query.o \
 	engine/server/sv_save.o \
 	engine/server/sv_world.o \
 	
@@ -135,6 +132,7 @@ INCLUDE = -I. \
 -I3rdparty/MultiEmulator/include \
 -I$(KOS_PORTS)/include/opus \
 -I3rdparty/dreamcast/GLdc/include/GL \
+-I3rdparty/dreamcast/GLdc/GL \
 -I3rdparty/dreamcast/FatFs/include \
 -I$(KOS_PORTS)/include/bzlib 
 
@@ -147,12 +145,12 @@ DEFINES += -DXASH_BUILD_COMMIT=\"$(GIT_VERSION)\" \
           -DXASH_BUILD_BRANCH=\"$(GIT_BRANCH)\" \
           -DXASH_BUILD_COMMIT_DATE=\"$(GIT_COMMIT_DATE)\"
 		  
-FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -freorder-blocks-algorithm=simple -flto=auto -Wno-implicit-function-declaration -Wno-int-conversion
+FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -freorder-blocks-algorithm=simple -flto=auto  -Wno-implicit-function-declaration -Wno-int-conversion
 CFLAGS +=  $(INCLUDE) $(DEFINES) $(FLAGS)  
 # -O3 math and phys
-#public/matrixlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions  -ffast-math -ffp-contract=fast
-#public/xash3d_mathlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
-#engine/common/pm_surface.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
-#engine/common/pm_trace.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
-#engine/client/cl_pmove.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
-#engine/client/cl_frame.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+public/matrixlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions  -ffast-math -ffp-contract=fast
+public/xash3d_mathlib.o: FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/common/pm_surface.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/common/pm_trace.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/client/cl_pmove.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast
+engine/client/cl_frame.o : FLAGS = -O3 -fno-omit-frame-pointer -fno-pie -fno-common -fno-strict-aliasing -fno-stack-protector -mrelax -ffunction-sections -fdata-sections -fno-exceptions -ffast-math -ffp-contract=fast

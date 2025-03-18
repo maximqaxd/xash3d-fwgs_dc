@@ -11,7 +11,7 @@ include engine.mk
 # Module paths and lib names
 FILESYSTEM_DIR = filesystem
 REF_GL_DIR = ref/gl
-MAINUI_DIR = mainui_cpp
+MAINUI_DIR = libs/mainui_dc
 CL_DLL_DIR = ../hlsdk-portable_dc/cl_dll
 SV_DLL_DIR = ../hlsdk-portable_dc/dlls
 
@@ -25,15 +25,15 @@ SV_DLL_LIB = $(SV_DLL_DIR)/libhl.a
 OBJS =  $(XASH_CLIENT_OBJS) $(XASH_OBJS) $(XASH_SERVER_OBJS) $(XASH_PLATFORM_OBJS)
 
 LIBS = -L../hlsdk-portable_dc \
-	   -L3rdparty/dreamcast/GLdc/build \
+	   -L3rdparty/dreamcast/GLdc/dcbuild \
        -L$(KOS_BASE)/addons/lib/$(KOS_ARCH) \
-       -L$(KOS_PORTS)/lib \
        -L$(FILESYSTEM_DIR) \
        -L$(REF_GL_DIR) \
        -L$(MAINUI_DIR) \
 	   -lfatfs \
        -lfilesystem_stdio \
        -lhl \
+	   -lmenu\
 	   -lcl_dll \
        -lref_gl \
        -l:libGL.a \
@@ -53,10 +53,13 @@ $(REF_GL_LIB):
 $(SV_DLL_LIB):
 	$(MAKE) -C $(SV_DLL_DIR)
 
+$(CL_DLL_LIB):
+	$(MAKE) -C $(CL_DLL_DIR)
+
 # The rm-elf step is to remove the target before building, to force the
 # re-creation of the rom disk.
 
-all: $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(TARGET) IP.BIN $(PROJECT_NAME).iso $(PROJECT_NAME).cdi
+all: $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN $(PROJECT_NAME).iso $(PROJECT_NAME).cdi
 
 include $(KOS_BASE)/Makefile.rules
 
@@ -65,6 +68,8 @@ clean:
 	-rm -f $(TARGET)
 	$(MAKE) -C $(FILESYSTEM_DIR) clean
 	$(MAKE) -C $(REF_GL_DIR) clean
+	$(MAKE) -C $(SV_DLL_DIR) clean
+	$(MAKE) -C $(CL_DLL_DIR) clean
 	-rm -f $(TARGET).bin
 	-rm -f $(PROJECT_NAME).cdi
 	-rm -f 1ST_READ.BIN
@@ -73,7 +78,7 @@ clean:
 	-rm -f $(PROJECT_NAME).cdi
 	
 
-$(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) 
+$(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
 	kos-c++ -o $(TARGET) $(OBJS) $(LIBS)  -Wl,--gc-sections -fwhole-program -Wl,--build-id=none
 
 
@@ -98,7 +103,7 @@ $(PROJECT_NAME).iso: 1ST_READ_ISO.BIN
 	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso build
 
 $(PROJECT_NAME).cdi: 1ST_READ.BIN
-	./mkdcdisc -e xash -D build -o Xash3D.cdi
+	./mkdcdisc -e xash -D build -p build/IP.BIN -N -o Xash3D.cdi
 
 .PHONY: all clean 1ST_READ.BIN IP.BIN cdi
 
