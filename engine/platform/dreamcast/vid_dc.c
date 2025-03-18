@@ -51,7 +51,7 @@ int GL_SetAttribute(int attr, int val)
             val = 5; 
             break;
         case REF_GL_ALPHA_SIZE:
-            val = 0; 
+            val = 1; 
             break;
         case REF_GL_DOUBLEBUFFER:
             val = 1; 
@@ -91,7 +91,7 @@ int GL_GetAttribute(int attr, int *val)
             value = 5; 
             break;
         case REF_GL_ALPHA_SIZE:
-            value = 0; 
+            value = 1; 
             break;
         case REF_GL_DOUBLEBUFFER:
             value = 1; 
