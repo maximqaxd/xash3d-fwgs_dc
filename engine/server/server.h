@@ -156,7 +156,9 @@ typedef struct server_s
 	consistency_t	consistency_list[MAX_MODELS];
 #endif
 	resource_t	resources[MAX_RESOURCES];
+#if !XASH_DREAMCAST
 	int		num_consistency;	// typically check model bounds on this
+#endif
 	int		num_resources;
 
 	sv_baseline_t	instanced[MAX_CUSTOM_BASELINES];	// instanced baselines

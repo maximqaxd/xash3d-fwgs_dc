@@ -485,9 +485,10 @@ static void SV_ConnectClient( netadr_t from )
 		if( cl->state >= cs_connected ) count++;
 
 	Log_Printf( "\"%s<%i><%i><>\" connected, address \"%s\"\n", newcl->name, newcl->userid, i, NET_AdrToString( newcl->netchan.remote_address ));
-
+#if !XASH_DREAMCAST
 	if( count == 1 || count == svs.maxclients )
 		NET_MasterClear();
+#endif
 }
 
 /*
@@ -553,9 +554,10 @@ edict_t *GAME_EXPORT SV_FakeConnect( const char *netname )
 	cl->connection_started = host.realtime;
 	cl->state = cs_spawned;
 
+#if !XASH_DREAMCAST
 	if( count == 1 || count == svs.maxclients )
 		NET_MasterClear();
-
+#endif
 	return cl->edict;
 }
 
@@ -675,8 +677,10 @@ void SV_DropClient( sv_client_t *cl, qboolean crash )
 			break;
 	}
 
+#if !XASH_DREAMCAST
 	if( i == svs.maxclients )
 		NET_MasterClear();
+#endif
 }
 
 /*
@@ -949,9 +953,10 @@ static void SV_ConnectNatClient( netadr_t from )
 {
 	netadr_t to;
 
+#if !XASH_DREAMCAST
 	if( !sv_nat.value || !NET_IsMasterAdr( from ))
 		return;
-
+#endif
 	if( !NET_StringToAdr( Cmd_Argv( 1 ), &to ))
 		return;
 
@@ -3176,7 +3181,9 @@ void SV_ConnectionlessPacket( netadr_t from, sizebuf_t *msg )
 
 	if( !Q_strcmp( pcmd, A2S_GOLDSRC_INFO ) || pcmd[0] == A2S_GOLDSRC_PLAYERS || pcmd[0] == A2S_GOLDSRC_RULES )
 	{
+#if !XASH_DREAMCAST
 		SV_SourceQuery_HandleConnnectionlessPacket( pcmd, from );
+#endif
 	}
 	else if( !Q_strcmp( pcmd, A2A_NETINFO ))
 	{
