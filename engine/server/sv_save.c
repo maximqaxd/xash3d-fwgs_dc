@@ -34,7 +34,7 @@ half-life implementation of saverestore system
 #define CLIENT_SAVEGAME_VERSION	0x0067				// Version 0.67
 
 #if XASH_DREAMCAST
-#define SAVE_HEAPSIZE		0x020000				// reserve 200kb for now
+#define SAVE_HEAPSIZE		0x040000				// reserve 400kb for now
 #else
 #define SAVE_HEAPSIZE		0x400000				// reserve 4Mb for now
 #endif
@@ -1720,18 +1720,31 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	COM_FixSlashes( name );
 
 	// output to disk
+#if !XASH_DREAMCAST
 	if( !Q_stricmp( pSaveName, "quick" ))
 		AgeSaveList( pSaveName, GI->quicksave_aged_count );
 	else if( !Q_stricmp( pSaveName, "autosave" ))
 		AgeSaveList( pSaveName, GI->autosave_aged_count );
+#endif
 
+#if XASH_DREAMCAST
+	char		path[MAX_SYSPATH];
+	Q_snprintf( path, sizeof( path ), "/vmu/a1/%s", name);
+	if(( pFile = FS_SysOpen( path, "wb")) == NULL )
+	{
+		printf("Couldn't open %s\n", path);
+		// something bad is happens
+		SaveFinish( pSaveData );
+		return false;
+	}
+#else
 	if(( pFile = FS_Open( name, "wb", true )) == NULL )
 	{
 		// something bad is happens
 		SaveFinish( pSaveData );
 		return false;
 	}
-
+#endif
 	// pending the preview image for savegame
 	Cbuf_AddTextf( "saveshot \"%s\"\n", pSaveName );
 	Con_Printf( "Saving game to %s...\n", name );
@@ -2111,7 +2124,13 @@ qboolean SV_LoadGame( const char *pPath )
 		return false;
 
 	svs.initialized = true;
+#if XASH_DREAMCAST
+	char		path[MAX_SYSPATH];
+	Q_snprintf( path, sizeof( path ), "/vmu/a1/%s", pPath);
+	pFile = FS_SysOpen( path, "rb", true );
+#else
 	pFile = FS_Open( pPath, "rb", true );
+#endif
 	if( pFile )
 	{
 		SV_ClearGameState();
@@ -2271,7 +2290,13 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 	string	mapName, description;
 	dc_file_t	*f;
 
+#if XASH_DREAMCAST
+	char		path[MAX_SYSPATH];
+	Q_snprintf( path, sizeof( path ), "/vmu/a1/%s", savename);
+	if(( f = FS_SysOpen( path, "rb")) == NULL )
+#else
 	if(( f = FS_Open( savename, "rb", true )) == NULL )
+#endif
 	{
 		// just not exist - clear comment
 		comment[0] = '\0';
@@ -2353,9 +2378,19 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 	else pTokenList = NULL;
 
 	// short, short (size, index of field name)
+#if XASH_DREAMCAST /* FIX Unaligned access! */
+	short offpd;
+	memcpy(&offpd, pData, sizeof( short ) );
+	nFieldSize = offpd;
+	pData += sizeof( short );
+
+	memcpy(&offpd, pData, sizeof( short ));
+	pFieldName = pTokenList[offpd];
+#else	
 	nFieldSize = *(short *)pData;
 	pData += sizeof( short );
 	pFieldName = pTokenList[*(short *)pData];
+#endif
 
 	if( Q_stricmp( pFieldName, "GameHeader" ))
 	{
@@ -2368,7 +2403,11 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 
 	// int (fieldcount)
 	pData += sizeof( short );
+#if XASH_DREAMCAST /* FIX Unaligned access! */
+	memcpy(&nNumberOfFields, pData, sizeof(int));
+#else
 	nNumberOfFields = (int)*pData;
+#endif	
 	pData += nFieldSize;
 
 	// each field is a short (size), short (index of name), binary string of "size" bytes (data)
@@ -2379,11 +2418,21 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 		// Size
 		// szName
 		// Actual Data
+#if XASH_DREAMCAST /* FIX Unaligned access! */
+		memcpy(&offpd, pData, sizeof( short ) );
+		nFieldSize = offpd;
+		pData += sizeof( short );
+		
+		memcpy(&offpd, pData, sizeof( short ));
+		pFieldName = pTokenList[offpd];
+		pData += sizeof( short );
+#else
 		nFieldSize = *(short *)pData;
 		pData += sizeof( short );
 
 		pFieldName = pTokenList[*(short *)pData];
 		pData += sizeof( short );
+#endif
 
 		size = Q_min( nFieldSize, MAX_STRING );
 
