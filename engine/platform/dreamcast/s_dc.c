@@ -26,6 +26,7 @@ qboolean SNDDMA_Init(void)
 {
 
 	snd_init();
+	snd_stream_init_ex(4, music_buffer);
 	dma.format.speed    = SOUND_DMA_SPEED;
 	dma.format.channels = 2;
 	dma.format.width    = 2;
@@ -40,6 +41,7 @@ qboolean SNDDMA_Init(void)
 void SNDDMA_Shutdown(void)
 {
     snd_shutdown();
+	snd_stream_shutdown(); 
 }
 
 void SNDDMA_Submit(void)
