@@ -55,9 +55,12 @@ GNU General Public License for more details.
 // path to sound files
 #define DEFAULT_SOUNDPATH		"sound/"
 
+#if XASH_DREAMCAST
+#define DEFAULT_SAVE_DIRECTORY	""
+#else
 // path to saved games
 #define DEFAULT_SAVE_DIRECTORY	"save/"
-
+#endif
 // path to download games
 #define DEFAULT_DOWNLOADED_DIRECTORY "downloaded/"
 
