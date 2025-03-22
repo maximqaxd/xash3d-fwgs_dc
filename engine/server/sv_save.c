@@ -502,7 +502,11 @@ static void ClearSaveDir( void )
 	int	i;
 
 	// just delete all HL? files
+#if XASH_DREAMCAST
+	t = FS_Search( va( "%s*.HL?", DEFAULT_SAVE_DIRECTORY ), true, true );
+#else
 	t = FS_Search( DEFAULT_SAVE_DIRECTORY "*.HL?", true, true );
+#endif
 	if( !t ) return; // already empty
 	for( i = 0; i < t->numfilenames; i++ )
 		FS_Delete( t->filenames[i] );
@@ -655,7 +659,13 @@ static void DirectoryCopy( const char *pPath, dc_file_t *pFile )
 
 	for( i = 0; i < t->numfilenames; i++ )
 	{
-		pCopy = FS_Open( t->filenames[i], "rb", true );
+#if XASH_DREAMCAST
+		char ramPath[MAX_SYSPATH];
+		Q_snprintf(ramPath, sizeof(ramPath), "/ram/%s", t->filenames[i]);
+        pCopy = FS_SysOpen(ramPath, "rb");
+#else
+        pCopy = FS_Open(t->filenames[i], "rb", true);
+#endif
 		fileSize = FS_FileLength( pCopy );
 
 		memset( szName, 0, sizeof( szName )); // clearing the string to prevent garbage in output file
@@ -687,10 +697,13 @@ static void DirectoryExtract( dc_file_t *pFile, int fileCount )
 		// filename can only be as long as a map name + extension
 		FS_Read( pFile, szName, MAX_OSPATH );
 		FS_Read( pFile, &fileSize, sizeof( int ));
-		Q_snprintf( fileName, sizeof( fileName ), DEFAULT_SAVE_DIRECTORY "%s", szName );
+		Q_snprintf( fileName, sizeof( fileName ), "/ram/%s", szName );
 		COM_FixSlashes( fileName );
-
+#if XASH_DREAMCAST
+		pCopy = FS_SysOpen( fileName, "wb");
+#else
 		pCopy = FS_Open( fileName, "wb", true );
+#endif
 		FS_FileCopy( pCopy, pFile, fileSize );
 		FS_Close( pCopy );
 	}
@@ -2127,7 +2140,7 @@ qboolean SV_LoadGame( const char *pPath )
 #if XASH_DREAMCAST
 	char		path[MAX_SYSPATH];
 	Q_snprintf( path, sizeof( path ), "/vmu/a1/%s", pPath);
-	pFile = FS_SysOpen( path, "rb", true );
+	pFile = FS_SysOpen( path, "rb" );
 #else
 	pFile = FS_Open( pPath, "rb", true );
 #endif
@@ -2249,9 +2262,14 @@ const char *SV_GetLatestSave( void )
 	int		newest = 0, ft;
 	int		i, found = 0;
 	search_t		*t;
+
+#if XASH_DREAMCAST
+	if(( t = FS_Search( va( "%s*.sav", DEFAULT_SAVE_DIRECTORY ), true, true )) == NULL )
+	return NULL;
+#else
 	if(( t = FS_Search( "DEFAULT_SAVE_DIRECTORY" "*.sav" , true, true )) == NULL )
 		return NULL;
-
+#endif
 	for( i = 0; i < t->numfilenames; i++ )
 	{
 		ft = FS_FileTime( t->filenames[i], true );
