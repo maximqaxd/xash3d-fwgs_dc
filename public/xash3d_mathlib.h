@@ -226,7 +226,7 @@ qboolean Matrix4x4_Invert_Full( matrix4x4 out, const matrix4x4 in1 );
 // horrible cast but helps not breaking strict aliasing in mathlib
 // as union type punning should be fine in C but not in C++
 // so don't carry over this to C++ code
-#ifndef __cplusplus
+#if !defined(__cplusplus) || defined(XASH_DREAMCAST)
 typedef union
 {
 	float fl;
@@ -261,9 +261,6 @@ static inline float UintAsFloat( uint32_t u )
 }
 #endif // __cplusplus
 
-#if XASH_DREAMCAST
-#define IS_NAN isnan
-#else
 // isnan implementation is broken on IRIX as reported in https://github.com/FWGS/xash3d-fwgs/pull/1211
 #if defined( XASH_IRIX ) || !defined( isnan )
 static inline int IS_NAN( float x )
@@ -273,7 +270,6 @@ static inline int IS_NAN( float x )
 }
 #else
 #define IS_NAN isnan
-#endif
 #endif
 
 static inline float anglemod( float a )
