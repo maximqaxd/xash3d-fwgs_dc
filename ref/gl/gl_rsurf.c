@@ -1128,7 +1128,7 @@ static void R_BlendLightmaps( void )
 	else pglDisable( GL_BLEND );
 
 	// lightmapped solid surfaces
-	pglDepthMask( GL_TRUE );
+	pglDepthMask( GL_FALSE );
 	pglDepthFunc( GL_EQUAL );
 	pglDisable( GL_ALPHA_TEST );
 	if( gl_overbright.value )
@@ -1231,7 +1231,7 @@ static void R_BlendLightmaps( void )
 	}
 
 	pglDisable( GL_BLEND );
-	pglDepthMask( GL_FALSE );
+	pglDepthMask( GL_TRUE );
 	pglDepthFunc( GL_LEQUAL );
 	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
 	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
