@@ -20,6 +20,10 @@ GNU General Public License for more details.
 #include "render_api.h"	// decallist_t
 #include "sound.h"		// S_GetDynamicSounds
 #include "ref_common.h" // decals
+#if XASH_DREAMCAST
+#include <kos.h>
+#include <dc/vmu_pkg.h>
+#endif
 
 /*
 ==============================================================================
@@ -1709,6 +1713,17 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	SAVERESTOREDATA	*pSaveData;
 	GAME_HEADER	gameHeader;
 	dc_file_t		*pFile;
+#if XASH_DREAMCAST
+	uint8_t*		saveBuffer = NULL;
+	uint32_t		saveBufferSize = 0;
+	FILE*		iconFile = NULL;
+	uint8_t*		iconData = NULL;
+	int		iconSize = 0;
+	vmu_pkg_t		pkg;
+	char		iconPath[MAX_QPATH];
+	uint8_t*		pkgData = NULL;
+	int		pkgDataSize = 0;
+#endif
 
 	pSaveData = SaveGameState( false );
 	if( !pSaveData ) return false;
@@ -1741,15 +1756,159 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 #endif
 
 #if XASH_DREAMCAST
-	char		path[MAX_SYSPATH];
-	Q_snprintf( path, sizeof( path ), "/vmu/a1/%s", name);
-	if(( pFile = FS_SysOpen( path, "wb")) == NULL )
+	// Calculate maximum buffer size needed
+	uint32_t adjacencySize = 0;
+	search_t *t_size = FS_Search(hlPath, true, true);
+	
+	if(t_size)
 	{
-		printf("Couldn't open %s\n", path);
-		// something bad is happens
-		SaveFinish( pSaveData );
+		for(int i = 0; i < t_size->numfilenames; i++)
+		{
+			// For each file, we need: MAX_OSPATH (filename) + sizeof(int) (filesize) + the actual file content
+			char ramPath[MAX_SYSPATH];
+			Q_snprintf(ramPath, sizeof(ramPath), "/ram/%s", t_size->filenames[i]);
+			dc_file_t *pFile_size = FS_SysOpen(ramPath, "rb");
+			
+			if(pFile_size)
+			{
+				adjacencySize += MAX_OSPATH + sizeof(int) + FS_FileLength(pFile_size);
+				FS_Close(pFile_size);
+			}
+		}
+		Mem_Free(t_size);
+	}
+	
+	// Allocate buffer for all data
+	saveBufferSize = sizeof(int) * 3 + sizeof(int) * 2 + pSaveData->tokenSize + pSaveData->size + adjacencySize;
+	saveBuffer = Mem_Malloc(host.mempool, saveBufferSize);
+	
+	if (!saveBuffer) {
+		Con_Printf("Failed to allocate save buffer\n");
+		SaveFinish(pSaveData);
 		return false;
 	}
+	
+	uint8_t* ptr = saveBuffer;
+	
+	// Write all the data to our temporary buffer
+	version = SAVEGAME_VERSION;
+	id = SAVEGAME_HEADER;
+	
+	memcpy(ptr, &id, sizeof(id));
+	ptr += sizeof(id);
+	memcpy(ptr, &version, sizeof(version));
+	ptr += sizeof(version);
+	memcpy(ptr, &pSaveData->size, sizeof(int));
+	ptr += sizeof(int);
+	
+	// write token data
+	memcpy(ptr, &pSaveData->tokenCount, sizeof(int));
+	ptr += sizeof(int);
+	memcpy(ptr, &pSaveData->tokenSize, sizeof(int));
+	ptr += sizeof(int);
+	memcpy(ptr, pTokenData, pSaveData->tokenSize);
+	ptr += pSaveData->tokenSize;
+	
+	// write the base data
+	memcpy(ptr, pSaveData->pBaseData, pSaveData->size);
+	ptr += pSaveData->size;
+	
+	// Copy adjacency map files directly into the save buffer
+	search_t *t = FS_Search(hlPath, true, true);
+	if(t)
+	{
+		for(int i = 0; i < t->numfilenames; i++)
+		{
+			// Store filename (max length is MAX_OSPATH)
+			char szName[MAX_OSPATH];
+			memset(szName, 0, sizeof(szName)); // clear string to prevent garbage
+			Q_strncpy(szName, COM_FileWithoutPath(t->filenames[i]), sizeof(szName));
+			memcpy(ptr, szName, MAX_OSPATH);
+			ptr += MAX_OSPATH;
+			
+			// Open the file and get its size
+			dc_file_t *pCopy = NULL;
+#if XASH_DREAMCAST
+			char ramPath[MAX_SYSPATH];
+			Q_snprintf(ramPath, sizeof(ramPath), "/ram/%s", t->filenames[i]);
+			pCopy = FS_SysOpen(ramPath, "rb");
+#else
+			pCopy = FS_Open(t->filenames[i], "rb", true);
+#endif
+			int fileSize = FS_FileLength(pCopy);
+			
+			// Store file size
+			memcpy(ptr, &fileSize, sizeof(int));
+			ptr += sizeof(int);
+			
+			// Store file contents
+			uint8_t *fileBuffer = Mem_Malloc(host.mempool, fileSize);
+			FS_Read(pCopy, fileBuffer, fileSize);
+			memcpy(ptr, fileBuffer, fileSize);
+			ptr += fileSize;
+			
+			// Cleanup
+			Mem_Free(fileBuffer);
+			FS_Close(pCopy);
+		}
+		Mem_Free(t);
+	}
+	
+	// Create the VMU package
+	uint8_t *vmu_data;
+	uint8_t icon_buf[512];
+	int vmu_data_size = (ptr - saveBuffer); // Use actual written size
+	
+	vmu_pkg_t vmu_pkg;
+	memset(&vmu_pkg, 0, sizeof(vmu_pkg));
+	
+	Q_snprintf(vmu_pkg.desc_short, sizeof(vmu_pkg.desc_short), "%s", svgame.dllFuncs.pfnGetGameDescription());
+	Q_snprintf(vmu_pkg.desc_long, sizeof(vmu_pkg.desc_long), "%s", gameHeader.comment);
+	strncpy(vmu_pkg.app_id, "Xash3D", 16);
+	vmu_pkg.icon_cnt = 1;
+	vmu_pkg.icon_anim_speed = 0;
+	vmu_pkg.eyecatch_type = VMUPKG_EC_NONE;
+	vmu_pkg.data_len = vmu_data_size;
+	vmu_pkg.icon_data = icon_buf;
+	vmu_pkg.data = saveBuffer;
+	
+	// Try to load an icon
+	if(vmu_pkg_load_icon(&vmu_pkg, "/cd/valve/game.ico") < 0)
+	{
+		vmu_pkg.icon_cnt = 0;
+	}
+	
+	// Build the VMU package (also writes it to VMU)
+	char path[MAX_SYSPATH];
+	Q_snprintf(path, sizeof(path), "/vmu/a1/%s", name);
+	
+	if(vmu_pkg_build(&vmu_pkg, &vmu_data, &vmu_data_size) < 0)
+	{
+		Con_Printf("Failed to create VMU package\n");
+		Mem_Free(saveBuffer);
+		SaveFinish(pSaveData);
+		return false;
+	}
+	
+	// Write to VMU as a regular file
+	pFile = FS_SysOpen(path, "wb");
+	if(!pFile)
+	{
+		Con_Printf("Couldn't open %s\n", path);
+		free(vmu_data);
+		Mem_Free(saveBuffer);
+		SaveFinish(pSaveData);
+		return false;
+	}
+	
+	FS_Write(pFile, vmu_data, vmu_data_size);
+	FS_Close(pFile);
+	
+	// Clean up
+	free(vmu_data);
+	Mem_Free(saveBuffer);
+	
+	Con_Printf("Game saved to VMU (device a1)\n");
 #else
 	if(( pFile = FS_Open( name, "wb", true )) == NULL )
 	{
@@ -1757,7 +1916,7 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 		SaveFinish( pSaveData );
 		return false;
 	}
-#endif
+
 	// pending the preview image for savegame
 	Cbuf_AddTextf( "saveshot \"%s\"\n", pSaveName );
 	Con_Printf( "Saving game to %s...\n", name );
@@ -1776,9 +1935,10 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	FS_Write( pFile, pSaveData->pBaseData, pSaveData->size ); // header and globals
 
 	DirectoryCopy( hlPath, pFile );
-	SaveFinish( pSaveData );
 	FS_Close( pFile );
+#endif
 
+	SaveFinish( pSaveData );
 	return true;
 }
 
@@ -2093,9 +2253,12 @@ void SV_ChangeLevel( qboolean loadfromsavedgame, const char *mapname, const char
 		if( !LoadGameState( level, true ))
 			SV_SpawnEntities( level );
 		LoadAdjacentEnts( oldlevel, startspot );
-
+#if XASH_DREAMCAST
+		ClearSaveDir();
+#else
 		if( sv_newunit.value )
 			ClearSaveDir();
+#endif
 		SV_ActivateServer( false );
 	}
 	else
@@ -2226,6 +2389,20 @@ qboolean SV_SaveGame( const char *pName )
 		}
 	}
 	else Q_strncpy( savename, pName, sizeof( savename ));
+
+#if XASH_DREAMCAST
+	// Check if save already exists, if so delete it first
+	char savepath[MAX_SYSPATH];
+	
+	Q_snprintf( savepath, sizeof( savepath ), DEFAULT_SAVE_DIRECTORY "%s.sav", savename );
+	Con_Printf( "Deleting existing save file %s.sav before creating new one...\n", savename );
+		// Delete the existing save
+	if( !FS_Delete( savepath ))
+	{
+		Con_Printf( S_ERROR "Failed to delete existing save %s\n", savepath );
+			// We'll try to continue anyway
+	}
+#endif
 
 #if !XASH_DEDICATED
 	// unload previous image from memory (it's will be overwritten)
