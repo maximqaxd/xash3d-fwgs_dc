@@ -23,7 +23,7 @@
 #include "lbmlib.h"
 #include "scriplib.h"
 #include "mathlib.h"
-#include "..\..\engine\studio.h"
+#include "../../engine/studio.h"
 #include "studiomdl.h"
 
 int		used[MAXSTUDIOTRIANGLES];

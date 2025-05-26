@@ -22,13 +22,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <stdint.h>
+#ifdef _WIN32
 #include <direct.h>
+#define GetCurrentDir _getcwd
+#else
+#include <unistd.h>
+#define GetCurrentDir getcwd
+#endif
 
 #include "cmdlib.h"
 #include "lbmlib.h"
 #include "scriplib.h"
 #include "mathlib.h"
-#include "..\..\engine\studio.h"
+#include "../../engine/studio.h"
 #include "studiomdl.h"
 #include "pvr.h"
 
@@ -39,7 +46,8 @@ extern int numcommandnodes;
 
 FILE * offsetTxt; // adds usefull information to offset.dat, for use with pvrext.exe
 FILE * packTex; // creates script to inject textures
-#define GetCurrentDir _getcwd // to pass directory to execute pvrext.exe
+
+#define FILEBUFFER (16 * 1024 * 1024)
 
 /*
 ============
@@ -51,7 +59,7 @@ byte *pStart;
 studiohdr_t *phdr;
 studioseqhdr_t *pseqhdr;
 
-#define ALIGN( a ) a = (byte *)((int)((byte *)a + 3) & ~ 3)
+#define ALIGN( a ) a = (byte *)((uintptr_t)((byte *)a + 3) & ~ 3)
 void WriteBoneInfo( )
 {
 	int i, j;
@@ -121,7 +129,6 @@ void WriteBoneInfo( )
 		}
 	}
 
-
 	// save bonecontroller info
 	pbonecontroller = (mstudiobonecontroller_t *)pData;
 	phdr->numbonecontrollers = numbonecontrollers;
@@ -149,7 +156,6 @@ void WriteBoneInfo( )
 	pData += numattachments * sizeof( mstudioattachment_t );
 	ALIGN( pData );
 	
-
 	// save bbox info
 	pbbox = (mstudiobbox_t *)pData;
 	phdr->numhitboxes = numhitboxes;
@@ -163,7 +169,6 @@ void WriteBoneInfo( )
 	}
 	pData += numhitboxes * sizeof( mstudiobbox_t );
 	ALIGN( pData );
-
 }
 
 
@@ -385,6 +390,7 @@ void WriteTexturesPVR()
     mstudiotexture_t* ptexture;
     short* pref;
 
+	printf("DEBUG: Entered WriteTexturesPVR, numtextures=%d\n", numtextures);
     // save texture info
     ptexture = (mstudiotexture_t*)pData;
     phdr->numtextures = numtextures;
@@ -416,7 +422,9 @@ void WriteTexturesPVR()
         ptexture[i].height = texture[i].skinheight;
         ptexture[i].index = (pData - pStart);
 
-        FILE* pvr_file = fopen(texture[i].name, "rb");
+		char pvr_path[256];
+		snprintf(pvr_path, sizeof(pvr_path), "./textures/%s", texture[i].name);
+		FILE* pvr_file = fopen(pvr_path, "rb");
         if (pvr_file) {
             // Get file size
             fseek(pvr_file, 0, SEEK_END);
@@ -572,8 +580,6 @@ void WriteModel( )
 			numCmdBytes = BuildTris( model[i]->pmesh[j]->triangle, model[i]->pmesh[j], &pCmdSrc );
 
 			pmesh[j].triindex	= (pData - pStart);
-			printf("pData: %p, pCmdSrc: %p, numCmdBytes: %d\n", pData, pCmdSrc, numCmdBytes);
-
 			memcpy( pData, pCmdSrc, numCmdBytes );
 			pData += numCmdBytes;
 			ALIGN( pData );
@@ -584,12 +590,6 @@ void WriteModel( )
 		cur = (int)pData;
 	}	
 }
-
-
-
-#define FILEBUFFER (16 * 1024 * 1024)
-
-	
 
 void WriteFile (void)
 {
@@ -648,7 +648,7 @@ void WriteFile (void)
 
 		pData = (byte *)phdr + sizeof( studiohdr_t );
 
-		WriteTexturesHDR( );
+		WriteTexturesPVR();
 
 		phdr->length = pData - pStart;
 		printf("textures  %6d bytes\n", phdr->length );
@@ -700,31 +700,17 @@ void WriteFile (void)
 	
 	if (!split_textures)
 	{
-		printf("\nBefore texture writing - buffer size: %ld\n", pData - pStart);
-		
-		byte* texture_start = pData;
 		WriteTexturesPVR();
-		size_t texture_size = pData - texture_start;
-		
-		size_t total_size = (pData - pStart);
-		phdr->length = total_size;
-
-		printf("Texture section size: %zu bytes\n", texture_size);
-		printf("Final total size: %zu bytes\n", total_size);
-		
-		SafeWrite(modelouthandle, pStart, total_size);
+		phdr->length = pData - pStart;
+		SafeWrite(modelouthandle, pStart, phdr->length);
 	}
 	else
 	{
-		WriteTexturesHDR();
+		WriteTexturesPVR();
 		phdr->length = pData - pStart;
 		printf("total     %6d bytes (without textures)\n", phdr->length);
 		SafeWrite(modelouthandle, pStart, phdr->length);
 	}
-
-	//phdr->length = pData - pStart;
-
-	//printf("total ( without textures ) %6d\n", phdr->length );
 
 	fclose (modelouthandle);
 

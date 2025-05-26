@@ -13,11 +13,6 @@
 // models/<scriptname>.mdl.
 //
 
-
-#pragma warning( disable : 4244 )
-#pragma warning( disable : 4237 )
-#pragma warning( disable : 4305 )
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -28,10 +23,10 @@
 #include "scriplib.h"
 #include "mathlib.h"
 #define EXTERN
-#include "..\..\engine\studio.h"
+#include "../../engine/studio.h"
 #include "studiomdl.h"
-#include "..\..\dlls\activity.h"
-#include "..\..\dlls\activitymap.h"
+#include "../../dlls/activity.h"
+#include "../../dlls/activitymap.h"
 
 #include "pvr.h"
 
@@ -2982,7 +2977,7 @@ void Cmd_Mirror (void)
 void Cmd_Gamma (void)
 {
 	GetToken (false);
-	gamma = atof( token );
+	texture_gamma = atof( token );
 }
 
 
@@ -3351,7 +3346,7 @@ int main (int argc, char **argv)
 
 	normal_blend = cos( 2.0 * (Q_PI / 180.0));
 
-	gamma = 1.8;
+	texture_gamma = 1.8;
 
 	printf( "===================================================\n");
 	printf( "PVRStudioMDL Copyright (c) 1996-2002, Valve LLC.\n");
@@ -3436,44 +3431,70 @@ int main (int argc, char **argv)
 static int pvr_texture_width, pvr_texture_height;
 
 int LoadPVR(const char* pvr_file) {
-    FILE* current_pvr_texture;
-    pvrt_t pvr_header;
-    
-    current_pvr_texture = fopen(pvr_file, "rb");
-    if (current_pvr_texture == NULL) {
-        printf("Can't open PVR file: %s\n", pvr_file);
-        return -1;
-    }
+	FILE* current_pvr_texture;
+	pvrt_t pvr_header;
+	uint32_t signature;
 
-    // Read PVR header
-    if (fread(&pvr_header, sizeof(pvrt_t), 1, current_pvr_texture) != 1) {
-        printf("Error: Failed to read PVR header\n");
-        fclose(current_pvr_texture);
-        return -1;
-    }
+	current_pvr_texture = fopen(pvr_file, "rb");
+	if (current_pvr_texture == NULL) {
+		printf("Can't open PVR file: %s\n", pvr_file);
+		return -1;
+	}
 
-    // Verify PVRT signature
-    if (pvr_header.version != PVRTSIGN) {
-        printf("Error: Invalid PVR signature. Got: 0x%08x, Expected: 0x%08x\n", 
-               pvr_header.version, PVRTSIGN);
-        fclose(current_pvr_texture);
-        return -1;
-    }
+	// Read just the signature first (4 bytes)
+	if (fread(&signature, sizeof(uint32_t), 1, current_pvr_texture) != 1) {
+		printf("Error: Failed to read file signature\n");
+		fclose(current_pvr_texture);
+		return -1;
+	}
 
-    // Get dimensions directly from header
-    pvr_texture_width = pvr_header.width;
-    pvr_texture_height = pvr_header.height;
+	// Check if this is a GBIX header
+	if (signature == GBIXHEADER) {
+		printf("GBIX header detected, skipping to PVR header...\n");
 
-    printf("PVR Format Debug:\n");
-    printf("Color Format: 0x%02x\n", pvr_header.colorFormat);
-    printf("Image Format: 0x%02x\n", pvr_header.imageFormat);
-    printf("Dimensions: %dx%d\n", pvr_texture_width, pvr_texture_height);
-    printf("Texture Data Size: %d bytes\n", pvr_header.textureDataSize);
+		// Skip the remaining 8 bytes of GBIX header (total 12 bytes)
+		// We already read 4 bytes, so skip 8 more
+		fseek(current_pvr_texture, 8, SEEK_CUR);
 
-    // Set dimensions for StudioMDL
-    bmhd.w = pvr_texture_width;
-    bmhd.h = pvr_texture_height;
+		// Now read the actual PVR header
+		if (fread(&pvr_header, sizeof(pvrt_t), 1, current_pvr_texture) != 1) {
+			printf("Error: Failed to read PVR header after GBIX\n");
+			fclose(current_pvr_texture);
+			return -1;
+		}
 
-    fclose(current_pvr_texture);
-    return 0;
+		// Verify this is actually a PVR header
+		if (pvr_header.version != PVRTSIGN) {
+			printf("Error: Invalid PVR signature after GBIX. Got: 0x%08x, Expected: 0x%08x\n",
+				pvr_header.version, PVRTSIGN);
+			fclose(current_pvr_texture);
+			return -1;
+		}
+	}
+	else if (signature == PVRTSIGN) {
+		// This is a direct PVR file, seek back to beginning and read full header
+		fseek(current_pvr_texture, 0, SEEK_SET);
+		if (fread(&pvr_header, sizeof(pvrt_t), 1, current_pvr_texture) != 1) {
+			printf("Error: Failed to read PVR header\n");
+			fclose(current_pvr_texture);
+			return -1;
+		}
+	}
+	else {
+		printf("Error: Invalid file signature. Got: 0x%08x, Expected: 0x%08x or 0x%08x\n",
+			signature, PVRTSIGN, GBIXHEADER);
+		fclose(current_pvr_texture);
+		return -1;
+	}
+
+	// Get dimensions directly from header
+	pvr_texture_width = pvr_header.width;
+	pvr_texture_height = pvr_header.height;
+
+	// Set dimensions for StudioMDL
+	bmhd.w = pvr_texture_width;
+	bmhd.h = pvr_texture_height;
+	fclose(current_pvr_texture);
+
+	return 0; // Success
 }
