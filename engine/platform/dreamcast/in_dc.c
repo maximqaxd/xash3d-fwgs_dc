@@ -253,8 +253,8 @@ Processes input events from the keyboard, mouse, and joystick.
 void Platform_RunEvents(void)
 {
     int i;
-    static uint32_t last_buttons, last_msbtn;
-    static kbd_state_t old_kbd;
+    static uint32_t last_msbtn;
+    static kbd_mods_t last_mods = {0};
     static int last_X = 0, last_Y = 0, last_X2 = 0, last_Y2 = 0;
 	maple_device_t *dev = maple_enum_type(0, MAPLE_FUNC_CONTROLLER);
     cont_state_t *cont;
@@ -391,37 +391,41 @@ void Platform_RunEvents(void)
 		
 		if (kbd)
 		{
-			int shiftkeys = kbd->shift_keys ^ old_kbd.shift_keys;
+			uint8_t shiftkeys = kbd->last_modifiers.raw ^ last_mods.raw;
 			
-			if (shiftkeys & (KBD_MOD_LCTRL | KBD_MOD_RCTRL))
+			if (shiftkeys & KBD_MOD_CTRL)
 			{
-				Key_Event(K_CTRL , ((kbd->shift_keys & (KBD_MOD_LCTRL | KBD_MOD_RCTRL)) != 0));
+				Key_Event(K_CTRL , ((kbd->last_modifiers.raw & KBD_MOD_CTRL) != 0));
 			}
 			
-			if (shiftkeys & (KBD_MOD_LSHIFT | KBD_MOD_RSHIFT))
+			if (shiftkeys & KBD_MOD_SHIFT)
 			{
-				Key_Event(K_SHIFT , ((kbd->shift_keys & (KBD_MOD_LSHIFT | KBD_MOD_RSHIFT)) != 0));
+				Key_Event(K_SHIFT , ((kbd->last_modifiers.raw & KBD_MOD_SHIFT) != 0));
 			}
 			
-			if (shiftkeys & (KBD_MOD_LALT | KBD_MOD_RALT))
+			if (shiftkeys & KBD_MOD_ALT)
 			{
-				Key_Event(K_ALT , ((kbd->shift_keys & (KBD_MOD_LALT | KBD_MOD_RALT)) != 0));
+				Key_Event(K_ALT , ((kbd->last_modifiers.raw & KBD_MOD_ALT) != 0));
 			}
 			
 			if (shiftkeys & (KBD_MOD_S1 | KBD_MOD_S2))
 			{
-				Key_Event(K_WIN , ((kbd->shift_keys & (KBD_MOD_S1 | KBD_MOD_S2)) != 0));
+				Key_Event(K_WIN , ((kbd->last_modifiers.raw & (KBD_MOD_S1 | KBD_MOD_S2)) != 0));
 			}
 			
 			for(i = 0; i < sizeof(dc_kbd_map); ++i) 
 			{
-				if(kbd->matrix[i] != old_kbd.matrix[i]) 
+				/* Get the state of key i */
+				key_state_value_t i_state = kbd->key_states[i];
+
+				/* If the state of i changed */
+				if(i_state.is_down ^ i_state.was_down)
 				{
-					if (i == KBD_KEY_PAD_NUMLOCK && kbd->matrix[i])
+					if (i == KBD_KEY_PAD_NUMLOCK && i_state.is_down)
 					{
 						numlock_en ^= 1;
 					}
-					else if (i == KBD_KEY_CAPSLOCK && kbd->matrix[i])
+					else if (i == KBD_KEY_CAPSLOCK && i_state.is_down)
 					{
 						capslock_en ^= 1;
 					}
@@ -430,16 +434,16 @@ void Platform_RunEvents(void)
 
 					if(key) 
 					{
-						Key_Event( key , (kbd->matrix[i] != 0) );
+						Key_Event( key , i_state.is_down );
 						
 						if (numlock_en && i >= KBD_KEY_PAD_1 && i <= KBD_KEY_PAD_PERIOD)
 						{
 							key = dc_kbd_map_numlock[i-KBD_KEY_PAD_1];
 						}
 						
-						if (text_in_en && kbd->matrix[i] && (key >= 32 && key < 127))
+						if (text_in_en && i_state.is_down && (key >= 32 && key < 127))
 						{
-							if( (kbd->shift_keys & (KBD_MOD_LSHIFT | KBD_MOD_RSHIFT)))
+							if( (kbd->last_modifiers.raw & KBD_MOD_SHIFT))
 							{
 								if (i >= KBD_KEY_1 && i <= KBD_KEY_SLASH )
 								{
@@ -463,7 +467,7 @@ void Platform_RunEvents(void)
 					}
 				}
 			}
-			old_kbd = *kbd;
+			last_mods = kbd->last_modifiers;
 		}
 	}
 }
