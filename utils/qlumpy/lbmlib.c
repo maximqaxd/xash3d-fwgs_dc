@@ -9,9 +9,10 @@
 ****/
 
 // lbmlib.c
-
+#ifdef _WIN32
 #include <WINDOWS.H>
-#include <STDIO.H>
+#endif
+#include <stdio.h>
 
 #include "cmdlib.h"
 #include "lbmlib.h"
@@ -449,9 +450,9 @@ void WriteLBMfile (char *filename, byte *data, int width, int height, byte *pale
 	memset (&basebmhd,0,sizeof(basebmhd));
 	basebmhd.w = BigShort((short)width);
 	basebmhd.h = BigShort((short)height);
-	basebmhd.nPlanes = (BYTE)BigShort(8);
-	basebmhd.xAspect = (BYTE)BigShort(5);
-	basebmhd.yAspect = (BYTE)BigShort(6);
+	basebmhd.nPlanes = (UBYTE)BigShort(8);
+	basebmhd.xAspect = (UBYTE)BigShort(5);
+	basebmhd.yAspect = (UBYTE)BigShort(6);
 	basebmhd.pageWidth = BigShort((short)width);
 	basebmhd.pageHeight = BigShort((short)height);
 

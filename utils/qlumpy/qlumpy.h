@@ -30,7 +30,7 @@ typedef struct {
     uint32_t nextTagOffset;    // Offset to next tag (PVRT)
     unsigned long long globalIndex;
 } gbix_t;
-
+#if 0
 typedef struct {
     uint32_t version;          // "PVRT"
     uint32_t textureDataSize;  // Size of rest of file
@@ -41,7 +41,7 @@ typedef struct {
     uint16_t height;
 } pvrt_t;
 #pragma pack(pop)
-
+#endif
 
 extern  byte    *byteimage, *lbmpalette;
 extern  int     byteimagewidth, byteimageheight;

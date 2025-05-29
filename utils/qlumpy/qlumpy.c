@@ -173,8 +173,8 @@ void LoadScreenPVR(char* name) {
 
 	byteimagewidth = pvrHeader->width;
 	byteimageheight = pvrHeader->height;
-	printf("Loaded PVR: %dx%d (image: 0x%02X, color: 0x%02X)\n",
-		byteimagewidth, byteimageheight, pvrHeader->imageFormat, pvrHeader->colorFormat);
+	printf("Loaded PVR: %s, %dx%d\n",
+		expanded, byteimagewidth, byteimageheight);
 }
 
 /*
@@ -425,12 +425,13 @@ int main (int argc, char **argv)
 
 		// Fully qualify the path names before using them
 
-		if (!(pszPath[0] == '/' || pszPath[0] == '\\' || pszPath[1] == ':'))
-		{	// path is partial
-			Q_getwd (szTemp);
-			strcat (szTemp, pszPath);
-			pszPath = szTemp;
-		}
+	if (!(pszPath[0] == '/' || pszPath[0] == '\\' || pszPath[1] == ':'))
+	{   // path is partial
+		Q_getwd (szTemp);
+		strcat (szTemp, "/");  // Add a slash here
+		strcat (szTemp, pszPath);
+		pszPath = szTemp;
+	}
 		SetQdirFromPath(pszPath);
 		ProcessLumpyScript(pszPath);
 	}

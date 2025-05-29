@@ -602,8 +602,6 @@ void GrabMip(void)
 
 		// Copy the entire PVR data directly to the lump buffer
 		int totalSize = sizeof(pvrt_t) + pvrHeader->textureDataSize;
-		printf("DEBUG: Copying %d bytes to lump_p = %p\n", totalSize, lump_p);
-		printf("DEBUG: Lump buffer start = %p, end = %p\n", lumpbuffer, lumpbuffer + MAXLUMP);
 		if (lump_p + totalSize > lumpbuffer + MAXLUMP) {
 			printf("ERROR: Lump buffer overflow detected!\n");
 			exit(1); // Or handle gracefully
@@ -611,8 +609,6 @@ void GrabMip(void)
 
 		memcpy(lump_p, pvrHeader, totalSize);
 		lump_p += totalSize;
-		printf("DEBUG: lump_p after copy = %p\n", lump_p);
-		printf("DEBUG: PVR lump processed successfully\n");
 		return; // Skip standard texture processing
 	}
     // Original non-PVR texture handling
