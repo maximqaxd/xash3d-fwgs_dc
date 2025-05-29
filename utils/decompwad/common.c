@@ -24,7 +24,13 @@ without written permission from Valve LLC.
 #endif
 #include <errno.h>
 
-#include "studio.h"
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdarg.h>
+
 #include "activity.h"
 #include "activitymap.h"
 
@@ -132,6 +138,17 @@ void stripfilename (char *str)
     }
 }
 
+void *memalloc (size_t nmemb, size_t size)
+{
+    void *ptr = calloc (nmemb, size);
+
+    if (!ptr)
+        error (1, "Failed to allocate %i bytes\n", nmemb * size);
+    
+    return ptr;
+}
+
+
 char *appenddir (char *path, char *dir)
 {
     size_t path_len = strlen (path);
@@ -213,16 +230,6 @@ bool makepath (const char *path)
     return true;
 }
 
-void *memalloc (size_t nmemb, size_t size)
-{
-    void *ptr = calloc (nmemb, size);
-
-    if (!ptr)
-        error (1, "Failed to allocate %i bytes\n", nmemb * size);
-    
-    return ptr;
-}
-
 FILE *mdl_open (const char *filename, int *identifier, int *version, int safe)
 {
     if (!safe)
@@ -271,28 +278,6 @@ void mdl_seek (FILE *stream, long off, int whence)
         error (1, "Seek failed\n");
 }
 
-char* mdl_getmotionflag (int type)
-{
-    switch (type & STUDIO_TYPES)
-    {
-    case STUDIO_X: return "X";
-    case STUDIO_Y: return "Y";
-    case STUDIO_Z: return "Z";
-    case STUDIO_XR: return "XR";
-    case STUDIO_YR: return "YR";
-    case STUDIO_ZR: return "ZR";
-    case STUDIO_LX: return "LX";
-    case STUDIO_LY: return "LY";
-    case STUDIO_LZ: return "LZ";
-    case STUDIO_AX: return "AX";
-    case STUDIO_AY: return "AY";
-    case STUDIO_AZ: return "AZ";
-    case STUDIO_AXR: return "AXR";
-    case STUDIO_AYR: return "AYR";
-    case STUDIO_AZR: return "AZR";
-    }
-    return "";
-}
 
 char *mdl_getactname (int type)
 {

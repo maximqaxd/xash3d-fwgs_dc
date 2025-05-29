@@ -10,7 +10,7 @@
 
 #ifndef _BSPFILE_H
 #define _BSPFILE_H
-
+#include "decompile.h"
 // upper design bounds
 
 #define MAX_MAP_HULLS 4

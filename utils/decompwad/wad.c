@@ -13,9 +13,13 @@ Valve LLC.  All other use, distribution, or modification is prohibited
 without written permission from Valve LLC.
 ===========================================================================
 */
-
+#include "decompile.h"
 #include "wadlib.h"
 #include "bspfile.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdbool.h>
 
 void decomp_writebmp (FILE *bmp, byte *data, int width, int height, byte *palette);
 
@@ -24,27 +28,27 @@ static void decomp_miptex (
     const char *bmpdir,
     miptex_t *mip)
 {
-    byte *data = (byte *)memalloc (mip->width * mip->height + 768, 1);
-    byte *palette = data + mip->width * mip->height;
-    
-    mdl_seek (wad, mip->offsets[0], SEEK_SET);
-    mdl_read (wad, data, mip->width * mip->height);
+    size_t data_size = mip->width * mip->height;
+    byte *data = (byte *)memalloc(data_size + 768, 1);
+    byte *palette = data + data_size;
 
-    mdl_seek (
+    mdl_seek(wad, mip->offsets[0], SEEK_SET);
+    mdl_read(wad, data, data_size);
+
+    mdl_seek(
         wad,
-        mip->offsets[0] + (mip->width * mip->height / 64 * 85) + sizeof(unsigned short),
+        mip->offsets[0] + (data_size / 64 * 85) + sizeof(unsigned short),
         SEEK_SET
     );
-    mdl_read (wad, palette, 768);
+    mdl_read(wad, palette, 768);
 
-    FILE *bmp = qc_open (bmpdir, mip->name, "bmp", true);
+    FILE *bmp = qc_open(bmpdir, mip->name, "bmp", true);
 
-    decomp_writebmp (bmp, data, mip->width, mip->height, palette);
+    decomp_writebmp(bmp, data, mip->width, mip->height, palette);
 
-    free (data);
-    fclose (bmp);
+    free(data);
+    fclose(bmp);
 }
-
 void decomp_wad (
     const char *wadname,
     const char *bmpdir,
