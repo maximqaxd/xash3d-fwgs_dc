@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
 	strcpy(pszWadName, argv[2]);
 	strcat(pszWadName, ".wad");
 
-	pszScriptName = (char *)malloc(strlen(argv[3]));
+	pszScriptName = (char *)malloc(strlen(argv[3]) + 1);
 	strcpy(pszScriptName, argv[3]);
 	hScriptFile = fopen(pszScriptName, "w");
 
