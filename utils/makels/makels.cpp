@@ -16,166 +16,144 @@
 	#pragma warning(disable: 4996) // deprecated functions
 #endif
 
-#include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <ctype.h>
+char **ppszFiles = NULL;
+int nFiles = 0;
+int nMaxFiles = 0;
 
-
-char	**ppszFiles = NULL;
-int		nFiles = 0;
-int		nMaxFiles = 0;
-
-int
-string_comparator( const void *string1, const void *string2 )
-{
-	char	*s1 = *(char **)string1;
-	char	*s2 = *(char **)string2;
-	return strcmp( s1, s2 );
+int string_comparator(const void *string1, const void *string2) {
+	char *s1 = *(char **)string1;
+	char *s2 = *(char **)string2;
+	return strcmp(s1, s2);
 }
 
-void PrintUsage(char *pname)
-{
-	printf("\n\tusage:%s <source directory> <wadfile name> <script name> \n\n",pname);
-	printf("\t%s.exe is used to generate a bitmap name sorted 'qlumpy script'.\n",pname);
+void PrintUsage(char *pname) {
+	printf("\n\tusage: %s <source directory> <wadfile name> <script name> \n\n", pname);
+	printf("\t%s is used to generate a bitmap name sorted 'qlumpy script'.\n", pname);
 }
 
-int main(int argc, void **argv)
-{
+int main(int argc, char **argv) {
 	char *pszdir;
 	char *pszWadName;
 	char *pszScriptName;
 	char szBuf[1024];
-	HANDLE hFile, hScriptFile;
-	WIN32_FIND_DATA FindData;
-	BOOL fWrite;
-	BOOL fContinue = TRUE;
-	DWORD dwWritten;
+	FILE *hScriptFile;
+	struct dirent *entry;
+	DIR *dp;
+	int fWrite;
 
-	printf("makels Copyright (c) 1998 Valve L.L.C., %s\n", __DATE__ );
+	printf("makels Copyright (c) 1998 Valve L.L.C., %s\n", __DATE__);
 
-	pszdir = (char *)argv[1];
-
-	if ((argc != 4) || (pszdir[0] == '/') || (pszdir[0] == '-'))
-	{
-		PrintUsage((char *)argv[0]);
+	if (argc != 4 || argv[1][0] == '/') {
+		PrintUsage(argv[0]);
 		exit(1);
 	}
 
-	pszdir = (char *)malloc(strlen((char *)argv[1]) + 7);
-	strcpy(pszdir, (char *)argv[1]);
-	strcat(pszdir, "\\*.pvr");
+	pszdir = (char *)malloc(strlen(argv[1]) + 7);
+	strcpy(pszdir, argv[1]);
+	strcat(pszdir, "/*.pvr");
 
-	pszWadName = (char *)malloc(strlen((char *)argv[2]) + 5);
-	strcpy(pszWadName, (char *)argv[2]);
-	strcat(pszWadName, ".WAD");
+	pszWadName = (char *)malloc(strlen(argv[2]) + 5);
+	strcpy(pszWadName, argv[2]);
+	strcat(pszWadName, ".wad");
 
-	pszScriptName = (char *)malloc(strlen((char *)argv[3]));
-	strcpy(pszScriptName, (char *)argv[3]);
-	hScriptFile = CreateFile(pszScriptName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 
-			FILE_ATTRIBUTE_NORMAL, NULL);
+	pszScriptName = (char *)malloc(strlen(argv[3]));
+	strcpy(pszScriptName, argv[3]);
+	hScriptFile = fopen(pszScriptName, "w");
 
-	if (hScriptFile == INVALID_HANDLE_VALUE)
-	{
+	if (!hScriptFile) {
 		printf("\n---------- ERROR ------------------\n");
 		printf(" Could not open the script file: %s\n", pszScriptName);
-		Beep(800,500);
 		exit(EXIT_FAILURE);
 	}
 
-	sprintf(szBuf, "$DEST    \"%s\"\r\n\r\n", pszWadName);
-	fWrite = WriteFile(hScriptFile, szBuf, strlen(szBuf), &dwWritten, NULL);
-	if (!fWrite || (dwWritten != strlen(szBuf)))
-	{
-write_error:
+	sprintf(szBuf, "$DEST    \"%s\"\n\n", pszWadName);
+	fWrite = fputs(szBuf, hScriptFile);
+	if (fWrite == EOF) {
 		printf("\n---------- ERROR ------------------\n");
 		printf(" Could not write to the script file: %s\n", pszScriptName);
-		Beep(800,500);
-		CloseHandle(hScriptFile);
+		fclose(hScriptFile);
 		exit(EXIT_FAILURE);
 	}
-	
-	
-	hFile = FindFirstFile(pszdir, &FindData);
 
-	if (hFile != INVALID_HANDLE_VALUE)
-	{
-		while (fContinue)
-		{
-			if (!(FindData.dwFileAttributes &
-					(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_HIDDEN)))
-			{
-				char szShort[MAX_PATH];
+	dp = opendir(argv[1]);
+	if (dp != NULL) {
+		while ((entry = readdir(dp))) {
+			if (entry->d_type == DT_REG) {
+				char szShort[256];
+				strcpy(szShort, entry->d_name);
+				for (char *p = szShort; *p; ++p) *p = toupper(*p);
 
-				// ignore N_ and F_ files
-				strcpy(szShort, FindData.cFileName);
-				strupr(szShort);
-
-				if ((szShort[1] == '_') && ((szShort[0] == 'N') || (szShort[0] == 'F')))
-				{
-
-					printf("Skipping %s.\n", FindData.cFileName);
-
+				if ((szShort[1] == '_') && ((szShort[0] == 'N') || (szShort[0] == 'F'))) {
+					printf("Skipping %s.\n", entry->d_name);
 				} else {
-				
-					if ( nFiles >= nMaxFiles )
-					{
+					if (nFiles >= nMaxFiles) {
 						nMaxFiles += 1000;
-						ppszFiles = (char **)realloc( ppszFiles, nMaxFiles * sizeof(*ppszFiles) );
-						if ( !ppszFiles )
-						{
+						ppszFiles = (char **)realloc(ppszFiles, nMaxFiles * sizeof(*ppszFiles));
+						if (!ppszFiles) {
 							printf("\n---------- ERROR ------------------\n");
 							printf(" Could not realloc more filename pointer storage\n");
-							Beep(800,500);
 							exit(EXIT_FAILURE);
 						}
 					}
-					ppszFiles[nFiles++] = strdup( szShort );
+					ppszFiles[nFiles++] = strdup(szShort);
 				}
 			}
-			fContinue = FindNextFile(hFile, &FindData);
-		}	
+		}
+		closedir(dp);
 	}
 
+	if (nFiles > 0) {
+		qsort(ppszFiles, nFiles, sizeof(char *), string_comparator);
 
-	if (nFiles > 0)
-	{
-		qsort( ppszFiles, nFiles, sizeof(char*), string_comparator );
-
-		for( int i = 0; i < nFiles; i++ )
-		{
+		for (int i = 0; i < nFiles; i++) {
 			char *p;
-			char szShort[MAX_PATH];
-			char szFull[MAX_PATH];
+			char szShort[256];
+			char szFull[256];
 
-			strcpy(szShort, pszdir);
-			p = strchr(szShort, '*');
-			*p = '\0';
+			strcpy(szShort, argv[1]);
+			strcat(szShort, "/");
 			strcat(szShort, ppszFiles[i]);
-			GetFullPathName(szShort, MAX_PATH, szFull, NULL);
+			realpath(szShort, szFull);
 
-			sprintf(szBuf, "$loadbmp    \"%s\"\r\n", szFull);
-			fWrite = WriteFile(hScriptFile, szBuf, strlen(szBuf), &dwWritten, NULL);
-			if (!fWrite || (dwWritten != strlen(szBuf)))
-				goto write_error;
-
+			sprintf(szBuf, "$loadbmp    \"%s\"\n", szFull);
+			fWrite = fputs(szBuf, hScriptFile);
+			if (fWrite == EOF) {
+				printf("\n---------- ERROR ------------------\n");
+				printf(" Could not write to the script file: %s\n", pszScriptName);
+				fclose(hScriptFile);
+				exit(EXIT_FAILURE);
+			}
 
 			p = strchr(ppszFiles[i], '.');
 			*p = '\0';
 
-			sprintf(szBuf, "%s  miptex -1 -1 -1 -1\r\n\r\n", ppszFiles[i]);
-			fWrite = WriteFile(hScriptFile, szBuf, strlen(szBuf), &dwWritten, NULL);
-			if (!fWrite || (dwWritten != strlen(szBuf)))
-				goto write_error;
+			sprintf(szBuf, "%s  miptex -1 -1 -1 -1\n\n", ppszFiles[i]);
+			fWrite = fputs(szBuf, hScriptFile);
+			if (fWrite == EOF) {
+				printf("\n---------- ERROR ------------------\n");
+				printf(" Could not write to the script file: %s\n", pszScriptName);
+				fclose(hScriptFile);
+				exit(EXIT_FAILURE);
+			}
 
-			free( ppszFiles[i] );
+			free(ppszFiles[i]);
 		}
 	}
-	
-	printf("Processed %d files specified by %s\n", nFiles, pszdir );
 
-	CloseHandle(hScriptFile);
+	printf("Processed %d files specified by %s\n", nFiles, argv[1]);
+
+	fclose(hScriptFile);
 	free(pszdir);
+	free(pszWadName);
+	free(pszScriptName);
 	exit(0);
 	return 0;
 }
