@@ -11,6 +11,7 @@
 #ifndef _WADLIB_H
 #define _WADLIB_H
 
+#include "decompile.h"
 // wadlib.h
 
 //

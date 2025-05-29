@@ -13,14 +13,19 @@ Valve LLC.  All other use, distribution, or modification is prohibited
 without written permission from Valve LLC.
 ===========================================================================
 */
-
-#include "studio.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdint.h>
 #include "bitmap.h"
+typedef uint8_t byte;
+
 
 void decomp_writebmp (FILE *bmp, byte *data, int width, int height, byte *palette)
 {
     int real_width = ((width + 3) & ~3);
     int area = real_width * height;
+
+    byte *bmp_data = (byte *)memalloc(area, 1);
 
     BITMAPFILEHEADER header;
 
@@ -70,12 +75,10 @@ void decomp_writebmp (FILE *bmp, byte *data, int width, int height, byte *palett
 
     /* Reverse the order of the data. */
 
-    byte *bmp_data = (byte *)memalloc (area, 1);
     data += (height - 1) * width;
 
-    for (i = 0; i < height; ++i)
-    {
-        memmove (&bmp_data[real_width * i], data, width);
+    for (i = 0; i < height; ++i) {
+        memmove(&bmp_data[real_width * i], data, width);
         data -= width;
     }
 
@@ -83,20 +86,3 @@ void decomp_writebmp (FILE *bmp, byte *data, int width, int height, byte *palett
     free (bmp_data);
 }
 
-void decomp_studiotexture (FILE *tex, const char *bmpdir, mstudiotexture_t *texture)
-{
-    int area = texture->width * texture->height;
-
-    byte *data = (byte *)memalloc (area + 768, 1);
-    byte *palette = data + area;
-    
-    mdl_seek (tex, texture->index, SEEK_SET);
-    mdl_read (tex, data, area + 768);
-
-    FILE *bmp = qc_open (bmpdir, skippath (texture->name), "bmp", true);
-
-    decomp_writebmp (bmp, data, texture->width, texture->height, palette);
-
-    free (data);
-    fclose (bmp);
-}

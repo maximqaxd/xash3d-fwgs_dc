@@ -17,6 +17,13 @@ without written permission from Valve LLC.
 #ifndef _DECOMPILE_H
 #define _DECOMPILE_H
 
+#include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <stdarg.h>
+
 #define STUDIO_VERSION 10
 
 #define IDSTUDIOHEADER (('T' << 24) + ('S' << 16) + ('D' << 8) + 'I')
@@ -76,11 +83,6 @@ void *memalloc (size_t nmemb, size_t size);
 
 #define dot(x, y) ((x)[0] * (y)[0] + (x)[1] * (y)[1] + (x)[2] * (y)[2])
 
-void anglequaternion (const vec3_t angles, vec4_t quaternion);
-void quaternionmatrix (const vec4_t quaternion, mat4x3_t matrix);
-void concattransforms (const mat4x3_t in1, const mat4x3_t in2, mat4x3_t out);
-void vectortransform (const vec3_t in1, const mat4x3_t in2, vec3_t out);
-void vectorrotate (const vec3_t in1, const mat4x3_t in2, vec3_t out);
 
 FILE *mdl_open (const char *filename, int *identifier, int *version, int safe);
 void mdl_read (FILE *stream, void *dst, size_t size);

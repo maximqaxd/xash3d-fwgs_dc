@@ -14,16 +14,8 @@ without written permission from Valve LLC.
 ===========================================================================
 */
 
-#include "studio.h"
-#include "sprite.h"
 #include "wadlib.h"
 #include "bspfile.h"
-
-enum {
-    kInfoAct   = 1 << 0,
-    kInfoEvent = 1 << 1,
-    kInfoBody  = 1 << 2,
-};
 
 void info_mdl (const char *mdlname, const char *args)
 {
@@ -33,56 +25,7 @@ void info_mdl (const char *mdlname, const char *args)
 
     fprintf (stdout, "Identifier: \"%.4s\"\n", (char *)&id);
 
-    if (id == IDSTUDIOHEADER)
-    {
-        fprintf (stdout, "Version: %i\n", version);
-
-        if (version < STUDIO_VERSION)
-        {
-            fprintf (stdout, "Valve MDL (Alpha)\n");
-            goto info_done;
-        }
-        
-        int32_t textureindex;
-        mdl_seek (mdl, offsetof (studiohdr_t, textureindex), SEEK_SET);
-        mdl_read (mdl, &textureindex, sizeof (textureindex));
-
-        if (textureindex == sizeof (studiohdr_t))
-        {
-            fprintf (stdout, "Valve MDL external texture group\n");
-        }
-        else
-        {
-            fprintf (stdout, "Valve MDL\n");
-        }
-    }
-    else if (id == IDSTUDIOSEQHEADER)
-    {
-        fprintf (stdout, "Version: %i\n", version);
-        
-        fprintf (stdout, "Valve MDL sequence group\n");
-    }
-    else if (id == IDSPRITEHEADER)
-    {
-        fprintf (stdout, "Version: %i\n", version);
-        
-        if (version < SPRITE_VERSION)
-        {
-            fprintf (stdout, "Valve SPR (Alpha)\n");
-            goto info_done;
-        }
-
-        fprintf (stdout, "Valve SPR\n");
-
-        dsprite_t header;
-        mdl_seek (mdl, 0, SEEK_SET);
-        mdl_read (mdl, &header, sizeof (header));
-
-        fprintf (stdout, "Sprite has %i frames, %i\u00d7%i pixels\n", header.numframes, header.width, header.height);
-        
-        goto info_done;
-    }
-    else if (id == IDWADHEADER)
+    if (id == IDWADHEADER)
     {
         fprintf (stdout, "Valve WAD\n");
 
@@ -215,92 +158,7 @@ void info_mdl (const char *mdlname, const char *args)
         fprintf (stdout, "Unknown\n");
         goto info_done;
     }
-
-    unsigned long mode = 0;
     
-    if (args)
-    {
-        char *arg = strtok (args, ",");
-
-        while (arg)
-        {
-            if (!strcasecmp (arg, "acts"))
-            {
-                mode |= kInfoAct;
-            }
-            else if (!strcasecmp (arg, "events"))
-            {
-                mode |= kInfoEvent;
-            }
-            else if (!strcasecmp (arg, "bodygroups"))
-            {
-                mode |= kInfoBody;
-            }
-            arg = strtok (NULL, ",");
-        }
-    }
-
-    studiohdr_t header;
-    mdl_seek (mdl, 0, SEEK_SET);
-    mdl_read (mdl, &header, sizeof (header));
-
-    fprintf (stdout, "Stored name: \"%.64s\"\n", header.name);
-    
-    fprintf (stdout, "%i sequences:\n", header.numseq);
-
-    int i, j;
-    mstudioseqdesc_t seq;
-    mstudioevent_t event;
-    
-    for (i = 0; i < header.numseq; ++i)
-    {
-        mdl_seek (mdl, header.seqindex + sizeof (seq) * i, SEEK_SET);
-        mdl_read (mdl, &seq, sizeof (seq));
-        
-        fprintf (stdout, "%4i : \"%s\"\n", i, seq.label);
-
-        if (mode & kInfoAct && seq.activity > 0)
-        {
-            fprintf (stdout, "    %s\n", mdl_getactname (seq.activity));
-        }
-
-        if (mode & kInfoEvent && seq.numevents > 0)
-        {
-            fprintf (stdout, "    %i events:\n", seq.numevents);
-
-            mdl_seek (mdl, seq.eventindex, SEEK_SET);
-            
-            for (j = 0; j < seq.numevents; ++j)
-            {
-                mdl_read (mdl, &event, sizeof (event));
-                fprintf (stdout, "        %4i : %i\n", event.frame, event.event);
-            }
-        }
-    }
-    
-    if (id != IDSTUDIOSEQHEADER && (mode & kInfoBody))
-    {
-        fprintf (stdout, "Body groups (%i):\n", header.numbodyparts);
-
-        mstudiobodyparts_t bodypart;
-        mstudiomodel_t model;
-
-        for (i = 0; i < header.numbodyparts; ++i)
-        {
-            mdl_seek (mdl, header.bodypartindex + sizeof (bodypart) * i, SEEK_SET);
-            mdl_read (mdl, &bodypart, sizeof (bodypart));
-            fprintf (stdout, "%4i : \"%s\"\n", i, bodypart.name);
-
-            mdl_seek (mdl, bodypart.modelindex, SEEK_SET);
-
-            for (j = 0; j < bodypart.nummodels; ++j)
-            {
-                mdl_read (mdl, &model, sizeof (model));
-                fprintf (stdout, "    %4i : \"%s\"\n", j, model.name);
-            }
-        }
-    }
-
 info_done:
     fclose (mdl);
 

@@ -13,24 +13,7 @@ Valve LLC.  All other use, distribution, or modification is prohibited
 without written permission from Valve LLC.
 ===========================================================================
 */
-
-#include "studio.h"
-
-void decomp_mdl (
-    const char *mdlname,
-    const char *qcname,
-    const char *cd,
-    const char *cdtexture,
-    const char *cdanim,
-    const char *qcdir,
-    const char *smddir);
-
-void decomp_spr (
-    const char *sprname,
-    const char *qcname,
-    const char *cd,
-    const char *qcdir,
-    const char *bmpdir);
+#include "decompile.h"
 
 void decomp_wad (
     const char *wadname,
@@ -41,10 +24,6 @@ void decomp_bsptex (
     const char *bspname,
     const char *bmpdir,
     const char *pattern);
-
-void info_mdl (
-    const char *mdlname,
-    const char *args);
 
 static int getargs (
     int argc,
@@ -58,7 +37,7 @@ static int getargs (
     if (argc < 2)
     {
 print_help:
-        fprintf (stdout, "Usage: decompmdl [options...] <input {*.mdl | *.spr | *.wad | *.bsp}> [<output {directory | *.qc}>]\n\n");
+        fprintf (stdout, "Usage: decompmdl [options...] <input {*.wad | *.bsp}> [<output {directory | *.qc}>]\n\n");
         fprintf (stdout, "Options:\n");
         fprintf (stdout, "\t-help\t\t\tDisplay this message and exit.\n\n");
 
@@ -68,12 +47,9 @@ print_help:
         
         fprintf (stdout,
 "\t-cdtexture <path>\tSets the texture path, relative to data path.\n\
-\t\t\t\tDefaults to \"./maps_8bit\" for models, and \"./bmp\"\n\
-\t\t\t\tfor sprites, WADs, and BSPs.\n\n");
+\t\t\t\tDefaults to \"./bmp\"\n\
+\t\t\t\tfor WADs, and BSPs.\n\n");
         
-        fprintf (stdout,
-"\t-cdanim <path>\t\tSets the animation path, relative to data path.\n\
-\t\t\t\tDefaults to \"./anims\".\n\n");
         
         fprintf (stdout,
 "\t-pattern <string>\tIf set, only textures containing the matching\n\
@@ -121,12 +97,6 @@ print_help:
         {
             *cdtexture = argv[i + 1];
             fprintf (stdout, "Texture path set to: \"%s\"\n", *cdtexture);
-            ++i;
-        }
-        else if (!strcmp (argv[i], "-cdanim"))
-        {
-            *cdanim = argv[i + 1];
-            fprintf (stdout, "Animation path set to: \"%s\"\n", *cdanim);
             ++i;
         }
         else if (!strcmp (argv[i], "-pattern"))
@@ -221,19 +191,11 @@ int main (int argc, char **argv)
 
     char *name, *ext;
     filebase (in, &name, &ext);
-    if (!strcasecmp (ext, ".spr"))
+    
+    if (!strcasecmp (ext, ".wad"))
     {
         if (cdtexture == NULL)
-            cdtexture = "./bmp";
-
-        char *bmpdir = appenddir (qcdir, cdtexture);
-        decomp_spr (in, skippath (qcname), cdtexture, qcdir, bmpdir);
-        free (bmpdir);
-    }
-    else if (!strcasecmp (ext, ".wad"))
-    {
-        if (cdtexture == NULL)
-            cdtexture = "./bmp";
+            cdtexture = "bmp";
 
         char *bmpdir = appenddir (qcdir, cdtexture);
         decomp_wad (in, bmpdir, wadpattern);
@@ -250,21 +212,7 @@ int main (int argc, char **argv)
     }
     else
     {
-        if (cdtexture == NULL)
-            cdtexture = "./maps_8bit";
-        
-        if (cdanim == NULL)
-            cdanim = "./anims";
-        
-        decomp_mdl (in, skippath (qcname), cd, cdtexture, cdanim, qcdir, smddir);
-    }
-
-    free (smddir);
-    free (qcname);
-    
-    if (!havecd)
-    {
-        free (qcdir);
+       printf("Unknown input should be .wad or .bsp");
     }
 
     return 0;
