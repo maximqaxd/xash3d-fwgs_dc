@@ -27,6 +27,7 @@ GNU General Public License for more details.
 #include <arch/arch.h>
 #include <dc/sound/sound.h>
 #include <glkos.h>
+#include <kos/dbglog.h>
 
 /*
  * OpenBOR - http://www.LavaLit.com
