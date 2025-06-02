@@ -375,15 +375,18 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
 #if XASH_DREAMCAST
     if(fmt == 32 || fmt == 20)  // Yamaha ADPCM format
     {
-        uint32_t raw_samples = GetLittleLong();
+        uint32_t chunk_size = GetLittleLong();
         
         // ADPCM block alignment
         #define ADPCM_BLOCK_SIZE 32
 
+        // Calculate total samples using correct formula
+        int total_samples = (int)((float)chunk_size / (((float)(sound.width * 8) / 8) * (float)sound.channels));
+        
         // Calculate aligned size (keep original size)
-        size_t aligned_size = ALIGN(raw_samples, ADPCM_BLOCK_SIZE);
-        sound.samples = raw_samples;
-        sound.size = raw_samples;
+        size_t aligned_size = ALIGN(total_samples, ADPCM_BLOCK_SIZE);
+        sound.samples = total_samples;
+        sound.size = chunk_size;
 
         // Try to allocate AICA memory
         uint32_t aica_addr = snd_mem_malloc(aligned_size);
@@ -403,12 +406,12 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
 
             // Copy ADPCM data to aligned buffer
             const byte* src = buffer + (iff_dataPtr - buffer);
-            memcpy(aligned_buffer, src, raw_samples);
+            memcpy(aligned_buffer, src, total_samples);
 
             // Pad with zeros if necessary
-            if (aligned_size > raw_samples)
+            if (aligned_size > total_samples)
             {
-                memset((uint8_t *)aligned_buffer + raw_samples, 0, aligned_size - raw_samples);
+                memset((uint8_t *)aligned_buffer + total_samples, 0, aligned_size - total_samples);
             }
 
             // Copy from aligned buffer to AICA memory
@@ -428,38 +431,8 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
         }
         else
         {
-            // Fallback to PCM decoding in main memory
-            sound.size = sound.samples * sizeof(int16_t);
-            sound.wav = Mem_Malloc(host.soundpool, sound.size);
-            
-            const byte *src = buffer + (iff_dataPtr - buffer);
-            int16_t *dst = (int16_t *)sound.wav;
-            
-            // Decode ADPCM to PCM
-            aica_decode(src, dst, sound.samples);
-            
-            // Apply sample smoothing
-            int16_t prev = 0;
-            for(int i = 0; i < sound.samples; i++)
-            {
-                int32_t current = dst[i];
-                int32_t smoothed = (current + prev) >> 1;
-                dst[i] = (int16_t)smoothed;
-                prev = current;
-            }
-            
-            // Simple 8-sample ramp at the end
-            const int ramp_samples = 8;
-            for(int i = 0; i < ramp_samples && i < sound.samples; i++)
-            {
-                float scale = 1.0f - ((float)i / ramp_samples);
-                dst[sound.samples - 1 - i] = (int16_t)(dst[sound.samples - 1 - i] * scale);
-            }
-            
-            sound.type = WF_PCMDATA;
-            sound.aica_pos = 0;  // Mark as main memory
-            Con_Printf("AICA: Using main RAM for %s (%d bytes)\n", name, sound.size);
-            return true;
+            Con_Printf("%s: dropped sound %s not enough free mem in SRAM, requested %zu bytes\n", __func__, name, sound.size);
+            return false;
         }
     }
     else
