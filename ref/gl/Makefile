@@ -1,5 +1,5 @@
 TARGET = libref_gl.a
-DEFINES = -D_KOS_=1 -D_SH4_=1 -DXASH_GAMEDIR="valve" -DXASH_GL_STATIC=1 -DXASH_LOW_MEMORY=2 -DALLOCA_H=<malloc.h> -DSTDINT_H=<stdint.h> -DHAVE_TGMATH_H=0 -DHAVE_STRNICMP=1 -DHAVE_STRICMP=1 -DXASH_STATIC_LIBS=1 -DREF_DLL=1
+DEFINES = -D_KOS_=1 -D_SH4_=1 -DXASH_GAMEDIR="valve" -DXASH_GL_STATIC=1 -DXASH_LOW_MEMORY=2 -DALLOCA_H=<malloc.h> -DSTDINT_H=<stdint.h> -DHAVE_TGMATH_H=0 -DHAVE_STRCASECMP=1 -DXASH_STATIC_LIBS=1 -DREF_DLL=1
 INCLUDES = -I$(KOS_PORTS)/include/GL -I../../engine/platform/dreamcast -I../../filesystem -I../../public -I../../common -I../../pm_shared -I../../engine -I../../ref/gl -I../../engine/common -I../../engine/common/imagelib
 
 KOS_CFLAGS +=  $(INCLUDES) $(DEFINES) -Os -fomit-frame-pointer -ffunction-sections -fdata-sections -fno-strict-aliasing -mrelax -fno-asynchronous-unwind-tables -fno-stack-protector
