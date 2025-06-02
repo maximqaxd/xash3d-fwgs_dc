@@ -412,6 +412,9 @@ static size_t GL_CalcImageSize( pixformat_t format, int width, int height, int d
 	case PF_ARGB_4444:
 		size = width * height * depth * 2;
 		break;
+	case PF_SMALL_VQ_RGB_5650:
+		size = 256 + ((width * height) / 4);
+		break;
 #endif
 	}
 
@@ -772,6 +775,7 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 #if XASH_DREAMCAST
 		case PF_VQ_ARGB_4444: tex->format = GL_COMPRESSED_ARGB_4444_VQ_KOS; break;
 		case PF_VQ_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_KOS; break;
+		case PF_SMALL_VQ_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_KOS; break;
 		case PF_VQ_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_KOS; break;
 		case PF_VQ_MIPMAP_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS; break;
 		case PF_VQ_MIPMAP_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS; break;
@@ -2295,10 +2299,11 @@ static void GL_CreateInternalTextures( void )
 	for( x = 0; x < 16; x++ )
 		((uint *)pic->buffer)[x] = 0xFF000000;
 	tr.blackTexture = GL_LoadTextureInternal( REF_BLACK_TEXTURE, pic, TF_COLORMAP );
-
+#if !XASH_DREAMCAST
 	// cinematic dummy
 	pic = GL_FakeImage( 640, 100, 1, IMAGE_HAS_COLOR );
 	tr.cinTexture = GL_LoadTextureInternal( "*cintexture", pic, TF_NOMIPMAP|TF_CLAMP );
+#endif
 }
 
 /*
@@ -2435,6 +2440,24 @@ void R_TextureList_f( void )
 			break;
 		case GL_RGBA32F_ARB:
 			gEngfuncs.Con_Printf( "RGBA32F" );
+			break;
+		case GL_RGB565_KOS:
+			gEngfuncs.Con_Printf( "RGB565" );
+			break;
+		case GL_ARGB1555_KOS:
+			gEngfuncs.Con_Printf( "ARGB1555" );
+			break;
+		case GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS:
+			gEngfuncs.Con_Printf( "ARGB1555 VQ MIPMAP" );
+			break;
+		case GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS:
+			gEngfuncs.Con_Printf( "RGB565 VQ MIPMAP" );
+			break;
+		case GL_COMPRESSED_RGB_565_VQ_KOS:
+			gEngfuncs.Con_Printf( "RGB565 VQ" );
+			break;
+		case GL_COMPRESSED_ARGB_1555_VQ_KOS:
+			gEngfuncs.Con_Printf( "ARGB 1555 VQ" );
 			break;
 		default:
 			gEngfuncs.Con_Printf( " ^1ERROR^7 " );
