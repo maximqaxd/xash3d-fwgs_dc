@@ -300,9 +300,15 @@ static byte *LZSS_CompressNoAlloc( lzss_state_t *state, byte *pInput, int input_
 	header->size = input_length;
 
 	// create the compression work buffers, small enough (~64K) for stack
+#if XASH_DREAMCAST
+	// Use malloc instead of alloca on Dreamcast to avoid stack underrun
+	state->hash_table = (lzss_list_t *)malloc( 256 * sizeof( lzss_list_t ));
+	state->hash_node = (lzss_node_t *)malloc( state->window_size * sizeof( lzss_node_t ));
+#else
 	state->hash_table = (lzss_list_t *)alloca( 256 * sizeof( lzss_list_t ));
-	memset( state->hash_table, 0, 256 * sizeof( lzss_list_t ));
 	state->hash_node = (lzss_node_t *)alloca( state->window_size * sizeof( lzss_node_t ));
+#endif
+	memset( state->hash_table, 0, 256 * sizeof( lzss_list_t ));
 	memset( state->hash_node, 0, state->window_size * sizeof( lzss_node_t ));
 
 	while( input_length > 0 )
@@ -367,6 +373,10 @@ static byte *LZSS_CompressNoAlloc( lzss_state_t *state, byte *pInput, int input_
 		if( pOutput >= pEnd )
 		{
 			// compression is worse, abandon
+#if XASH_DREAMCAST
+			free( state->hash_table );
+			free( state->hash_node );
+#endif
 			state->hash_table = NULL;
 			state->hash_node = NULL;
 			return NULL;
@@ -377,6 +387,10 @@ static byte *LZSS_CompressNoAlloc( lzss_state_t *state, byte *pInput, int input_
 	{
 		// unexpected failure
 		Assert( 0 );
+#if XASH_DREAMCAST
+		free( state->hash_table );
+		free( state->hash_node );
+#endif
 		state->hash_table = NULL;
 		state->hash_node = NULL;
 		return NULL;
@@ -398,6 +412,11 @@ static byte *LZSS_CompressNoAlloc( lzss_state_t *state, byte *pInput, int input_
 
 	if( pOutputSize )
 		*pOutputSize = pOutput - pStart;
+
+#if XASH_DREAMCAST
+	free( state->hash_table );
+	free( state->hash_node );
+#endif
 
 	return pStart;
 }
