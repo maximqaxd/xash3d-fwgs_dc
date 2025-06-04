@@ -3352,6 +3352,7 @@ int main (int argc, char **argv)
 	printf( "PVRStudioMDL Copyright (c) 1996-2002, Valve LLC.\n");
 	printf( "Supporting Sega Dreamcast PVR Textures\n" );
 	printf( "By OVERRiDE 2010\n");
+	printf( "By maximqad 2025\n");
 	printf( "===================================================\n");
 
 	if (argc == 1)
