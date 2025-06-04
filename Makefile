@@ -8,8 +8,6 @@ TARGET = xash
 
 include engine.mk
 
-include 3rdparty/dreamcast/kos/Makefile.rules
-
 # Module paths and lib names
 FILESYSTEM_DIR = filesystem
 REF_GL_DIR = ref/gl
@@ -17,7 +15,7 @@ MAINUI_DIR = libs/mainui_dc
 CL_DLL_DIR = ../hlsdk-portable_dc/cl_dll
 SV_DLL_DIR = ../hlsdk-portable_dc/dlls
 UTILS_DIR = utils
-KOS_DIR = 3rdparty/dreamcast/kos
+KOS_DIR = /opt/toolchains/dc/kos
 GLDC_DIR = 3rdparty/dreamcast/GLdc
 
 
@@ -71,9 +69,6 @@ tools-mdldec:
 	@echo "Building mdldec..."
 	@$(MAKE) -C $(UTILS_DIR)/mdldec
 
-build-kos:
-	@echo "Building KOS..."
-	@. $(KOS_DIR)/environ.sh && $(MAKE) -C $(KOS_DIR)
 
 build-gldc:
 	@echo "Building GLdc..."
@@ -82,7 +77,7 @@ build-gldc:
 	@cd $(GLDC_DIR)/dcbuild && make
 
 # Step 2: Build engine and create IP.BIN
-engine: build-kos build-gldc clean-public $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 1ST_READ.BIN
+engine: build-gldc clean-public $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 1ST_READ.BIN
 
 # Clean public folder object files
 clean-public:
