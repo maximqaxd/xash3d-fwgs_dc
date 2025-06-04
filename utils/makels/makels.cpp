@@ -24,6 +24,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <ctype.h>
+#include <limits.h>
+
 char **ppszFiles = NULL;
 int nFiles = 0;
 int nMaxFiles = 0;
@@ -43,7 +45,9 @@ int main(int argc, char **argv) {
 	char *pszdir;
 	char *pszWadName;
 	char *pszScriptName;
-	char szBuf[1024];
+	char szBuf[4096];
+	char szShort[PATH_MAX];
+	char szFull[PATH_MAX];
 	FILE *hScriptFile;
 	struct dirent *entry;
 	DIR *dp;
@@ -56,15 +60,30 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
 
-	pszdir = (char *)malloc(strlen(argv[1]) + 7);
+	pszdir = (char *)malloc(strlen(argv[1]) + 32);
+	if (!pszdir) {
+		printf("Failed to allocate memory for directory path\n");
+		exit(EXIT_FAILURE);
+	}
 	strcpy(pszdir, argv[1]);
 	strcat(pszdir, "/*.pvr");
 
-	pszWadName = (char *)malloc(strlen(argv[2]) + 5);
+	pszWadName = (char *)malloc(strlen(argv[2]) + 32);
+	if (!pszWadName) {
+		printf("Failed to allocate memory for wad name\n");
+		free(pszdir);
+		exit(EXIT_FAILURE);
+	}
 	strcpy(pszWadName, argv[2]);
 	strcat(pszWadName, ".wad");
 
-	pszScriptName = (char *)malloc(strlen(argv[3]) + 1);
+	pszScriptName = (char *)malloc(strlen(argv[3]) + 32);
+	if (!pszScriptName) {
+		printf("Failed to allocate memory for script name\n");
+		free(pszdir);
+		free(pszWadName);
+		exit(EXIT_FAILURE);
+	}
 	strcpy(pszScriptName, argv[3]);
 	hScriptFile = fopen(pszScriptName, "w");
 
@@ -87,8 +106,14 @@ int main(int argc, char **argv) {
 	if (dp != NULL) {
 		while ((entry = readdir(dp))) {
 			if (entry->d_type == DT_REG) {
-				char szShort[256];
-				strcpy(szShort, entry->d_name);
+				if (strlen(entry->d_name) >= PATH_MAX - 1) {
+					printf("Warning: Filename too long, skipping: %s\n", entry->d_name);
+					continue;
+				}
+
+				strncpy(szShort, entry->d_name, PATH_MAX - 1);
+				szShort[PATH_MAX - 1] = '\0';
+				
 				for (char *p = szShort; *p; ++p) *p = toupper(*p);
 
 				if ((szShort[1] == '_') && ((szShort[0] == 'N') || (szShort[0] == 'F'))) {
@@ -115,15 +140,22 @@ int main(int argc, char **argv) {
 
 		for (int i = 0; i < nFiles; i++) {
 			char *p;
-			char szShort[256];
-			char szFull[256];
+			
+			if (snprintf(szShort, PATH_MAX, "%s/%s", argv[1], ppszFiles[i]) >= PATH_MAX) {
+				printf("Warning: Path too long, skipping: %s\n", ppszFiles[i]);
+				continue;
+			}
 
-			strcpy(szShort, argv[1]);
-			strcat(szShort, "/");
-			strcat(szShort, ppszFiles[i]);
-			realpath(szShort, szFull);
+			if (realpath(szShort, szFull) == NULL) {
+				printf("Warning: Could not resolve real path for %s, skipping\n", szShort);
+				continue;
+			}
 
-			sprintf(szBuf, "$loadbmp    \"%s\"\n", szFull);
+			if (snprintf(szBuf, sizeof(szBuf), "$loadbmp    \"%s\"\n", szFull) >= sizeof(szBuf)) {
+				printf("Warning: Buffer overflow prevented for %s\n", szFull);
+				continue;
+			}
+
 			fWrite = fputs(szBuf, hScriptFile);
 			if (fWrite == EOF) {
 				printf("\n---------- ERROR ------------------\n");
@@ -133,9 +165,13 @@ int main(int argc, char **argv) {
 			}
 
 			p = strchr(ppszFiles[i], '.');
-			*p = '\0';
+			if (p) *p = '\0';
 
-			sprintf(szBuf, "%s  miptex -1 -1 -1 -1\n\n", ppszFiles[i]);
+			if (snprintf(szBuf, sizeof(szBuf), "%s  miptex -1 -1 -1 -1\n\n", ppszFiles[i]) >= sizeof(szBuf)) {
+				printf("Warning: Buffer overflow prevented for %s\n", ppszFiles[i]);
+				continue;
+			}
+
 			fWrite = fputs(szBuf, hScriptFile);
 			if (fWrite == EOF) {
 				printf("\n---------- ERROR ------------------\n");
