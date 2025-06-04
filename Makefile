@@ -69,6 +69,7 @@ tools-mdldec:
 	@echo "Building mdldec..."
 	@$(MAKE) -C $(UTILS_DIR)/mdldec
 
+include $(KOS_BASE)/Makefile.rules
 
 build-gldc:
 	@echo "Building GLdc..."
@@ -102,7 +103,7 @@ $(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
 
 1ST_READ.BIN: $(TARGET) IP.BIN
 	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
-	$(KOS_BASE)/utils/scramble/scramble $(TARGET).bin 1ST_READ.BIN
+	$(KOS_BASE)/utils/scramble/scramble $(TARGET).BIN 1ST_READ.BIN
 	-rm -f build/1ST_READ.BIN
 	cp 1ST_READ.BIN build
 
@@ -118,7 +119,7 @@ repack: clean-tools tools
 # Step 4: Create CDI
 cdi: engine repack
 	@echo "Creating CDI image..."
-	./mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
+	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
 
 # Main target that runs all steps in order
 all: engine clean-tools tools repack cdi
