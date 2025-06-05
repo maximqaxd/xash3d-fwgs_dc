@@ -107,6 +107,11 @@ $(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
 	-rm -f build/1ST_READ.BIN
 	cp 1ST_READ.BIN build
 
+1ST_READ_DS.BIN: $(TARGET) IP.BIN
+	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
+	-rm -f build/1ST_READ.BIN
+	cp 1ST_READ.BIN build
+
 IP.BIN: ip.txt
 	-rm -f build/IP.BIN
 	$(KOS_BASE)/utils/makeip/makeip ip.txt build/IP.BIN
@@ -120,9 +125,12 @@ repack: clean-tools tools
 cdi: engine repack
 	@echo "Creating CDI image..."
 	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
+ds_iso: engine 1ST_READ_DS.BIN repack
+	@echo "Creating Dreamshell ISO image..."
+	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso build
 
 # Main target that runs all steps in order
-all: engine clean-tools tools repack cdi
+all: engine clean-tools tools repack cdi ds_iso
 
 # Clean targets
 clean-tools:
