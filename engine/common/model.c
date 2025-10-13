@@ -16,7 +16,9 @@ GNU General Public License for more details.
 #include "mod_local.h"
 #include "sprite.h"
 #include "xash3d_mathlib.h"
+#if !XASH_DREAMCAST
 #include "alias.h"
+#endif
 #include "studio.h"
 #include "wadfile.h"
 #include "world.h"
@@ -24,9 +26,25 @@ GNU General Public License for more details.
 #include "client.h"
 #include "server.h"
 
+#if XASH_DREAMCAST
+// Dynamic allocation on DC to save ~204KB of static data
+// Start with 64 models (~50KB) and grow as needed
+static model_info_t	*mod_crcinfo = NULL;
+static model_t		*mod_known = NULL;
+static int		mod_capacity = 0;
+static poolhandle_t	mod_mempool = 0;
+#else
 static model_info_t	mod_crcinfo[MAX_MODELS];
-static model_t	mod_known[MAX_MODELS];
+static model_t		mod_known[MAX_MODELS];
+#endif
 static int	mod_numknown = 0;
+
+#if XASH_DREAMCAST
+// DC-only: LRU for studio model CPU blobs
+static size_t g_dc_studio_bytes = 0;
+CVAR_DEFINE( dc_studio_budget_kb, "dc_studio_budget_kb", "192", FCVAR_ARCHIVE, "Budget for studio CPU data (KB)" );
+CVAR_DEFINE( dc_studio_keep_frames, "dc_studio_keep_frames", "120", FCVAR_ARCHIVE, "Frames to keep unused studio before evict" );
+#endif
 poolhandle_t      com_studiocache;		// cache for submodels
 CVAR_DEFINE( mod_studiocache, "r_studiocache", "1", FCVAR_ARCHIVE, "enables studio cache for speedup tracing hitboxes" );
 CVAR_DEFINE_AUTO( r_wadtextures, "0", 0, "completely ignore textures in the bsp-file if enabled" );
@@ -64,6 +82,67 @@ static void Mod_Modellist_f( void )
 	Con_Printf( "%i total models\n", nummodels );
 	Con_Printf( "\n" );
 }
+
+#if XASH_DREAMCAST
+void DC_Studio_EvictLRU( void )
+{
+    size_t budget = (size_t)(Q_atoi( dc_studio_budget_kb.string )) * 1024;
+    int keep = Q_atoi( dc_studio_keep_frames.string );
+    if( budget == 0 || keep <= 0 ) return;
+
+    // compute total and find LRU candidate older than keep frames
+    size_t total = 0; int lru = -1; size_t lru_size = 0; int i;
+    for( i = 0; i < mod_numknown; i++ )
+    {
+        model_t *m = &mod_known[i];
+        if( m->type != mod_studio || !m->cache.data ) continue;
+        studiohdr_t *ph = (studiohdr_t *)m->cache.data;
+        total += (size_t)ph->length;
+    }
+    if( total <= budget ) return;
+
+    // Evict models not touched in last 'keep' frames, oldest first
+    for( ;; )
+    {
+        lru = -1; lru_size = 0;
+        for( i = 0; i < mod_numknown; i++ )
+        {
+            model_t *m = &mod_known[i];
+            if( m->type != mod_studio || !m->cache.data ) continue;
+            uint age = (uint)host.framecount - m->dc_last_used_frame;
+            if( age <= (uint)keep ) continue;
+            studiohdr_t *ph = (studiohdr_t *)m->cache.data;
+            size_t sz = (size_t)ph->length;
+            // Prefer evicting the largest eligible model to meet budget faster
+            if( sz > lru_size ) { lru = i; lru_size = sz; }
+        }
+        if( lru == -1 ) break;
+        model_t *m = &mod_known[lru];
+#if !XASH_DEDICATED
+        // Unload renderer-side textures while header is still available
+        if( !Host_IsDedicated() )
+            ref.dllFuncs.Mod_ProcessRenderData( m, false, NULL );
+#endif
+        studiohdr_t *ph = (studiohdr_t *)m->cache.data;
+        size_t sz = (size_t)ph->length;
+        Mem_Free( m->cache.data );
+        m->cache.data = NULL;
+        if( g_dc_studio_bytes >= sz ) g_dc_studio_bytes -= sz; else g_dc_studio_bytes = 0;
+        Con_DPrintf( "dc_studio: evicted %s (%s)\n", m->name, Q_memprint( (int)sz ) );
+
+        // recompute total and stop if under budget
+        total = 0;
+        for( i = 0; i < mod_numknown; i++ )
+        {
+            model_t *mm = &mod_known[i];
+            if( mm->type != mod_studio || !mm->cache.data ) continue;
+            studiohdr_t *ph2 = (studiohdr_t *)mm->cache.data;
+            total += (size_t)ph2->length;
+        }
+        if( total <= budget ) break;
+    }
+}
+#endif
 
 /*
 ================
@@ -103,25 +182,56 @@ void Mod_FreeModel( model_t *mod )
 	if( !mod || !COM_CheckStringEmpty( mod->name ) )
 		return;
 
-	if( mod->type != mod_brush || mod->name[0] != '*' )
-	{
-		Mod_FreeUserData( mod );
-		Mem_FreePool( &mod->mempool );
-	}
+#if 0
+        // Only the world model owns the allocations; submodels (*) share pointers
+        if( mod->type != mod_brush || mod->name[0] != '*' )
+        {
+            extern uint8_t *pvr_pool; // Defined in zone.c
+            void *alloc_base = alloc_base_address(pvr_pool);
+            size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
 
-	if( mod->type == mod_brush && FBitSet( mod->flags, MODEL_WORLD ) )
-	{
-		world.version = 0;
-		world.shadowdata = NULL;
-		world.deluxedata = NULL;
+            if (mod->surfaces)
+            {
 
-		// data already freed by Mem_FreePool above
-		world.hull_models = NULL;
-		world.compressed_phs = NULL;
-		world.phsofs = NULL;
-	}
+                // Free a single contiguous extrasurf VRAM block if present
+                mextrasurf_t *info0 = mod->surfaces[0].info;
+                if( info0 &&
+                    (uint8_t *)info0 >= (uint8_t *)alloc_base &&
+                    (uint8_t *)info0 < (uint8_t *)alloc_base + alloc_size )
+                {
+                    alloc_free( pvr_pool, info0 );
+                    for( int i = 0; i < mod->numsurfaces; i++ )
+                        mod->surfaces[i].info = NULL;
+                }
 
-	memset( mod, 0, sizeof( *mod ));
+                // Free msurface array if it was allocated in VRAM
+                if( (uint8_t *)mod->surfaces >= (uint8_t *)alloc_base &&
+                    (uint8_t *)mod->surfaces < (uint8_t *)alloc_base + alloc_size )
+                {
+                    alloc_free( pvr_pool, mod->surfaces );
+                    mod->surfaces = NULL;
+                }
+            }
+        }
+#endif
+
+    if (mod->type != mod_brush || mod->name[0] != '*')
+    {
+        Mod_FreeUserData(mod);
+        Mem_FreePool(&mod->mempool); // Frees main RAM allocations
+    }
+
+    if (mod->type == mod_brush && FBitSet(mod->flags, MODEL_WORLD))
+    {
+        world.version = 0;
+        world.shadowdata = NULL;
+        world.deluxedata = NULL;
+        world.hull_models = NULL;
+        world.compressed_phs = NULL;
+        world.phsofs = NULL;
+    }
+
+    memset(mod, 0, sizeof(*mod));
 }
 
 /*
@@ -139,10 +249,27 @@ Mod_Init
 void Mod_Init( void )
 {
 	com_studiocache = Mem_AllocPool( "Studio Cache" );
+	
+#if XASH_DREAMCAST
+	// Dynamically allocate model arrays to save ~204KB of static data
+	// Start with 128 models (~100KB) and grow as needed
+	mod_mempool = Mem_AllocPool( "Model Arrays" );
+	mod_capacity = 512;
+	
+	mod_crcinfo = (model_info_t *)Mem_Calloc( mod_mempool, mod_capacity * sizeof(model_info_t) );
+	mod_known = (model_t *)Mem_Calloc( mod_mempool, mod_capacity * sizeof(model_t) );
+	
+	Con_DPrintf( "Mod_Init: allocated %d model slots (%zu KB)\n", 
+		mod_capacity, (mod_capacity * (sizeof(model_info_t) + sizeof(model_t))) / 1024 );
+#endif
+
 	Cvar_RegisterVariable( &mod_studiocache );
 	Cvar_RegisterVariable( &r_wadtextures );
 	Cvar_RegisterVariable( &r_showhull );
-
+#if XASH_DREAMCAST
+    Cvar_RegisterVariable( &dc_studio_budget_kb );
+    Cvar_RegisterVariable( &dc_studio_keep_frames );
+#endif
 	Cmd_AddCommand( "mapstats", Mod_PrintWorldStats_f, "show stats for currently loaded map" );
 	Cmd_AddCommand( "modellist", Mod_Modellist_f, "display loaded models list" );
 
@@ -189,6 +316,18 @@ void Mod_Shutdown( void )
 {
 	Mod_FreeAll();
 	Mem_FreePool( &com_studiocache );
+	
+#if XASH_DREAMCAST
+	// Free dynamically allocated model arrays
+	if( mod_mempool )
+	{
+		Mem_FreePool( &mod_mempool );
+		mod_crcinfo = NULL;
+		mod_known = NULL;
+		mod_capacity = 0;
+		mod_numknown = 0;
+	}
+#endif
 }
 
 /*
@@ -232,9 +371,52 @@ model_t *Mod_FindName( const char *filename, qboolean trackCRC )
 
 	if( i == mod_numknown )
 	{
+#if XASH_DREAMCAST
+		// Check if we need to grow the arrays
+		if( mod_numknown >= mod_capacity )
+		{
+			int new_capacity = mod_capacity * 2;
+			model_info_t *new_crcinfo;
+			model_t *new_known;
+			
+			if( new_capacity > MAX_MODELS )
+				new_capacity = MAX_MODELS;
+			
+			if( mod_numknown >= MAX_MODELS )
+			{
+				Con_DPrintf( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
+				mod_numknown++;
+				return mod; // Return last slot (will likely crash, but matches old behavior)
+			}
+			
+			Con_DPrintf( "Growing model arrays: %d -> %d (%zu KB)\n", 
+				mod_capacity, new_capacity,
+				(new_capacity * (sizeof(model_info_t) + sizeof(model_t))) / 1024 );
+			
+			// Allocate new arrays
+			new_crcinfo = (model_info_t *)Mem_Calloc( mod_mempool, new_capacity * sizeof(model_info_t) );
+			new_known = (model_t *)Mem_Calloc( mod_mempool, new_capacity * sizeof(model_t) );
+			
+			// Copy old data
+			memcpy( new_crcinfo, mod_crcinfo, mod_capacity * sizeof(model_info_t) );
+			memcpy( new_known, mod_known, mod_capacity * sizeof(model_t) );
+			
+			// Free old arrays
+			Mem_Free( mod_crcinfo );
+			Mem_Free( mod_known );
+			
+			// Update pointers
+			mod_crcinfo = new_crcinfo;
+			mod_known = new_known;
+			mod = &mod_known[mod_numknown];
+			mod_capacity = new_capacity;
+		}
+		mod_numknown++;
+#else
 		if( mod_numknown == MAX_MODELS )
 			Host_Error( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
 		mod_numknown++;
+#endif
 	}
 
 	// copy name, so model loader can find model file
@@ -306,12 +488,12 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 		Mod_LoadSpriteModel( mod, buf, &loaded );
 #endif
 		break;
+#if !XASH_DREAMCAST
 	case IDALIASHEADER:
-	#if !XASH_DREAMCAST
 		Mod_LoadAliasModel( mod, buf, &loaded );
 		return NULL;
-	#endif
 		break;
+#endif
 	case Q1BSP_VERSION:
 	case HLBSP_VERSION:
 	case QBSP2_VERSION:
@@ -427,19 +609,41 @@ static void Mod_PurgeStudioCache( void )
 	// release previois map
 	Mod_FreeModel( mod_known );	// world is stuck on slot #0 always
 
-	// we should release all the world submodels
-	// and clear studio sequences
-	for( i = 1; i < mod_numknown; i++ )
-	{
-		if( mod_known[i].type == mod_studio )
-			mod_known[i].submodels = NULL;
-		if( mod_known[i].name[0] == '*' )
-			Mod_FreeModel( &mod_known[i] );
-		mod_known[i].needload = NL_UNREFERENCED;
-	}
+    // we should release all the world submodels
+    // and clear studio sequences
+    for( i = 1; i < mod_numknown; i++ )
+    {
+        model_t *m = &mod_known[i];
+        if( m->type == mod_studio )
+            m->submodels = NULL;
+        if( m->name[0] == '*' )
+            Mod_FreeModel( m );
+        m->needload = NL_UNREFERENCED;
+    }
 
 	Mem_EmptyPool( com_studiocache );
 	Mod_ClearStudioCache();
+
+#if XASH_DREAMCAST
+    // DC: bulk-evict all studio CPU blobs and GL textures on changelevel
+    for( i = 1; i < mod_numknown; i++ )
+    {
+        model_t *m = &mod_known[i];
+        if( m->type != mod_studio || !m->cache.data )
+            continue;
+#if !XASH_DEDICATED
+        if( !Host_IsDedicated() )
+            ref.dllFuncs.Mod_ProcessRenderData( m, false, NULL );
+#endif
+        studiohdr_t *ph = (studiohdr_t *)m->cache.data;
+        size_t sz = (size_t)ph->length;
+        Mem_Free( m->cache.data );
+        m->cache.data = NULL;
+        if( g_dc_studio_bytes >= sz ) g_dc_studio_bytes -= sz; else g_dc_studio_bytes = 0;
+        m->dc_last_used_frame = 0;
+        Con_DPrintf( "dc_studio: evicted (changelevel) %s (%s)\n", m->name, Q_memprint( (int)sz ) );
+    }
+#endif
 }
 
 /*
@@ -575,8 +779,120 @@ Mod_StudioExtradata
 */
 void *Mod_StudioExtradata( model_t *mod )
 {
-	if( mod && mod->type == mod_studio )
-		return mod->cache.data;
+    if( mod && mod->type == mod_studio )
+    {
+#if XASH_DREAMCAST
+        // Touch last used on DC
+        mod->dc_last_used_frame = host.framecount;
+        // If evicted, reload a minimal CPU blob (without textures)
+        if( !mod->cache.data )
+        {
+            char modname[MAX_QPATH];
+            fs_offset_t size = 0;
+            byte *buf;
+
+            Q_strncpy( modname, mod->name, sizeof( modname ) );
+            COM_FixSlashes( modname );
+
+            buf = FS_LoadFile( modname, &size, false );
+            if( buf && size )
+            {
+                studiohdr_t *hdr_in = (studiohdr_t *)buf;
+                size_t full_size = (size_t)hdr_in->length;
+
+                // load full header first so renderer can rebuild texture bindings
+                void *newdata = Mem_Calloc( mod->mempool, full_size );
+                memcpy( newdata, buf, full_size );
+                mod->cache.data = newdata;
+
+                studiohdr_t *ph = (studiohdr_t *)mod->cache.data;
+#if !XASH_DEDICATED
+                if( !Host_IsDedicated() )
+                {
+                    if( ph->numtextures > 0 )
+                    {
+                        // Regular case: textures embedded
+                        ref.dllFuncs.Mod_StudioLoadTextures( mod, ph );
+                    }
+                    else
+                    {
+                        // No embedded textures: try load and merge T.mdl like initial loader does
+                        studiohdr_t *thdr;
+                        void *buffer2;
+
+                        buffer2 = FS_LoadFile( Mod_StudioTexName( mod->name ), NULL, false );
+                        thdr = (studiohdr_t *)buffer2;
+                        if( thdr != NULL && thdr->length >= (int)sizeof( studiohdr_t ) && thdr->version == STUDIO_VERSION )
+                        {
+                            byte *in, *out;
+                            size_t size1, size2;
+
+                            // build GL textures using texture header
+                            ref.dllFuncs.Mod_StudioLoadTextures( mod, thdr );
+
+                            // merge texture and skinref arrays into main header so renderer can index them
+                            size1 = thdr->numtextures * sizeof( mstudiotexture_t );
+                            size2 = thdr->numskinfamilies * thdr->numskinref * sizeof( short );
+
+                            void *merged = Mem_Calloc( mod->mempool, ph->length + size1 + size2 );
+                            memcpy( merged, ph, ph->length );
+                            Mem_Free( ph );
+                            mod->cache.data = merged;
+                            ph = (studiohdr_t *)mod->cache.data;
+                            ph->numskinfamilies = thdr->numskinfamilies;
+                            ph->numtextures = thdr->numtextures;
+                            ph->numskinref = thdr->numskinref;
+                            ph->textureindex = ph->length;
+                            ph->skinindex = ph->textureindex + size1;
+
+                            in = (byte *)thdr + thdr->textureindex;
+                            out = (byte *)ph + ph->textureindex;
+                            memcpy( out, in, size1 + size2 );
+                            ph->length += size1 + size2;
+                        }
+                        else Con_Printf( S_WARN "%s: %s missing or invalid textures file (reload)\n", __func__, mod->name );
+
+                        if( buffer2 )
+                            Mem_Free( buffer2 );
+                    }
+                }
+#endif
+
+                // Optionally drop CPU-side texture pixels to save RAM
+                if( ph->texturedataindex > 0 && ph->texturedataindex < ph->length )
+                {
+                    size_t trimmed = (size_t)ph->texturedataindex;
+                    void *trimmed_ptr = Mem_Realloc( mod->mempool, mod->cache.data, trimmed );
+                    if( trimmed_ptr )
+                    {
+                        mod->cache.data = trimmed_ptr;
+                        ph = (studiohdr_t *)mod->cache.data;
+                        ph->length = (int)trimmed;
+                        g_dc_studio_bytes += trimmed;
+                        Con_DPrintf( "dc_studio: reloaded %s (%s, trimmed)\n", mod->name, Q_memprint( (int)trimmed ) );
+                    }
+                    else
+                    {
+                        // fallback keep full if realloc failed
+                        g_dc_studio_bytes += full_size;
+                        Con_DPrintf( "dc_studio: reloaded %s (%s)\n", mod->name, Q_memprint( (int)full_size ) );
+                    }
+                }
+                else
+                {
+                    g_dc_studio_bytes += full_size;
+                    Con_DPrintf( "dc_studio: reloaded %s (%s)\n", mod->name, Q_memprint( (int)full_size ) );
+                }
+            }
+            else
+            {
+                Con_Printf( S_ERROR "dc_studio: failed to reload %s\n", mod->name );
+            }
+            if( buf ) Mem_Free( buf );
+        }
+#endif
+        return mod->cache.data;
+    }
 	return NULL;
 }
 

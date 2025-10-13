@@ -382,7 +382,12 @@ typedef struct model_s
 	msurface_t	*surfaces;
 
 	int		numsurfedges;
+#if XASH_DREAMCAST
+	int		*surfedges;   // fallback 32-bit 
+	short		*surfedges16; // compact 16-bit surfedges 
+#else
 	int		*surfedges;
+#endif
 
 	int		numclipnodes;
 	union
@@ -407,6 +412,10 @@ typedef struct model_s
 // additional model data
 //
 	cache_user_t	cache;		// only access through Mod_Extradata
+#if XASH_DREAMCAST
+	// Dreamcast: track last usage for studio LRU
+	unsigned int	dc_last_used_frame;
+#endif
 } model_t;
 
 typedef struct alight_s
