@@ -16,7 +16,7 @@ CL_DLL_DIR = ../hlsdk-portable_dc/cl_dll
 SV_DLL_DIR = ../hlsdk-portable_dc/dlls
 UTILS_DIR = utils
 KOS_DIR = /opt/toolchains/dc/kos
-GLDC_DIR = 3rdparty/dreamcast/GLdc
+GLDC_DIR = /opt/toolchains/dc/kos-ports/lib/
 
 
 MAINUI_LIB = $(MAINUI_DIR)/libmenu.a
@@ -28,7 +28,7 @@ SV_DLL_LIB = $(SV_DLL_DIR)/libhl.a
 OBJS =  $(XASH_CLIENT_OBJS) $(XASH_OBJS) $(XASH_SERVER_OBJS) $(XASH_PLATFORM_OBJS)
 
 LIBS = -L../hlsdk-portable_dc \
-	   -L3rdparty/dreamcast/GLdc/dcbuild \
+	   -L$(GLDC_DIR) \
        -L$(KOS_BASE)/addons/lib/$(KOS_ARCH) \
        -L$(FILESYSTEM_DIR) \
        -L$(REF_GL_DIR) \
@@ -38,9 +38,10 @@ LIBS = -L../hlsdk-portable_dc \
 	   -lmenu\
 	   -lcl_dll \
        -lref_gl \
-       -l:libGL.a \
+       -lGL \
        -lppp \
-	   -lpthread
+	   -lpthread \
+	   -lz
 
 # Step 1: Build all tools
 tools: tools-qlumpy tools-pvrstudiomdl tools-pvrtex tools-makels tools-decompwad tools-mdldec
@@ -78,7 +79,7 @@ build-gldc:
 	@cd $(GLDC_DIR)/dcbuild && make
 
 # Step 2: Build engine and create IP.BIN
-engine: build-gldc clean-public $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 1ST_READ.BIN
+engine: clean-public $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 1ST_READ.BIN
 
 # Clean public folder object files
 clean-public:
@@ -99,7 +100,7 @@ $(CL_DLL_LIB):
 	$(MAKE) -C $(CL_DLL_DIR)
 
 $(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_GL_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
-	kos-c++ -o $(TARGET) $(OBJS) $(LIBS) -Wl,--gc-sections -fwhole-program -Wl,--build-id=none -s
+	kos-c++ -o $(TARGET) $(OBJS) $(LIBS) -Wl,--gc-sections -fwhole-program -Wl,--build-id=none 
 
 1ST_READ.BIN: $(TARGET) IP.BIN
 	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
@@ -119,18 +120,18 @@ IP.BIN: ip.txt
 # Step 3: Repack game files
 repack: clean-tools tools
 	@echo "Repacking game files..."
-	@$(MAKE) -f scripts/dreamcast/valve/repack_valve.mk all
+	@$(MAKE) -f scripts/dreamcast/gearbox/repack_valve.mk all
 
 # Step 4: Create CDI
-cdi: engine repack
+cdi: engine  
 	@echo "Creating CDI image..."
-	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
-ds_iso: engine 1ST_READ_DS.BIN repack
+	./mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
+ds_iso: engine 1ST_READ_DS.BIN 
 	@echo "Creating Dreamshell ISO image..."
-	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso build
+	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso ../xash3d-hl_repack 
 
 # Main target that runs all steps in order
-all: engine clean-tools tools repack cdi ds_iso
+all: engine cdi ds_iso
 
 # Clean targets
 clean-tools:
@@ -153,13 +154,13 @@ clean-engine:
 	-rm -f build/IP.BIN
 
 clean-repack:
-	$(MAKE) -f scripts/dreamcast/valve/repack_valve.mk clean
+	$(MAKE) -f scripts/dreamcast/gearbox/repack_valve.mk clean
 
-clean: clean-tools clean-engine clean-repack
+clean: clean-tools clean-engine 
 	-rm -f $(PROJECT_NAME).cdi
 	-rm -f $(PROJECT_NAME).iso
 
-.PHONY: all clean tools engine repack cdi clean-tools clean-engine clean-repack
+.PHONY: all clean tools engine cdi clean-tools clean-engine clean-repack
 .PHONY: tools-qlumpy tools-pvrstudiomdl tools-pvrtex tools-makels tools-decompwad tools-mdldec
 
 

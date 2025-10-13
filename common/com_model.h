@@ -190,6 +190,9 @@ typedef struct mnode_s
 typedef struct msurface_s	msurface_t;
 typedef struct decal_s	decal_t;
 
+// Forward declaration needed for interfaces that use struct tag in prototypes
+struct cl_entity_s;
+
 // JAY: Compress this as much as possible
 struct decal_s
 {
@@ -251,8 +254,8 @@ typedef struct mextrasurf_s
 #endif
 	mfacebevel_t	*bevel;		// for exact face traceline
 	struct mextrasurf_s	*lumachain;	// draw fullbrights
-	struct cl_entity_s	*parent;		// upcast to owner entity
 #if !XASH_DREAMCAST
+	struct cl_entity_s	*parent;		// upcast to owner entity
 	int		mirrortexturenum;	// gl texnum
 	float		mirrormatrix[4][4];
 	struct grasshdr_s	*grass;		// grass that linked by this surface
@@ -301,7 +304,9 @@ struct msurface_s
 
 	int		lightmaptexturenum;
 	byte		styles[MAXLIGHTMAPS];
+#if !XASH_DREAMCAST
 	int		cached_light[MAXLIGHTMAPS];	// values currently used in lightmap
+#endif
 	mextrasurf_t	*info;		// pointer to surface extradata (was cached_dlight)
 
 	color24		*samples;		// note: this is the actual lightmap data for this surface
@@ -385,7 +390,12 @@ typedef struct model_s
 	msurface_t	*surfaces;
 
 	int		numsurfedges;
+#if XASH_DREAMCAST
+	int		*surfedges;   // fallback 32-bit 
+	short		*surfedges16; // compact 16-bit surfedges 
+#else
 	int		*surfedges;
+#endif
 
 	int		numclipnodes;
 	union
@@ -410,6 +420,10 @@ typedef struct model_s
 // additional model data
 //
 	cache_user_t	cache;		// only access through Mod_Extradata
+#if XASH_DREAMCAST
+	// Dreamcast: track last usage for studio LRU
+	unsigned int	dc_last_used_frame;
+#endif
 } model_t;
 
 typedef struct alight_s

@@ -356,7 +356,7 @@ static void SV_NewGame_f( void )
 {
 	if( Cmd_Argc() == 1 )
 #if XASH_DREAMCAST
-		COM_NewGame( "c0a0" );
+		COM_NewGame( "of0a0" );
 #else
 		COM_NewGame( GI->startmap );
 #endif // XASH_DREAMCAST						  

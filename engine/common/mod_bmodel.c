@@ -392,6 +392,115 @@ static const mlumpinfo_t extlumps[EXTRA_LUMPS] =
 	},
 };
 #endif
+
+#if XASH_DREAMCAST
+// Dreamcast lightmap atlas packer helpers (C-only)
+typedef struct dc_lm_packer_s
+{
+    int pageSize;
+    byte *page;       // 16-bit RGB565 temporary page
+    int *allocated;   // skyline allocator heights, length = pageSize
+    int currentPage;
+    qboolean pageDirty;
+} dc_lm_packer_t;
+
+#if XASH_DREAMCAST
+// Downscale factor for lightmaps on Dreamcast (1 = original, 2 = half-res in each axis)
+static const int g_dc_lightmap_downscale = 2;
+// Runtime scale applied to sample size returned by Mod_SampleSizeForFace on DC
+static int g_dc_lm_sample_scale = 1;
+// Simple post-box-filter sharpen strength in [0..255], 64 ~= 0.25
+static const int g_dc_lm_sharpen_256 = 64;
+#endif
+
+// Track memory saved by disabling face bevels on Dreamcast
+static size_t g_dc_bevel_saved_bytes = 0;
+
+static void DC_LM_Init( dc_lm_packer_t *pk, int pageSize )
+{
+    memset( pk, 0, sizeof( *pk ));
+    pk->pageSize = pageSize;
+    pk->page = (byte *)Z_Calloc( pageSize * pageSize * 2 );
+    pk->allocated = (int *)Z_Calloc( sizeof( int ) * pageSize );
+    pk->currentPage = 0;
+    pk->pageDirty = false;
+}
+
+static qboolean DC_LM_FindSpot( dc_lm_packer_t *pk, int w, int h, int *outx, int *outy )
+{
+    int best = pk->pageSize;
+    int i, j, best2;
+
+    for( i = 0; i <= pk->pageSize - w; i++ )
+    {
+        int y = 0;
+        best2 = 0;
+        for( j = 0; j < w; j++ )
+        {
+            int at = pk->allocated[i + j];
+            if( at >= best ) { y = pk->pageSize; break; }
+            if( at > y ) y = at;
+            if( y + h > pk->pageSize ) break;
+            if( at > best2 ) best2 = at;
+        }
+        if( j == w )
+        {
+            *outx = i;
+            *outy = best2;
+            best = best2;
+        }
+    }
+
+    if( best + h > pk->pageSize )
+        return false;
+
+    for( i = 0; i < w; i++ )
+        pk->allocated[*outx + i] = best + h;
+    return true;
+}
+
+static void DC_LM_UploadPage( dc_lm_packer_t *pk )
+{
+    if( pk->pageDirty )
+    {
+        char name[16];
+        int flags;
+        Q_snprintf( name, sizeof( name ), "*lightmap%i", pk->currentPage );
+        flags = TF_NOMIPMAP|TF_ATLAS_PAGE;
+        // Force full replace on DC: if texture exists, delete it first
+        if( ref.dllFuncs.GL_FindTexture )
+        {
+            int texnum = ref.dllFuncs.GL_FindTexture( name );
+            if( texnum > 0 && ref.dllFuncs.GL_FreeTexture )
+                ref.dllFuncs.GL_FreeTexture( texnum );
+        }
+        {
+            // upload as explicit PF_RGB_5650
+            rgbdata_t r_lm;
+            memset( &r_lm, 0, sizeof( r_lm ));
+            r_lm.width = pk->pageSize;
+            r_lm.height = pk->pageSize;
+            r_lm.type = PF_RGB_5650;
+            r_lm.size = r_lm.width * r_lm.height * 2;
+            r_lm.flags = IMAGE_HAS_COLOR;
+            r_lm.buffer = pk->page;
+            // Always pass update=false to force full replace
+            ref.dllFuncs.GL_LoadTextureFromBuffer( name, &r_lm, flags, false );
+        }
+        pk->currentPage++;
+        memset( pk->page, 0, pk->pageSize * pk->pageSize * 2 );
+        memset( pk->allocated, 0, sizeof( int ) * pk->pageSize );
+        pk->pageDirty = false;
+    }
+}
+
+static void DC_LM_Free( dc_lm_packer_t *pk )
+{
+    if( pk->allocated ) Z_Free( pk->allocated );
+    if( pk->page ) Z_Free( pk->page );
+    memset( pk, 0, sizeof( *pk ));
+}
+#endif // XASH_DREAMCAST
 #define BOX_CLIPNODES_INITIALIZER \
 	{ \
 		.planenum = 0, \
@@ -431,13 +540,21 @@ const mclipnode32_t box_clipnodes32[6] = { BOX_CLIPNODES_INITIALIZER };
 
 static mip_t *Mod_GetMipTexForTexture( dbspmodel_t *bmod, int i )
 {
+	if( !bmod || !bmod->textures )
+		return NULL;
 	if( i < 0 || i >= bmod->textures->nummiptex )
 		return NULL;
-
+#if XASH_DREAMCAST
+	int ofs;
+	memcpy( &ofs, &bmod->textures->dataofs[i], sizeof( ofs ) );
+	if( ofs == -1 )
+		return NULL;
+	return (mip_t *)((byte *)bmod->textures + ofs );
+#else
 	if( bmod->textures->dataofs[i] == -1 )
 		return NULL;
-
 	return (mip_t *)((byte *)bmod->textures + bmod->textures->dataofs[i] );
+#endif
 }
 // Returns index of WAD that texture was found in, or -1 if not found.
 static int Mod_LoadTextureFromWadList( wadlist_t *list, const char *name, rgbdata_t **pic, char *texpath, size_t texpathlen )
@@ -492,9 +609,15 @@ static fs_offset_t Mod_CalculateMipTexSize( const mip_t *mt, qboolean palette )
 {
 	if( !mt )
 		return 0;
-
+#if XASH_DREAMCAST
+	mip_t hdr;
+	memcpy( &hdr, mt, sizeof( hdr ) );
+	return sizeof( hdr ) + (( hdr.width * hdr.height * 85 ) >> 6 ) +
+		( palette ? MIPTEX_CUSTOM_PALETTE_SIZE_BYTES : 0 );
+#else
 	return sizeof( *mt ) + (( mt->width * mt->height * 85 ) >> 6 ) +
 		( palette ? MIPTEX_CUSTOM_PALETTE_SIZE_BYTES : 0 );
+#endif
 }
 
 static qboolean Mod_CalcMipTexUsesCustomPalette( model_t *mod, dbspmodel_t *bmod, int textureIndex )
@@ -504,9 +627,17 @@ static qboolean Mod_CalcMipTexUsesCustomPalette( model_t *mod, dbspmodel_t *bmod
 	fs_offset_t size, remainingBytes;
 
 	mipTex = Mod_GetMipTexForTexture( bmod, textureIndex );
-
-	if( !mipTex || mipTex->offsets[0] <= 0 )
+	if( !mipTex )
 		return false;
+#if XASH_DREAMCAST
+	int ofs0 = 0;
+	memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+	if( ofs0 <= 0 )
+		return false;
+#else
+	if( mipTex->offsets[0] <= 0 )
+		return false;
+#endif
 
 	// Calculate the size assuming we are not using a custom palette.
 	size = Mod_CalculateMipTexSize( mipTex, false );
@@ -514,18 +645,36 @@ static qboolean Mod_CalcMipTexUsesCustomPalette( model_t *mod, dbspmodel_t *bmod
 	// Compute next data offset to determine allocated miptex space
 	for( nextTextureIndex = textureIndex + 1; nextTextureIndex < mod->numtextures; nextTextureIndex++ )
 	{
+#if XASH_DREAMCAST
+		int nextOffset;
+		memcpy( &nextOffset, &bmod->textures->dataofs[nextTextureIndex], sizeof( nextOffset ) );
+#else
 		int nextOffset = bmod->textures->dataofs[nextTextureIndex];
-
+#endif
 		if( nextOffset != -1 )
 		{
-			remainingBytes = nextOffset - ( bmod->textures->dataofs[textureIndex] + size );
+			int curOffset;
+#if XASH_DREAMCAST
+			memcpy( &curOffset, &bmod->textures->dataofs[textureIndex], sizeof( curOffset ) );
+#else
+			curOffset = bmod->textures->dataofs[textureIndex];
+#endif
+			remainingBytes = nextOffset - ( curOffset + size );
 			return remainingBytes >= MIPTEX_CUSTOM_PALETTE_SIZE_BYTES;
 		}
 	}
 
 	// There was no other miptex after this one.
 	// See if there is enough space between the end and our offset.
-	remainingBytes = bmod->texdatasize - ( bmod->textures->dataofs[textureIndex] + size );
+	{
+		int curOffset;
+#if XASH_DREAMCAST
+		memcpy( &curOffset, &bmod->textures->dataofs[textureIndex], sizeof( curOffset ) );
+#else
+		curOffset = bmod->textures->dataofs[textureIndex];
+#endif
+		remainingBytes = bmod->texdatasize - ( curOffset + size );
+	}
 	return remainingBytes >= MIPTEX_CUSTOM_PALETTE_SIZE_BYTES;
 }
 
@@ -1218,19 +1367,47 @@ return the current lightmap resolution per face
 int Mod_SampleSizeForFace( const msurface_t *surf )
 {
 	if( !surf || !surf->texinfo )
+	{
+#if XASH_DREAMCAST
+		return LM_SAMPLE_SIZE * g_dc_lm_sample_scale;
+#else
 		return LM_SAMPLE_SIZE;
+#endif
+	}
 
 	// world luxels has more priority
 	if( FBitSet( surf->texinfo->flags, TEX_WORLD_LUXELS ))
+	{
+#if XASH_DREAMCAST
+		return 1 * g_dc_lm_sample_scale;
+#else
 		return 1;
+#endif
+	}
 
 	if( FBitSet( surf->texinfo->flags, TEX_EXTRA_LIGHTMAP ))
+	{
+#if XASH_DREAMCAST
+		return LM_SAMPLE_EXTRASIZE * g_dc_lm_sample_scale;
+#else
 		return LM_SAMPLE_EXTRASIZE;
+#endif
+	}
 
 	if( surf->texinfo->faceinfo )
+	{
+#if XASH_DREAMCAST
+		return surf->texinfo->faceinfo->texture_step * g_dc_lm_sample_scale;
+#else
 		return surf->texinfo->faceinfo->texture_step;
+#endif
+	}
 
+#if XASH_DREAMCAST
+	return LM_SAMPLE_SIZE * g_dc_lm_sample_scale;
+#else
 	return LM_SAMPLE_SIZE;
+#endif
 }
 
 /*
@@ -1269,7 +1446,13 @@ determine face contents by name
 */
 static mvertex_t *Mod_GetVertexByNumber( model_t *mod, int surfedge, const dbspmodel_t *bmod )
 {
-	int	lindex = mod->surfedges[surfedge];
+    int	lindex;
+#if XASH_DREAMCAST
+    if( mod->surfedges16 ) lindex = (int)mod->surfedges16[surfedge];
+    else lindex = mod->surfedges[surfedge];
+#else
+    lindex = mod->surfedges[surfedge];
+#endif
 
 	if( bmod->version == QBSP2_VERSION )
 	{
@@ -1402,7 +1585,14 @@ static void Mod_CalcSurfaceExtents( model_t *mod, msurface_t *surf, const dbspmo
 
 	for( i = 0; i < surf->numedges; i++ )
 	{
-		e = mod->surfedges[surf->firstedge + i];
+        {
+            int idx = surf->firstedge + i;
+#if XASH_DREAMCAST
+            e = mod->surfedges16 ? (int)mod->surfedges16[idx] : mod->surfedges[idx];
+#else
+            e = mod->surfedges[idx];
+#endif
+        }
 
 		if( e >= mod->numedges || e <= -mod->numedges )
 			Host_Error( "%s: bad edge\n", __func__ );
@@ -1479,7 +1669,12 @@ static void Mod_CalcSurfaceBounds( model_t *mod, msurface_t *surf, const dbspmod
 
 	for( i = 0; i < surf->numedges; i++ )
 	{
-		e = mod->surfedges[surf->firstedge + i];
+		int idx = surf->firstedge + i;
+#if XASH_DREAMCAST
+		e = mod->surfedges16 ? (int)mod->surfedges16[idx] : mod->surfedges[idx];
+#else
+		e = mod->surfedges[idx];
+#endif
 
 		if( e >= mod->numedges || e <= -mod->numedges )
 			Host_Error( "%s: bad edge\n", __func__ );
@@ -1515,6 +1710,10 @@ static void Mod_CreateFaceBevels( model_t *mod, msurface_t *surf, const dbspmode
 	int		i, size;
 	vec_t		radius;
 	mfacebevel_t	*fb;
+
+#if XASH_DREAMCAST
+    return;
+#endif
 
 	if( surf->texinfo && surf->texinfo->texture )
 		contents = Mod_GetFaceContents( surf->texinfo->texture->name );
@@ -2199,39 +2398,7 @@ static void Mod_LoadVertexes( model_t *mod, dbspmodel_t *bmod )
 
 	in = bmod->vertexes;
 
-#ifdef XASH_DREAMCAST
-    size_t vertex_size = bmod->numvertexes * sizeof(mvertex_t);
-    size_t pvr_free = alloc_count_free(pvr_pool);
-    void *alloc_base = alloc_base_address(pvr_pool);
-    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
-
-    // Free existing PVR-allocated vertexes
-    if (mod->vertexes && 
-        (uint8_t *)mod->vertexes >= (uint8_t *)alloc_base && 
-        (uint8_t *)mod->vertexes < (uint8_t *)alloc_base + alloc_size)
-    {
-        Con_Printf("Freeing old PVR vertexes: %p\n", mod->vertexes);
-        alloc_free(pvr_pool, mod->vertexes);
-        mod->vertexes = NULL;
-        pvr_free = alloc_count_free(pvr_pool);
-    }
-
-    Con_Printf("Loading vertexes: %zu bytes, PVR free: %zu bytes\n", vertex_size, pvr_free);
-
-    out = mod->vertexes = (mvertex_t *)alloc_malloc(pvr_pool, vertex_size);
-    if (!mod->vertexes)
-    {
-        Con_Printf("PVR alloc failed for vertexes: %zu bytes, falling back to main RAM\n", vertex_size);
-        out = mod->vertexes = (mvertex_t *)Mem_Malloc(mod->mempool, vertex_size);
-        if (!mod->vertexes)
-        {
-            Host_Error("Failed to allocate memory for vertexes\n");
-            return;
-        }
-    }
-#else
     out = mod->vertexes = Mem_Malloc(mod->mempool, bmod->numvertexes * sizeof(mvertex_t));
-#endif
 
     mod->numvertexes = bmod->numvertexes;
 
@@ -2266,62 +2433,11 @@ static void Mod_LoadEdges( model_t *mod, dbspmodel_t *bmod )
 	int	i;
 
 	mod->numedges = bmod->numedges;
-
-#ifdef XASH_DREAMCAST
-    size_t edge_size = (bmod->version == QBSP2_VERSION) ? 
-                       bmod->numedges * sizeof(medge32_t) : 
-                       bmod->numedges * sizeof(medge16_t);
-    size_t pvr_free = alloc_count_free(pvr_pool);
-    void *alloc_base = alloc_base_address(pvr_pool);
-    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
-
-    // Free existing PVR-allocated edges
-    if (bmod->version == QBSP2_VERSION && mod->edges32)
-    {
-        if ((uint8_t *)mod->edges32 >= (uint8_t *)alloc_base && 
-            (uint8_t *)mod->edges32 < (uint8_t *)alloc_base + alloc_size)
-        {
-            Con_Printf("Freeing old PVR edges32: %p\n", mod->edges32);
-            alloc_free(pvr_pool, mod->edges32);
-            mod->edges32 = NULL;
-            pvr_free = alloc_count_free(pvr_pool);
-        }
-    }
-    else if (mod->edges16)
-    {
-        if ((uint8_t *)mod->edges16 >= (uint8_t *)alloc_base && 
-            (uint8_t *)mod->edges16 < (uint8_t *)alloc_base + alloc_size)
-        {
-            Con_Printf("Freeing old PVR edges16: %p\n", mod->edges16);
-            alloc_free(pvr_pool, mod->edges16);
-            mod->edges16 = NULL;
-            pvr_free = alloc_count_free(pvr_pool);
-        }
-    }
-
-    Con_Printf("Loading edges: %zu bytes, PVR free: %zu bytes\n", edge_size, pvr_free);
-#endif
-
     if (bmod->version == QBSP2_VERSION)
     {
         dedge32_t *in = bmod->edges32;
         medge32_t *out;
-#ifdef XASH_DREAMCAST
-        mod->edges32 = out = (medge32_t *)alloc_malloc(pvr_pool, bmod->numedges * sizeof(medge32_t));
-        if (!mod->edges32)
-        {
-            Con_Printf("PVR alloc failed for edges32: %zu bytes, falling back to main RAM\n", 
-                      bmod->numedges * sizeof(medge32_t));
-            mod->edges32 = out = (medge32_t *)Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge32_t));
-            if (!mod->edges32)
-            {
-                Host_Error("Failed to allocate memory for edges32\n");
-                return;
-            }
-        }
-#else
         mod->edges32 = out = Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge32_t));
-#endif
 
         for (i = 0; i < bmod->numedges; i++, in++, out++)
         {
@@ -2333,22 +2449,7 @@ static void Mod_LoadEdges( model_t *mod, dbspmodel_t *bmod )
     {
         dedge_t *in = bmod->edges;
         medge16_t *out;
-#ifdef XASH_DREAMCAST
-        mod->edges16 = out = (medge16_t *)alloc_malloc(pvr_pool, bmod->numedges * sizeof(medge16_t));
-        if (!mod->edges16)
-        {
-            Con_Printf("PVR alloc failed for edges16: %zu bytes, falling back to main RAM\n", 
-                      bmod->numedges * sizeof(medge16_t));
-            mod->edges16 = out = (medge16_t *)Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge16_t));
-            if (!mod->edges16)
-            {
-                Host_Error("Failed to allocate memory for edges16\n");
-                return;
-            }
-        }
-#else
         mod->edges16 = out = Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge16_t));
-#endif
 
         for (i = 0; i < bmod->numedges; i++, in++, out++)
         {
@@ -2365,42 +2466,46 @@ Mod_LoadSurfEdges
 */
 static void Mod_LoadSurfEdges( model_t *mod, dbspmodel_t *bmod )
 {
-#ifdef XASH_DREAMCAST
-    size_t surfedge_size = bmod->numsurfedges * sizeof(dsurfedge_t);
-    size_t pvr_free = alloc_count_free(pvr_pool);
-    void *alloc_base = alloc_base_address(pvr_pool);
-    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
-
-    // Free existing PVR-allocated surfedges
-    if (mod->surfedges && 
-        (uint8_t *)mod->surfedges >= (uint8_t *)alloc_base && 
-        (uint8_t *)mod->surfedges < (uint8_t *)alloc_base + alloc_size)
-    {
-        Con_Printf("Freeing old PVR surfedges: %p\n", mod->surfedges);
-        alloc_free(pvr_pool, mod->surfedges);
-        mod->surfedges = NULL;
-        pvr_free = alloc_count_free(pvr_pool);
-    }
-
-    Con_Printf("Loading surfedges: %zu bytes, PVR free: %zu bytes\n", surfedge_size, pvr_free);
-
-    mod->surfedges = (dsurfedge_t *)alloc_malloc(pvr_pool, surfedge_size);
-    if (!mod->surfedges)
-    {
-        Con_Printf("PVR alloc failed for surfedges: %zu bytes, falling back to main RAM\n", surfedge_size);
-        mod->surfedges = (dsurfedge_t *)Mem_Malloc(mod->mempool, surfedge_size);
-        if (!mod->surfedges)
-        {
-            Host_Error("Failed to allocate memory for surfedges\n");
-            return;
-        }
-    }
+#if XASH_DREAMCAST
+	// Prefer 16-bit surfedges when safe
+    if( bmod->numsurfedges <= INT16_MAX )
+	{
+		short *out;
+		const dsurfedge_t *in = bmod->surfedges;
+		int i;
+		mod->surfedges16 = out = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( short ));
+		mod->surfedges = NULL;
+		for( i = 0; i < bmod->numsurfedges; i++ )
+		{
+			int v = in[i];
+            if( v < INT16_MIN || v > INT16_MAX )
+			{
+				// fallback to 32-bit if any value overflows
+				mod->surfedges16 = NULL;
+				break;
+			}
+			out[i] = (short)v;
+		}
+		if( !mod->surfedges16 )
+		{
+			// allocate 32-bit fallback
+            Mem_Free( out );
+			mod->surfedges = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( dsurfedge_t ));
+			memcpy( mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof( dsurfedge_t ));
+		}
+	}
+	else
+	{
+		mod->surfedges = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( dsurfedge_t ));
+		memcpy( mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof( dsurfedge_t ));
+	}
+	mod->numsurfedges = bmod->numsurfedges;
 #else
-    mod->surfedges = Mem_Malloc(mod->mempool, bmod->numsurfedges * sizeof(dsurfedge_t));
-#endif
+	mod->surfedges = Mem_Malloc(mod->mempool, bmod->numsurfedges * sizeof(dsurfedge_t));
 
-    memcpy(mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof(dsurfedge_t));
-    mod->numsurfedges = bmod->numsurfedges;
+	memcpy(mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof(dsurfedge_t));
+	mod->numsurfedges = bmod->numsurfedges;
+#endif
 }
 
 /*
@@ -2665,8 +2770,15 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 	// but count the wadusage for automatic precache
 	texture_t *texture = mod->textures[textureIndex];
 	const mip_t *mipTex = Mod_GetMipTexForTexture( bmod, textureIndex );
+	if( !mipTex ) return;
+	// Safe local name
+	char mtname[17];
+	memcpy( mtname, mipTex->name, 16 );
+	mtname[16] = '\0';
+	if( mtname[0] == '\0' )
+		Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
 	const qboolean usesCustomPalette = Mod_CalcMipTexUsesCustomPalette( mod, bmod, textureIndex );
-	const qboolean iswater = Mod_LooksLikeWaterTexture( mipTex->name );
+	const qboolean iswater = Mod_LooksLikeWaterTexture( mtname );
 
 #if !XASH_DREAMCAST
 	// check for multi-layered sky texture (quake1 specific)
@@ -2676,7 +2788,7 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 		return;
 	}
 #endif
-	if( FBitSet( host.features, ENGINE_IMPROVED_LINETRACE ) && mipTex->name[0] == '{' )
+	if( FBitSet( host.features, ENGINE_IMPROVED_LINETRACE ) && mtname[0] == '{' )
 		SetBits( txFlags, TF_KEEP_SOURCE ); // Paranoia2 texture alpha-tracing
 
 	// check if this is water to keep the source texture and expand it to RGBA (so ripple effect works)
@@ -2689,61 +2801,96 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 	// 3. Internal from map
 
 	texture->gl_texturenum = 0;
-	Q_strncpy( safemtname, mipTex->name, sizeof( safemtname ));
+	Q_strncpy( safemtname, mtname, sizeof( safemtname ));
 	if( safemtname[0] == '*' )
 		safemtname[0] = '!'; // replace unexpected symbol
 
 	if( Mod_AllowMaterials( ))
 	{
-#if !XASH_DEDICATED
+#if !XASH_DREAMCAST
 		if( Mod_SearchForTextureReplacement( texpath, sizeof( texpath ), mod->name, safemtname, "" ))
 		{
 			texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texpath, NULL, 0, txFlags );
 			load_external = texture->gl_texturenum != 0;
 			Mod_TextureReplacementReport( mod->name, safemtname, "", texture->gl_texturenum, texpath );
 		}
-#endif // !XASH_DEDICATED
+#endif // !XASH_DREAMCAST
 	}
 
 	// Try WAD texture (force while r_wadtextures is 1)
-	if( !texture->gl_texturenum && (( r_wadtextures.value && world.wadlist.count > 0 ) || mipTex->offsets[0] <= 0 ))
 	{
-		rgbdata_t *pic = NULL;
-		int wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, mipTex->name, Host_IsDedicated() ? NULL : &pic, texpath, sizeof( texpath ));
-
-		if( wadIndex >= 0 )
+		int ofs0;
+		memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+		if( !texture->gl_texturenum && (( r_wadtextures.value && world.wadlist.count > 0 ) || ofs0 <= 0 ))
 		{
-#if !XASH_DEDICATED
-			if( !Host_IsDedicated( ) && pic != NULL )
+			rgbdata_t *pic = NULL;
+			int wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, mtname, Host_IsDedicated() ? NULL : &pic, texpath, sizeof( texpath ));
+
+			if( wadIndex >= 0 )
 			{
-				texture->gl_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texpath, pic, txFlags, false );
-				FS_FreeImage( pic );
+				if( !Host_IsDedicated( ) && pic != NULL )
+				{
+					int tnum = ref.dllFuncs.GL_LoadTextureFromBuffer( texpath, pic, txFlags, false );
+					if( tnum == 0 )
+						Con_DPrintf( "DC: GL_LoadTextureFromBuffer failed for %s (WAD)\n", texpath );
+					texture->gl_texturenum = tnum;
+					FS_FreeImage( pic );
+				}
+				world.wadlist.wadusage[wadIndex]++;
 			}
-#endif // !XASH_DEDICATED
-			world.wadlist.wadusage[wadIndex]++;
 		}
 	}
 
-#if !XASH_DEDICATED
+#if !XASH_DREAMCAST
 	if( Host_IsDedicated( ))
 		return;
+#endif
 
 	// WAD failed, so use internal texture (if present)
-	if( mipTex->offsets[0] > 0 && texture->gl_texturenum == 0 )
 	{
-		char texName[64];
-		const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
+		int ofs0;
+		memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+		if( ofs0 > 0 && texture->gl_texturenum == 0 )
+		{
+			char texName[64];
+			const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
 
-		Q_snprintf( texName, sizeof( texName ), "#%s:%s.mip", loadstat.name, mipTex->name );
-		texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, txFlags );
+			Q_snprintf( texName, sizeof( texName ), "#%s:%s.mip", loadstat.name, mtname );
+#if XASH_DREAMCAST
+			// Use aligned copy when passing raw mip data
+			{
+				byte *aligned = Mem_Malloc( mod->mempool, size );
+				if( aligned )
+				{
+					memcpy( aligned, mipTex, size );
+					texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texName, aligned, size, txFlags );
+					Mem_Free( aligned );
+				}
+			}
+			if( texture->gl_texturenum == 0 )
+			{
+				int nextOffset = -1, curOffset = 0, ofs0_dbg = 0;
+				memcpy( &ofs0_dbg, &mipTex->offsets[0], sizeof( ofs0_dbg ) );
+				memcpy( &curOffset, &bmod->textures->dataofs[textureIndex], sizeof( curOffset ) );
+				if( textureIndex + 1 < mod->numtextures )
+					memcpy( &nextOffset, &bmod->textures->dataofs[textureIndex + 1], sizeof( nextOffset ) );
+				Con_DPrintf( "DC: GL_LoadTexture failed for %s, size=%u ofs0=%d curOfs=%d nextOfs=%d txFlags=0x%x\n",
+					texName, (unsigned)size, ofs0_dbg, curOffset, nextOffset, txFlags );
+			}
+#else
+			texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, txFlags );
+#endif
+		}
 	}
 
+#if !XASH_DREAMCAST
 	// If texture is completely missed:
 	if( texture->gl_texturenum == 0 )
 	{
-		Con_DPrintf( S_ERROR "Unable to find %s.mip\n", mipTex->name );
+		Con_DPrintf( S_ERROR "Unable to find %s.mip\n", mtname );
 		texture->gl_texturenum = R_GetBuiltinTexture( REF_DEFAULT_TEXTURE );
 	}
+#endif
 
 	texture->fb_texturenum = 0;
 	// Check for luma texture
@@ -2764,33 +2911,44 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 	{
 		char texName[64];
 
-		Q_snprintf( texName, sizeof( texName ), "#%s:%s_luma.mip", loadstat.name, mipTex->name );
+		Q_snprintf( texName, sizeof( texName ), "#%s:%s_luma.mip", loadstat.name, mtname );
 
-		if( mipTex->offsets[0] > 0 )
 		{
-			const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
-			texture->fb_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, TF_MAKELUMA );
-		}
-		else
-		{
-			int wadIndex;
-			rgbdata_t *pic = NULL;
-
-			// NOTE: We can't load the _luma texture from the WAD as normal because it
-			// doesn't exist there. The original texture is already loaded, but cannot be modified.
-			// Instead, load the original texture again and convert it to luma.
-			wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, texture->name, &pic, NULL, 0 );
-
-			if( wadIndex >= 0 && pic != NULL )
+			int ofs0;
+			memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+			if( ofs0 > 0 )
 			{
-				// OK, loading it from wad or hi-res(??) version
-				texture->fb_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texName, pic, TF_MAKELUMA, false );
-				FS_FreeImage( pic );
-				world.wadlist.wadusage[wadIndex]++;
+				const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
+#if XASH_DREAMCAST
+				byte *aligned = Mem_Malloc( mod->mempool, size );
+				if( aligned )
+				{
+					memcpy( aligned, mipTex, size );
+					texture->fb_texturenum = ref.dllFuncs.GL_LoadTexture( texName, aligned, size, TF_MAKELUMA );
+					Mem_Free( aligned );
+				}
+#else
+				texture->fb_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, TF_MAKELUMA );
+#endif
+			}
+			else
+			{
+				int wadIndex;
+				rgbdata_t *pic = NULL;
+
+				// NOTE: We can't load the _luma texture from the WAD as normal because it
+				// doesn't exist there. The original texture is already loaded, but cannot be modified.
+				// Instead, load the original texture again and convert it to luma.
+				wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, texture->name, &pic, NULL, 0 );
+				if( wadIndex >= 0 && pic != NULL )
+				{
+					texture->fb_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texName, pic, TF_MAKELUMA, false );
+					FS_FreeImage( pic );
+					world.wadlist.wadusage[wadIndex]++;
+				}
 			}
 		}
 	}
-#endif // !XASH_DEDICATED
 }
 
 static void Mod_LoadTexture( model_t *mod, dbspmodel_t *bmod, int textureIndex )
@@ -2811,17 +2969,41 @@ static void Mod_LoadTexture( model_t *mod, dbspmodel_t *bmod, int textureIndex )
 		return;
 	}
 
-	if( mipTex->name[0] == '\0' )
-		Q_snprintf( mipTex->name, sizeof( mipTex->name ), "miptex_%i", textureIndex );
+	// Safe name handling: copy, terminate and log without touching lump
+	{
+		char mtname[17];
+		memcpy( mtname, mipTex->name, 16 );
+		mtname[16] = '\0';
+		if( mtname[0] == '\0' )
+			Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
+		Con_Printf( "Loading texture %s\n", mtname );
+	}
 
 	texture = (texture_t *)Mem_Calloc( mod->mempool, sizeof( *texture ));
 	mod->textures[textureIndex] = texture;
 
-	// Ensure texture name is lowercase.
-	Q_strnlwr( mipTex->name, texture->name, sizeof( texture->name ));
+	// Ensure lowercase name copied into destination from a safe buffer
+	{
+		char mtname[17];
+		memcpy( mtname, mipTex->name, 16 );
+		mtname[16] = '\0';
+		if( mtname[0] == '\0' )
+			Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
+		Q_strnlwr( mtname, texture->name, sizeof( texture->name ));
+	}
 
-	texture->width = mipTex->width;
-	texture->height = mipTex->height;
+	// Read header fields safely (avoid unaligned access)
+	{
+		mip_t hdr;
+		memcpy( &hdr, mipTex, sizeof( hdr ) );
+		if( hdr.width <= 0 || hdr.height <= 0 || hdr.width > 4096 || hdr.height > 4096 )
+		{
+			Mod_CreateDefaultTexture( mod, &mod->textures[textureIndex] );
+			return;
+		}
+		texture->width = hdr.width;
+		texture->height = hdr.height;
+	}
 
 	Mod_LoadTextureData( mod, bmod, textureIndex );
 }
@@ -3065,27 +3247,49 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
 	mextrasurf_t	*info;
 	msurface_t	*out;
 
-#ifdef XASH_DREAMCAST
-	size_t surfaces_size = bmod->numsurfaces * sizeof(msurface_t);
-	size_t extrasurf_size = bmod->numsurfaces * sizeof(mextrasurf_t);
-	size_t pvr_free = alloc_count_free(pvr_pool);
-	size_t pvr_contiguous = alloc_count_continuous(pvr_pool);
-	void *alloc_base = alloc_base_address(pvr_pool);
-	size_t alloc_size = alloc_block_count(pvr_pool);
+#if 0
+    size_t surfaces_size = bmod->numsurfaces * sizeof(msurface_t);
+    size_t extrasurf_size = bmod->numsurfaces * sizeof(mextrasurf_t);
+    size_t pvr_free = alloc_count_free(pvr_pool);
+    size_t pvr_contiguous = alloc_count_continuous(pvr_pool);
 
-	Con_Printf("Loading surfaces: %zu bytes (main RAM), extrasurf: %zu bytes (PVR), PVR free: %zu bytes, contiguous: %zu bytes, numsurfaces: %d\n", 
-			surfaces_size, extrasurf_size, pvr_free, pvr_contiguous, bmod->numsurfaces);
-
-	out = mod->surfaces = (msurface_t *)Mem_Calloc(mod->mempool, surfaces_size);
-	if (!mod->surfaces)
-	{
-		Host_Error("Failed to allocate memory for surfaces\n");
-		return;
-	}
-
-	// Try PVR allocation first
-	glDefragmentTextureMemory_KOS();
-	info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
+    // Try to allocate msurface_t array in VRAM (PVR pool) first
+    out = (msurface_t *)alloc_malloc(pvr_pool, surfaces_size);
+    if( !out )
+    {
+        if( surfaces_size > pvr_contiguous && pvr_free > surfaces_size )
+        {
+            Con_Printf("PVR alloc failed for surfaces (fragmented): free %zu > request %zu, contiguous %zu < request. Defragmenting...\n",
+                    pvr_free, surfaces_size, pvr_contiguous);
+            glDefragmentTextureMemory_KOS();
+            pvr_free = alloc_count_free(pvr_pool);
+            pvr_contiguous = alloc_count_continuous(pvr_pool);
+            Con_Printf("Post-defrag: PVR free: %zu bytes, contiguous: %zu bytes\n", pvr_free, pvr_contiguous);
+            out = (msurface_t *)alloc_malloc(pvr_pool, surfaces_size);
+        }
+        if( !out )
+        {
+            Con_Printf("PVR alloc failed for surfaces: %zu bytes, falling back to main RAM\n", surfaces_size);
+            out = (msurface_t *)Mem_Calloc(mod->mempool, surfaces_size);
+            if( !out )
+            {
+                Host_Error("Failed to allocate memory for surfaces\n");
+                return;
+            }
+        }
+        else
+        {
+            memset( out, 0, surfaces_size );
+            Con_Printf("PVR alloc succeeded for surfaces: %zu bytes\n", surfaces_size);
+        }
+    }
+    else
+    {
+        memset( out, 0, surfaces_size );
+        Con_Printf("PVR alloc succeeded for surfaces: %zu bytes\n", surfaces_size);
+    }
+    mod->surfaces = out;
+    info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
 	if (!info)
 	{
 		// Allocation failed; check if defragmentation could help
@@ -3099,7 +3303,7 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
 			Con_Printf("Post-defrag: PVR free: %zu bytes, contiguous: %zu bytes\n", pvr_free, pvr_contiguous);
 
 			// Try allocation again after defrag
-			info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
+            info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
 		}
 
 		// If still no success, fall back to main RAM
@@ -3116,12 +3320,13 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
 			}
 		}
 	}
-	else
-	{
-		Con_Printf("PVR alloc succeeded for extrasurf: %zu bytes\n", extrasurf_size);
-	}
+    else
+    {
+        memset( info, 0, extrasurf_size );
+        Con_Printf("PVR alloc succeeded for extrasurf: %zu bytes\n", extrasurf_size);
+    }
 #else
-    mod->surfaces = out = Mem_Calloc(mod->mempool, bmod->numsurfaces * sizeof(msurface_t));
+   	mod->surfaces = out = Mem_Calloc(mod->mempool, bmod->numsurfaces * sizeof(msurface_t));
     info = Mem_Calloc(mod->mempool, bmod->numsurfaces * sizeof(mextrasurf_t));
 #endif
 
@@ -3215,7 +3420,13 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
         // Grab the first sample to determine lightmap size
         if (lightofs != -1 && test_lightsize == -1)
         {
+            // Use original BSP luxel size for inference (DC may scale runtime sample size)
+#if XASH_DREAMCAST
+            int sample_size_scaled = Mod_SampleSizeForFace(out);
+            int sample_size = Q_max( 1, sample_size_scaled / Q_max( 1, g_dc_lm_sample_scale ) );
+#else
             int sample_size = Mod_SampleSizeForFace(out);
+#endif
             int smax = (info->lightextents[0] / sample_size) + 1;
             int tmax = (info->lightextents[1] / sample_size) + 1;
             int lightstyles = 0;
@@ -3719,57 +3930,234 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 {
 	int     i;
 
-	if( !bmod->lightdatasize )
+    if( !bmod->lightdatasize )
 		return;
-
-#ifdef XASH_DREAMCAST
-    size_t lightdata_size = (bmod->lightmap_samples == 1) ? bmod->lightdatasize * sizeof(color24) : bmod->lightdatasize;
-    size_t pvr_free = alloc_count_free(pvr_pool);
-    size_t pvr_contiguous = alloc_count_continuous(pvr_pool); // Optional, for consistency
-
-    void *alloc_base = alloc_base_address(pvr_pool);
-    if (!alloc_base)
+#if XASH_DREAMCAST
+    // Dreamcast path: build static lightmap atlases at load time and do not persist CPU lightdata
     {
-        Con_Printf("PVR allocator not initialized!\n");
+        const int pageSize = 128; // must match ref/gl lightmap block size on DC
+        dc_lm_packer_t pk;
+        // Make renderer treat luxels as larger when downscaled
+        // Set the active sample scale for this world (used by Mod_SampleSizeForFace)
+        g_dc_lm_sample_scale = g_dc_lightmap_downscale;
+        DC_LM_Init( &pk, pageSize );
+
+        // Dreamcast: gamma LUT to improve RGB565 quantization and reduce blue cast
+        static qboolean s_dc_lm_gamma_init = false;
+        static unsigned char s_dc_lm_gamma_lut[256];
+        if( !s_dc_lm_gamma_init )
+        {
+            int gi;
+            for( gi = 0; gi < 256; ++gi )
+            {
+                float x = (float)gi * (1.0f / 255.0f);
+                float y = powf( x, 1.0f / 2.2f );
+                int v = (int)( y * 255.0f + 0.5f );
+                if( v < 0 ) v = 0; else if( v > 255 ) v = 255;
+                s_dc_lm_gamma_lut[gi] = (unsigned char)v;
+            }
+            s_dc_lm_gamma_init = true;
+        }
+
+        // iterate faces and pack first lightstyle only
+        for( i = 0; i < bmod->numsurfaces; i++ )
+        {
+            int lightofs;
+            msurface_t *surf = &mod->surfaces[i];
+            mextrasurf_t *info = surf->info;
+            // scaled sample size (DC may scale with g_dc_lm_sample_scale)
+            int sample_size_scaled = Mod_SampleSizeForFace( surf );
+            // original BSP luxel size before DC downscale
+            int ds = g_dc_lightmap_downscale;
+            int sample_size_src = sample_size_scaled / ( ds > 0 ? ds : 1 );
+            if( sample_size_src < 1 ) sample_size_src = 1;
+            // compute source dimensions from original sample size
+            int smax_src = ( info->lightextents[0] / sample_size_src ) + 1;
+            int tmax_src = ( info->lightextents[1] / sample_size_src ) + 1;
+            // destination dims after DC downscale (or equal if ds==1)
+            int smax = ( ds > 1 ) ? ( ( smax_src + ds - 1 ) / ds ) : smax_src;
+            int tmax = ( ds > 1 ) ? ( ( tmax_src + ds - 1 ) / ds ) : tmax_src;
+            int size, x = 0, y = 0;
+
+            if( bmod->version == QBSP2_VERSION )
+                lightofs = bmod->surfaces32[i].lightofs;
+            else
+                lightofs = bmod->surfaces[i].lightofs;
+
+            if( lightofs < 0 )
+                continue; // no lightmap for this face
+
+            if( smax <= 0 || tmax <= 0 )
+                continue;
+            size = smax * tmax;
+
+            // allocate placement with padding around block to prevent filtering bleed
+            // use 3-texel padding when downscaled to reduce seams (half-texel bias applied in renderer)
+            const int pad = ( g_dc_lightmap_downscale > 1 ) ? 3 : 1;
+            if( !DC_LM_FindSpot( &pk, smax + pad * 2, tmax + pad * 2, &x, &y ))
+            {
+                DC_LM_UploadPage( &pk );
+                if( !DC_LM_FindSpot( &pk, smax + pad * 2, tmax + pad * 2, &x, &y ))
+                    Host_Error( "%s: LM pack failed for face %d", __func__, i );
+            }
+
+            // copy and expand into RGB565 page (with optional 2x2 average downscale)
+            {
+                const byte *src = (const byte *)bmod->lightdata + lightofs;
+                int map_bpp = bmod->lightmap_samples; // 1 or 3
+                int row, col;
+                byte *dstRow;
+                const int dstx = x + pad;
+                const int dsty = y + pad;
+                if( g_dc_lightmap_downscale > 1 )
+                {
+                    for( row = 0; row < tmax; row++ )
+                    {
+                        dstRow = pk.page + (( dsty + row ) * pageSize + dstx ) * 2;
+                        for( col = 0; col < smax; col++ )
+                        {
+                            // area-average 2x2 block from source
+                            int sx = col * ds;
+                            int sy = row * ds;
+                            int sx1 = sx + 1 < smax_src ? sx + 1 : sx;
+                            int sy1 = sy + 1 < tmax_src ? sy + 1 : sy;
+                            if( map_bpp == 3 )
+                            {
+                                const byte *p00 = src + ( sy * smax_src + sx ) * 3;
+                                const byte *p10 = src + ( sy * smax_src + sx1 ) * 3;
+                                const byte *p01 = src + ( sy1 * smax_src + sx ) * 3;
+                                const byte *p11 = src + ( sy1 * smax_src + sx1 ) * 3;
+                                int r = p00[0] + p10[0] + p01[0] + p11[0];
+                                int g = p00[1] + p10[1] + p01[1] + p11[1];
+                                int b = p00[2] + p10[2] + p01[2] + p11[2];
+                                // box average
+                                r >>= 2; g >>= 2; b >>= 2;
+                                // 1-tap sharpen: blend towards nearest source (p00)
+                                // r = r + s*(p00 - r), s in [0..1], here fixed g_dc_lm_sharpen_256/256
+                                r = r + (( g_dc_lm_sharpen_256 * ( (int)p00[0] - r ) ) >> 8);
+                                g = g + (( g_dc_lm_sharpen_256 * ( (int)p00[1] - g ) ) >> 8);
+                                b = b + (( g_dc_lm_sharpen_256 * ( (int)p00[2] - b ) ) >> 8);
+                                if( r < 0 ) r = 0; else if( r > 255 ) r = 255;
+                                if( g < 0 ) g = 0; else if( g > 255 ) g = 255;
+                                if( b < 0 ) b = 0; else if( b > 255 ) b = 255;
+                                unsigned short c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+                                memcpy( dstRow + col * 2, &c, 2 );
+                            }
+                            else
+                            {
+                                int v00 = src[ sy * smax_src + sx ];
+                                int v10 = src[ sy * smax_src + sx1 ];
+                                int v01 = src[ sy1 * smax_src + sx ];
+                                int v11 = src[ sy1 * smax_src + sx1 ];
+                                int v = ( v00 + v10 + v01 + v11 ) >> 2;
+                                v = v + (( g_dc_lm_sharpen_256 * ( v00 - v ) ) >> 8);
+                                if( v < 0 ) v = 0; else if( v > 255 ) v = 255;
+                                unsigned short c = ((v & 0xF8) << 8) | ((v & 0xFC) << 3) | (v >> 3);
+                                memcpy( dstRow + col * 2, &c, 2 );
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    for( row = 0; row < tmax; row++ )
+                    {
+                        dstRow = pk.page + (( dsty + row ) * pageSize + dstx ) * 2;
+                        for( col = 0; col < smax; col++ )
+                        {
+                            if( map_bpp == 3 )
+                            {
+                                const byte *p = src + ( row * smax_src + col ) * 3;
+                                unsigned short c = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3);
+                                memcpy( dstRow + col * 2, &c, 2 );
+                            }
+                            else
+                            {
+                                byte v = src[ row * smax_src + col ];
+                                unsigned short c = ((v & 0xF8) << 8) | ((v & 0xFC) << 3) | (v >> 3);
+                                memcpy( dstRow + col * 2, &c, 2 );
+                            }
+                        }
+                    }
+                }
+
+                // duplicate border (pad texels) around the block
+                // top rows
+                for( int pr = 1; pr <= pad; pr++ )
+                {
+                    memcpy( pk.page + (( dsty - pr ) * pageSize + dstx ) * 2,
+                            pk.page + ( dsty * pageSize + dstx ) * 2,
+                            smax * 2 );
+                }
+                // bottom rows
+                for( int pr = 1; pr <= pad; pr++ )
+                {
+                    memcpy( pk.page + (( dsty + tmax - 1 + pr ) * pageSize + dstx ) * 2,
+                            pk.page + (( dsty + tmax - 1 ) * pageSize + dstx ) * 2,
+                            smax * 2 );
+                }
+                // left and right columns
+                for( row = -pad; row < tmax + pad; row++ )
+                {
+                    byte *d = pk.page + (( dsty + row ) * pageSize + dstx ) * 2;
+                    // left pad
+                    for( int pc = 1; pc <= pad; pc++ )
+                        memcpy( (d - pc * 2), d, 2 );
+                    // right pad
+                    for( int pc = 1; pc <= pad; pc++ )
+                        memcpy( ( d + ( smax - 1 ) * 2 + pc * 2 ), ( d + ( smax - 1 ) * 2 ), 2 );
+                }
+                // corners: fill pad x pad squares
+                for( int pr = 1; pr <= pad; pr++ )
+                {
+                    for( int pc = 1; pc <= pad; pc++ )
+                    {
+                        // top-left
+                        memcpy( pk.page + (( dsty - pr ) * pageSize + ( dstx - pc )) * 2,
+                                pk.page + ( dsty * pageSize + dstx ) * 2, 2 );
+                        // top-right
+                        memcpy( pk.page + (( dsty - pr ) * pageSize + ( dstx + smax - 1 + pc )) * 2,
+                                pk.page + ( dsty * pageSize + ( dstx + smax - 1 )) * 2, 2 );
+                        // bottom-left
+                        memcpy( pk.page + (( dsty + tmax - 1 + pr ) * pageSize + ( dstx - pc )) * 2,
+                                pk.page + ( ( dsty + tmax - 1 ) * pageSize + dstx ) * 2, 2 );
+                        // bottom-right
+                        memcpy( pk.page + (( dsty + tmax - 1 + pr ) * pageSize + ( dstx + smax - 1 + pc )) * 2,
+                                pk.page + ( ( dsty + tmax - 1 ) * pageSize + ( dstx + smax - 1 ) ) * 2, 2 );
+                    }
+                }
+            }
+
+            // record placement for renderer (inner start)
+            surf->light_s = x + pad;
+            surf->light_t = y + pad;
+            surf->lightmaptexturenum = pk.currentPage;
+            pk.pageDirty = true;
+        }
+
+        // upload last page
+        DC_LM_UploadPage( &pk );
+
+        // free temps
+        DC_LM_Free( &pk );
+
+        // colored lighting flag if samples were RGB
+        if( bmod->lightmap_samples == 3 )
+            SetBits( mod->flags, MODEL_COLORED_LIGHTING );
+
+        // do not persist CPU lightdata; do not set surf->samples
+        Con_Reportf( "lighting: %s (DC atlas, x%d downscale)\n", FBitSet( mod->flags, MODEL_COLORED_LIGHTING ) ? "colored" : "monochrome", g_dc_lightmap_downscale );
         return;
     }
-    size_t alloc_size = alloc_block_count(pvr_pool) * 2048;
-
-    // Free existing PVR lightdata as a safeguard
-    if (mod->lightdata && 
-        (uint8_t *)mod->lightdata >= (uint8_t *)alloc_base && 
-        (uint8_t *)mod->lightdata < (uint8_t *)alloc_base + alloc_size)
-    {
-        alloc_free(pvr_pool, mod->lightdata);
-        mod->lightdata = NULL;
-        pvr_free = alloc_count_free(pvr_pool);
-    }
-    Con_Printf("%s: Loading lighting into VRAM: %zu bytes, PVR free: %zu bytes, contiguous: %zu bytes\n", __func__,
-               lightdata_size, pvr_free, pvr_contiguous);
-#endif
+#endif // XASH_DREAMCAST
 
     switch (bmod->lightmap_samples)
     {
     case 1:
         if (!Mod_LoadLitfile(mod, "lit", bmod->lightdatasize * 3, &mod->lightdata, &bmod->lightdatasize))
         {
-#ifdef XASH_DREAMCAST
-            mod->lightdata = (color24 *)alloc_malloc(pvr_pool, bmod->lightdatasize * sizeof(color24));
-            if (!mod->lightdata)
-            {
-                Con_Printf("PVR alloc failed: %zu bytes, falling back to main RAM\n", bmod->lightdatasize * sizeof(color24));
-					glDefragmentTextureMemory_KOS();
-					mod->lightdata = (color24 *)alloc_malloc(pvr_pool, bmod->lightdatasize * sizeof(color24));
 
-                if (!mod->lightdata)
-                {
-                    Host_Error("Failed to allocate memory for lightdata\n");
-                    return;
-                }
-            }
-#else
             mod->lightdata = (color24 *)Mem_Malloc(mod->mempool, bmod->lightdatasize * sizeof(color24));
-#endif
             for (i = 0; i < bmod->lightdatasize; i++)
                 mod->lightdata[i].r = mod->lightdata[i].g = mod->lightdata[i].b = bmod->lightdata[i];
         }
@@ -3778,23 +4166,7 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
         break;
 
     case 3:
-#ifdef XASH_DREAMCAST
-            mod->lightdata = alloc_malloc(pvr_pool, bmod->lightdatasize);
-            if (!mod->lightdata)
-            {
-                Con_Printf("%s: PVR alloc failed: %zu bytes, falling back to main RAM\n", __func__, bmod->lightdatasize);
-				glDefragmentTextureMemory_KOS();
-                mod->lightdata = (color24 *)alloc_malloc(pvr_pool, bmod->lightdatasize);
-                if (!mod->lightdata)
-                {
-                    Con_DPrintf("%s: Failed to defragment, allocating lightdata in RAM\n", __func__);
-					mod->lightdata = Mem_Malloc(mod->mempool, bmod->lightdatasize);
-                    return;
-                }
-            }
-#else
             mod->lightdata = Mem_Malloc(mod->mempool, bmod->lightdatasize);
-#endif
             memcpy(mod->lightdata, bmod->lightdata, bmod->lightdatasize);
             SetBits(mod->flags, MODEL_COLORED_LIGHTING);
             break;
@@ -3960,24 +4332,41 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
     Con_Printf("Total lump size: %s\n", Q_memprint(total_size));
 	// load into heap
 	Mod_LoadEntities( mod, bmod );
+	Con_Printf("Loaded entities\n");
 	Mod_LoadPlanes( mod, bmod );
+	Con_Printf("Loaded planes\n");
 	Mod_LoadSubmodels( mod, bmod );
+	Con_Printf("Loaded submodels\n");
 	Mod_LoadVertexes( mod, bmod );
+	Con_Printf("Loaded vertexes\n");
 	Mod_LoadEdges( mod, bmod );
+	Con_Printf("Loaded edges\n");
 	Mod_LoadSurfEdges( mod, bmod );
+	Con_Printf("Loaded surf edges\n");
 	Mod_LoadTextures( mod, bmod );
+	Con_Printf("Loaded textures\n");
 	Mod_LoadVisibility( mod, bmod );
+	Con_Printf("Loaded visibility\n");
 	Mod_LoadTexInfo( mod, bmod );
+	Con_Printf("Loaded tex info\n");
 	Mod_LoadSurfaces( mod, bmod );
+	Con_Printf("Loaded surfaces\n");
 	Mod_LoadLighting( mod, bmod );
+	Con_Printf("Loaded lighting\n");
 	Mod_LoadMarkSurfaces( mod, bmod );
+	Con_Printf("Loaded mark surfaces\n");
 	Mod_LoadLeafs( mod, bmod );
+	Con_Printf("Loaded leafs\n");
 	Mod_LoadNodes( mod, bmod );
+	Con_Printf("Loaded nodes\n");
 	Mod_LoadClipnodes( mod, bmod );
-
+	Con_Printf("Loaded clipnodes\n");
 	// preform some post-initalization
 	Mod_MakeHull0( mod, bmod );
+	Con_Printf("Made hull 0\n");
 	Mod_SetupSubmodels( mod, bmod );
+	Con_Printf("Setup submodels\n");
+
 	if( isworld )
 	{
 		world.version = bmod->version;

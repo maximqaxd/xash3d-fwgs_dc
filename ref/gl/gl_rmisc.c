@@ -149,7 +149,7 @@ void R_NewMap( void )
  		tx->texturechain = NULL;
 	}
 
-	GL_BuildLightmaps ();
+    GL_BuildLightmaps ();
 
 #if !XASH_DREAMCAST
 	R_ClearVBO();
