@@ -154,7 +154,7 @@ clean-engine:
 	-rm -f build/IP.BIN
 
 clean-repack:
-	$(MAKE) -f scripts/dreamcast/gearbox/repack_valve.mk clean
+	$(MAKE) -f scripts/dreamcast/valve/repack_valve.mk clean
 
 clean: clean-tools clean-engine 
 	-rm -f $(PROJECT_NAME).cdi
