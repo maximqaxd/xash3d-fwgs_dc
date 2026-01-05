@@ -23,13 +23,9 @@ GNU General Public License for more details.
 #include "platform/platform.h"
 #include "menu_int.h"
 
-
-#define MAX_LINE_LENGTH 40
-#define Y_SPACING 24
 #include <dc/video.h>
 #include <arch/arch.h>
 #include <dc/sound/sound.h>
-#include <glkos.h>
 
 /*
  * OpenBOR - http://www.LavaLit.com
@@ -136,15 +132,6 @@ unsigned long getUsedRam(void)
 void getRamStatus(void)
 {
 
-	GLint free_mem = 0;
-    GLint used_mem = 0;
-    GLint free_contiguous = 0;
-
-    // Query memory values
-    glGetIntegerv(GL_FREE_TEXTURE_MEMORY_KOS, &free_mem);
-    glGetIntegerv(GL_USED_TEXTURE_MEMORY_KOS, &used_mem);
-    glGetIntegerv(GL_FREE_CONTIGUOUS_TEXTURE_MEMORY_KOS, &free_contiguous);
-	
 	Con_Printf("stack: start:%x end:%x\n", (int)&_START, (int)&_END);
 	Con_Printf("System RAM - Total: %.1f MB (%d KB), Free: %.1f MB (%d KB), Used: %.1f MB (%d KB)\n",
 		(float)getSystemRam() / (1024*1024),    // MB
@@ -153,12 +140,6 @@ void getRamStatus(void)
 		getFreeRam() / 1024,                     // KB
 		(float)getUsedRam() / (1024*1024),      // MB
 		getUsedRam() / 1024);                    // KB
-	Con_Printf("GLDC Texture RAM: (KB) - Free: %d, Used: %d, Free Contiguous: %d\n",
-              free_mem / 1024,   
-              used_mem / 1024,
-              free_contiguous / 1024);
-	Con_Printf("SPU: Free: %d\n",snd_mem_available());
-}
 
 //-----------------------------------------------------------------------------
 extern void bfont_draw_str(void *b, uint32_t width, bool opaque, const char *str);
@@ -189,31 +170,70 @@ static void assert_hnd(const char *file, int line, const char *expr, const char 
   drawtext(32, 160, strbuffer);
 }
 #if XASH_MESSAGEBOX == MSGBOX_KOS
+const char etext[];
+char info[MAX_PRINT_MSG];
+
+// stacktrace from DCA3 port
+__attribute__((noinline)) void stacktrace() {
+	uint32 sp=0, pr=0;
+	__asm__ __volatile__(
+		"mov	r15,%0\n"
+		"sts	pr,%1\n"
+		: "+r" (sp), "+r" (pr)
+		:
+		: );
+	Q_snprintf(info, sizeof(info), "\nBuild: %i " XASH_VERSION "%s-%s commit %s", Q_buildnum(), Q_buildos(), Q_buildarch(), g_buildcommit);
+	dbglog(DBG_CRITICAL, "%s\n", info);
+	dbglog(DBG_CRITICAL, "Stack trace: %08X ", (uintptr_t)pr);
+	int found = 0;
+	if(!(sp & 3) && sp > 0x8c000000 && sp < _arch_mem_top) {
+		char** sp_ptr = (char**)sp;
+		for (int so = 0; so < 16384; so++) {
+			if ((uintptr_t)(&sp_ptr[so]) >= _arch_mem_top) {
+				dbglog(DBG_CRITICAL, "(@@%08X) ", (uintptr_t)&sp_ptr[so]);
+				break;
+			}
+			if (sp_ptr[so] > (char*)0x8c000000 && sp_ptr[so] < etext) {
+				uintptr_t addr = (uintptr_t)(sp_ptr[so]);
+				// candidate return pointer
+				if (addr & 1) {
+					// dbglog(DBG_CRITICAL, "Stack trace: %p (@%p): misaligned\n", (void*)sp_ptr[so], &sp_ptr[so]);
+					continue;
+				}
+
+				uint16_t* instrp = (uint16_t*)addr;
+
+				uint16_t instr = instrp[-2];
+				// BSR or BSRF or JSR @Rn ?
+				if (((instr & 0xf000) == 0xB000) || ((instr & 0xf0ff) == 0x0003) || ((instr & 0xf0ff) == 0x400B)) {
+					dbglog(DBG_CRITICAL, "%08X ", (uintptr_t)instrp);
+					if (found++ > 24) {
+						dbglog(DBG_CRITICAL, "(@%08X) ", (uintptr_t)&sp_ptr[so]);
+						break;
+					}
+				} else {
+					// dbglog(DBG_CRITICAL, "%p:%04X ", instrp, instr);
+				}
+			} else {
+				// dbglog(DBG_CRITICAL, "Stack trace: %p (@%p): out of range\n", (void*)sp_ptr[so], &sp_ptr[so]);
+			}
+		}
+		dbglog(DBG_CRITICAL, "end\n");
+	} else {
+		dbglog(DBG_CRITICAL, "(@%08X)\n", (uintptr_t)sp);
+	}
+}
+
 void Platform_MessageBox(const char *title, const char *message, qboolean parentMainWindow)
 {
-    char line[MAX_LINE_LENGTH + 1];
-    const char *msg = message;
-    int y = 96;
-    int len = 0;
-    int i;
-
-    drawtext(32, 64, title);
-
-    while (*msg)
-    {
-        // Copy characters until we hit max length or end of string
-        for (i = 0; i < MAX_LINE_LENGTH && msg[i] && msg[i] != '\n'; i++)
-            line[i] = msg[i];
-        
-        line[i] = '\0';
-        
-        drawtext(32, y, line);
-        y += Y_SPACING;
-        
-        msg += i;
-        if (*msg == '\n') 
-            msg++;
-    }
+	dbglog(DBG_CRITICAL, "%s: %s\n", title, message);
+	stacktrace();
+   	dbgio_dev_select("fb");
+	sleep(1);
+	dbglog(DBG_CRITICAL, "%s: %s\n", title, message);
+	stacktrace();
+	dbgio_flush();
+	abort();
 }
 #endif // XASH_MESSAGEBOX == MSGBOX_KOS
 static qboolean Sys_FindExecutable( const char *baseName, char *buf, size_t size )

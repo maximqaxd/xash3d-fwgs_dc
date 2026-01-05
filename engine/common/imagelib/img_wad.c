@@ -322,13 +322,6 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
         }
     }
 
-	// FIXME: maximqad THIS IS STUPID UGLY HACK to fit certain sprites into VRAM, remove that when we have VQ sprgen
-	if (Q_stristr(name, "puff") || Q_stristr(name, "tele") ||  Q_stristr(name, "smoke") || Q_stristr(name, "logo"))
-	{
-		image.width /= 8;  
-		image.height /= 8; 
-	}
-
     if( filesize == ( image.width * image.height * 4 ))
         truecolor = true;
 
@@ -486,24 +479,62 @@ qboolean Image_LoadMIP( const char *name, const byte *buffer, fs_offset_t filesi
 		COM_StripExtension(basename);
 		Q_strncpy(mip.name, basename, sizeof(mip.name));
 
-		switch(pvrt->imageFormat)
-		{
-			case PVR_VQ: 
-				image.type = PF_VQ_RGB_5650;
-				const int codebook_size = 2048;  
-				const int indices_size = (image.width * image.height) / 4;  
-				image.size = codebook_size + indices_size;
-				break;
-			case PVR_RECT:
-				image.type = PF_RGB_5650;
-				image.size = image.width * image.height * 2;
-				SetBits(image.flags, TF_KEEP_SOURCE);
+    
+	    switch (pvrt->imageFormat)
+	    {
+	        case PVR_RECT:
+	            if (pvrt->colorFormat == PVR_RGB565)
+	            {
+	                image.type = PF_RGB_5650;
+	                SetBits(image.flags, TF_KEEP_SOURCE);
+	            }
+	            else if (pvrt->colorFormat == PVR_ARGB1555)
+	            {
+	                image.type = PF_ARGB_1555;
+	                SetBits(image.flags, TF_KEEP_SOURCE);
+	            }
+	            else
+	            {
+	                Con_DPrintf("Unsupported color format for PVR_RECT: 0x%X\n", pvrt->colorFormat);
+	                return false;
+	            }
+	            break;
+	        case PVR_VQ:
+	            if (pvrt->colorFormat == PVR_RGB565)
+	            {
+	                image.type = PF_VQ_RGB_5650;
+	            }
+	            else if (pvrt->colorFormat == PVR_ARGB1555)
+	            {
+	                image.type = PF_VQ_ARGB_1555;
+	            }
+	            else
+	            {
+	                Con_DPrintf("Unsupported color format for PVR_VQ: 0x%X\n", pvrt->colorFormat);
+	                return false;
+	            }
+	            break;
+	        case PVR_VQ_MIPMAP:
+				if (pvrt->colorFormat == PVR_RGB565)  // 0x1
+				{
+					image.type = PF_VQ_MIPMAP_RGB_5650;  // Assign RGB565 format
+				}
+				else if (pvrt->colorFormat == PVR_ARGB1555)  // 0x0
+				{
+					image.type = PF_VQ_MIPMAP_ARGB_1555;  // Assign ARGB1555 format
+				}
+				else
+				{
+					Con_DPrintf("Unsupported color format for PVR_VQ_MIPMAP: 0x%X\n", pvrt->colorFormat);
+					return false;  // Fail if the format is unrecognized
+				}
 				break;
 			default:
 				Con_DPrintf("Unsupported PVR image format: 0x%X\n", pvrt->imageFormat);
 				return false;
-		}
-		Image_GetPaletteLMP(NULL, LUMP_VQ);
+	    }
+    // Use textureDataSize from the PVR header for image.size
+    	image.size = pvrt->textureDataSize;
 		image.rgba = Mem_Malloc(host.imagepool, image.size);
 		memcpy(image.rgba, texture_data, image.size);
 		return true;

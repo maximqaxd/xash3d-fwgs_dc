@@ -21,6 +21,7 @@ extern poolhandle_t sndpool;
 #include "xash3d_mathlib.h"
 #if XASH_DREAMCAST
 #include <dc/sound/aica_comm.h>
+#undef int8
 #include <dc/sound/sound.h>
 #endif
 

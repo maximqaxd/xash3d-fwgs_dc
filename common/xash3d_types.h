@@ -40,7 +40,7 @@ typedef uint32_t        poolhandle_t;
 #undef true
 #undef false
 
-#ifndef __cplusplus
+#if !defined (__cplusplus) && !defined (XASH_DREAMCAST)
 typedef enum { false, true }	qboolean;
 #else
 typedef int qboolean;
