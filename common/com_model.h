@@ -304,9 +304,7 @@ struct msurface_s
 
 	int		lightmaptexturenum;
 	byte		styles[MAXLIGHTMAPS];
-#if !XASH_DREAMCAST
 	int		cached_light[MAXLIGHTMAPS];	// values currently used in lightmap
-#endif
 	mextrasurf_t	*info;		// pointer to surface extradata (was cached_dlight)
 
 	color24		*samples;		// note: this is the actual lightmap data for this surface

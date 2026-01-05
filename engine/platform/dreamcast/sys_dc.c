@@ -26,7 +26,6 @@ GNU General Public License for more details.
 #include <dc/video.h>
 #include <arch/arch.h>
 #include <dc/sound/sound.h>
-#include <glkos.h>
 #include <kos/dbglog.h>
 
 /*
@@ -134,15 +133,6 @@ unsigned long getUsedRam(void)
 void getRamStatus(void)
 {
 
-	GLint free_mem = 0;
-    GLint used_mem = 0;
-    GLint free_contiguous = 0;
-
-    // Query memory values
-    glGetIntegerv(GL_FREE_TEXTURE_MEMORY_KOS, &free_mem);
-    glGetIntegerv(GL_USED_TEXTURE_MEMORY_KOS, &used_mem);
-    glGetIntegerv(GL_FREE_CONTIGUOUS_TEXTURE_MEMORY_KOS, &free_contiguous);
-	
 	Con_Printf("stack: start:%x end:%x\n", (int)&_START, (int)&_END);
 	Con_Printf("System RAM - Total: %.1f MB (%d KB), Free: %.1f MB (%d KB), Used: %.1f MB (%d KB)\n",
 		(float)getSystemRam() / (1024*1024),    // MB
@@ -151,11 +141,7 @@ void getRamStatus(void)
 		getFreeRam() / 1024,                     // KB
 		(float)getUsedRam() / (1024*1024),      // MB
 		getUsedRam() / 1024);                    // KB
-	Con_Printf("GLDC Texture RAM: (KB) - Free: %d, Used: %d, Free Contiguous: %d\n",
-              free_mem / 1024,   
-              used_mem / 1024,
-              free_contiguous / 1024);
-	Con_Printf("SPU: Free largest allocatable block: %zu\n",snd_mem_available());
+	Con_Printf("SPU: Free largest allocatable block: %zu\n", snd_mem_available());
 } 
 
 //-----------------------------------------------------------------------------

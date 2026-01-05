@@ -20,12 +20,21 @@ GNU General Public License for more details.
 #include "filesystem.h"
 #include "vid_common.h"
 #include <kos.h>
-#include <glkos.h>
 
 static int num_vidmodes = 0;
 static void GL_SetupAttributes( void );
 static qboolean vsync;
 
+pvr_init_params_t params = {
+	// Real HW: 8-word bins are often too small and can result in missing geometry / blank output.
+	// Use 16-word bins for enabled lists (OP/TR/PT).
+	{ PVR_BINSIZE_16, PVR_BINSIZE_0, PVR_BINSIZE_16, PVR_BINSIZE_0, PVR_BINSIZE_16 },
+	2536 * 256,    /* vertex buffer */
+	0,             /* dma disabled for TA  */
+	0,             /* fsaa off */
+	0,             /* keep PVR translucent autosort OFF  */
+	2            /* OPB count: start with 2*/
+};
 
 /*
 ==================
@@ -119,7 +128,7 @@ int GL_GetAttribute(int attr, int *val)
 
 void GL_SwapBuffers( void )
 {
-	glKosSwapBuffers();
+
 }
 
 void DC_GetScreenRes( int *x, int *y )
@@ -161,8 +170,8 @@ static qboolean GL_UpdateContext( void )
 
 qboolean R_Init_Video( const int type )
 {
-    GLdcConfig config;
 	qboolean retval;
+	int pvr_rc;
 
 	if( type != REF_GL ) // software not supported 
 		return false;
@@ -174,22 +183,13 @@ qboolean R_Init_Video( const int type )
 		return retval;
 	}
 
-    glKosInitConfig(&config);
-    config.autosort_enabled = GL_FALSE;
-    config.fsaa_enabled = GL_FALSE;
-
-    config.initial_op_capacity = 4096 * 3;
-    config.initial_pt_capacity = 256 * 3;
-    config.initial_tr_capacity = 1024 * 3;
-    config.initial_immediate_capacity = 256 * 3;
-
-    // RGBA4444 is the fastest general format - 8888 will cause a perf issue
-    config.internal_palette_format = GL_RGBA4;
-
-    config.texture_twiddle = GL_TRUE;
-
-    glKosInitEx(&config);
-
+	pvr_rc = pvr_init( &params );
+	if( pvr_rc < 0 )
+	{
+		// If PVR init fails, all scene/list submission will be ignored -> black screen on real hardware.
+		Sys_Error( "%s: pvr_init failed (rc=%d)\n", __func__, pvr_rc );
+		return false;
+	}
 	host.renderinfo_changed = false;
 	glw_state.safe = 0;
 	GL_SetupAttributes( );

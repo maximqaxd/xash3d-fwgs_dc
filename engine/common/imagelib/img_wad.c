@@ -322,14 +322,6 @@ qboolean Image_LoadSPR( const char *name, const byte *buffer, fs_offset_t filesi
         }
     }
 
-		// FIXME: maximqad THIS IS STUPID UGLY HACK to fit certain sprites into VRAM, remove that when we have VQ sprgen
-		if (Q_stristr(name, "puff") || Q_stristr(name, "tele") ||  Q_stristr(name, "smoke") || Q_stristr(name, "logo") || Q_stristr(name, "explo") || Q_stristr(name, "flare") || Q_stristr(name, "portal"))
-		{
-			image.width /= 8;  
-			image.height /= 8; 
-		}
-	
-
     if( filesize == ( image.width * image.height * 4 ))
         truecolor = true;
 

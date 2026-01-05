@@ -24,6 +24,8 @@ GNU General Public License for more details.
 #include "common.h"
 #if XASH_DREAMCAST
 #include <kos.h>
+#include <kos/thread.h>
+#define MAIN_STACK_SIZE (32 * 1024)  
 #endif
 #ifndef XASH_GAMEDIR
 #define XASH_GAMEDIR "valve" // !!! Replace with your default (base) game directory !!!
@@ -36,6 +38,18 @@ GNU General Public License for more details.
 static char        szGameDir[128]; // safe place to keep gamedir
 static int         szArgc;
 static char        **szArgv;
+
+static void init_thread_stack(void) {
+    kthread_t *current = thd_get_current();
+    if (current) {
+        void *new_stack = malloc(MAIN_STACK_SIZE);
+        if (new_stack) {
+            current->stack = new_stack;
+            current->stack_size = MAIN_STACK_SIZE;
+            current->flags |= THD_OWNS_STACK;
+        }
+    }
+}
 
 static void Sys_ChangeGame( const char *progname )
 {
@@ -81,6 +95,7 @@ int main( int argc, char **argv )
 	szArgv = argv;
 #endif // XASH_PSVITA
 #if XASH_DREAMCAST
+    init_thread_stack();
 	setSystemRam();
 	getRamStatus();
 #endif

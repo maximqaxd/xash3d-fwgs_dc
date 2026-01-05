@@ -25,9 +25,6 @@ GNU General Public License for more details.
 #include "enginefeatures.h"
 #include "client.h"
 #include "server.h"
-#if XASH_DREAMCAST
-#include "alloc/alloc.h"
-#endif
 
 #if XASH_DREAMCAST
 // Dynamic allocation on DC to save ~204KB of static data

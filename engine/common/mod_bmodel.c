@@ -26,11 +26,6 @@ GNU General Public License for more details.
 #include "client.h"
 #include "server.h"			// LUMP_ error codes
 #include "ref_common.h"
-#if XASH_DREAMCAST
-#include "alloc/alloc.h"
-typedef void* pvr_ptr_t;
-extern uint8_t *pvr_pool; // Defined in zone.c
-#endif
 #if defined( HAVE_OPENMP )
 #include <omp.h>
 #endif // HAVE_OPENMP

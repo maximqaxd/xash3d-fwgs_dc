@@ -2190,9 +2190,6 @@ void Con_VidInit( void )
 	Con_LoadConchars();
 	Con_CheckResize();
 
-#if XASH_DREAMCAST
-	con.background = R_GetBuiltinTexture( REF_GRAY_TEXTURE );
-#else
 	// loading console image
 	con.background = Con_LoadSimpleConback( host.allow_console ? "conback" : "loading", flags );
 
@@ -2239,7 +2236,6 @@ void Con_VidInit( void )
 	// missed console image will be replaced as gray background like X-Ray or Crysis
 	if( con.background == R_GetBuiltinTexture( REF_DEFAULT_TEXTURE ) || con.background == 0 )
 		con.background = R_GetBuiltinTexture( REF_GRAY_TEXTURE );
-#endif
 }
 
 /*
