@@ -26,7 +26,6 @@ GNU General Public License for more details.
 
 float		gldepthmin, gldepthmax;
 ref_instance_t	RI;
-int		g_pvr_current_list = -1;
 
 // sh4zam world matrix (combined projection * worldview)
 float r_world_matrix[16] __attribute__((aligned(32)));
@@ -851,115 +850,117 @@ void R_DrawFog( void )
 
 /*
 =============
-R_DrawEntitiesOnList
+R_DrawOpaqueEntities
 =============
 */
-static void R_DrawEntitiesOnList( void )
+static void R_DrawOpaqueEntities( void )
 {
 	int	i;
 
-	// PVR: called from R_RenderScene with a list already open.
-	// Do NOT call EFX/TriAPI hooks here yet; they are not list-safe in this renderer.
-	if( g_pvr_current_list == PVR_LIST_OP_POLY )
+	tr.blend = 1.0f;
+
+	// solid entities (brush + studio) only
+	for( i = 0; i < tr.draw_list->num_solid_entities && !RI.onlyClientDraw; i++ )
 	{
-		tr.blend = 1.0f;
+		RI.currententity = tr.draw_list->solid_entities[i];
+		RI.currentmodel = RI.currententity->model;
 
-		// solid entities (brush + studio) only
-		for( i = 0; i < tr.draw_list->num_solid_entities && !RI.onlyClientDraw; i++ )
+		Assert( RI.currententity != NULL );
+		Assert( RI.currentmodel != NULL );
+
+		switch( RI.currentmodel->type )
 		{
-			RI.currententity = tr.draw_list->solid_entities[i];
-			RI.currentmodel = RI.currententity->model;
-
-			Assert( RI.currententity != NULL );
-			Assert( RI.currentmodel != NULL );
-
-			switch( RI.currentmodel->type )
-			{
-			case mod_brush:
-				R_DrawBrushModel( RI.currententity );
-				break;
-			case mod_studio:
-				R_DrawStudioModel( RI.currententity );
-				break;
-			default:
-				break;
-			}
-		}
-
-		// client-side effects: opaque pass
-		if( !RI.onlyClientDraw )
-			gEngfuncs.CL_DrawEFX( tr.frametime, false );
-
-		// TriAPI normal triangles (opaque)
-		if( RI.drawWorld )
-			gEngfuncs.pfnDrawNormalTriangles();
-
-		// Viewmodel is effectively opaque and should be drawn in OP.
-		// Keep it here to avoid any list switching.
-		if( !RI.onlyClientDraw )
-			R_DrawViewModel();
-	}
-	else if( g_pvr_current_list == PVR_LIST_TR_POLY )
-	{
-		// sprites (from solid list) go to TR because they blend
-		for( i = 0; i < tr.draw_list->num_solid_entities && !RI.onlyClientDraw; i++ )
-		{
-			RI.currententity = tr.draw_list->solid_entities[i];
-			RI.currentmodel = RI.currententity->model;
-
-			Assert( RI.currententity != NULL );
-			Assert( RI.currentmodel != NULL );
-
-			if( RI.currentmodel->type == mod_sprite )
-				R_DrawSpriteModel( RI.currententity );
-		}
-
-		// translucent entities
-		for( i = 0; i < tr.draw_list->num_trans_entities && !RI.onlyClientDraw; i++ )
-		{
-			RI.currententity = tr.draw_list->trans_entities[i];
-			RI.currentmodel = RI.currententity->model;
-
-			// handle custom rendermodes
-			if( RI.currententity->curstate.rendermode != kRenderNormal )
-				tr.blend = CL_FxBlend( RI.currententity ) / 255.0f;
-			else tr.blend = 1.0f;
-
-			if( tr.blend <= 0.0f )
-				continue;
-
-			Assert( RI.currententity != NULL );
-			Assert( RI.currentmodel != NULL );
-
-			switch( RI.currentmodel->type )
-			{
-			case mod_brush:
-				R_DrawBrushModel( RI.currententity );
-				break;
-			case mod_studio:
-				R_DrawStudioModel( RI.currententity );
-				break;
-			case mod_sprite:
-				R_DrawSpriteModel( RI.currententity );
-				break;
-			default:
-				break;
-			}
-		}
-
-		// TriAPI transparent triangles
-		if( RI.drawWorld )
-			gEngfuncs.pfnDrawTransparentTriangles();
-
-		// client-side effects: translucent pass
-		if( !RI.onlyClientDraw )
-		{
-			R_AllowFog( false );
-			gEngfuncs.CL_DrawEFX( tr.frametime, true );
-			R_AllowFog( true );
+		case mod_brush:
+			R_DrawBrushModel( RI.currententity );
+			break;
+		case mod_studio:
+			R_DrawStudioModel( RI.currententity );
+			break;
+		default:
+			break;
 		}
 	}
 
+	// client-side effects: opaque pass
+	if( !RI.onlyClientDraw )
+		gEngfuncs.CL_DrawEFX( tr.frametime, false );
+
+	// TriAPI normal triangles (opaque)
+	if( RI.drawWorld )
+		gEngfuncs.pfnDrawNormalTriangles();
+
+	// Viewmodel is effectively opaque and should be drawn in OP.
+	// Keep it here to avoid any list switching.
+	if( !RI.onlyClientDraw )
+		R_DrawViewModel();
+}
+
+/*
+=============
+R_DrawTranslucentEntities
+=============
+*/
+static void R_DrawTranslucentEntities( void )
+{
+	int	i;
+
+	// sprites (from solid list) go to TR because they blend
+	for( i = 0; i < tr.draw_list->num_solid_entities && !RI.onlyClientDraw; i++ )
+	{
+		RI.currententity = tr.draw_list->solid_entities[i];
+		RI.currentmodel = RI.currententity->model;
+
+		Assert( RI.currententity != NULL );
+		Assert( RI.currentmodel != NULL );
+
+		if( RI.currentmodel->type == mod_sprite )
+			R_DrawSpriteModel( RI.currententity );
+	}
+
+	// translucent entities
+	for( i = 0; i < tr.draw_list->num_trans_entities && !RI.onlyClientDraw; i++ )
+	{
+		RI.currententity = tr.draw_list->trans_entities[i];
+		RI.currentmodel = RI.currententity->model;
+
+		// handle custom rendermodes
+		if( RI.currententity->curstate.rendermode != kRenderNormal )
+			tr.blend = CL_FxBlend( RI.currententity ) / 255.0f;
+		else tr.blend = 1.0f;
+
+		if( tr.blend <= 0.0f )
+			continue;
+
+		Assert( RI.currententity != NULL );
+		Assert( RI.currentmodel != NULL );
+
+		switch( RI.currentmodel->type )
+		{
+		case mod_brush:
+			R_DrawBrushModel( RI.currententity );
+			break;
+		case mod_studio:
+			R_DrawStudioModel( RI.currententity );
+			break;
+		case mod_sprite:
+			R_DrawSpriteModel( RI.currententity );
+			break;
+		default:
+			break;
+		}
+	}
+
+	// TriAPI transparent triangles
+	if( RI.drawWorld )
+		gEngfuncs.pfnDrawTransparentTriangles();
+
+	// client-side effects: translucent pass
+	if( !RI.onlyClientDraw )
+	{
+		R_AllowFog( false );
+		gEngfuncs.CL_DrawEFX( tr.frametime, true );
+		R_AllowFog( true );
+	}
 }
 
 /*
@@ -996,31 +997,20 @@ void R_RenderScene( void )
 
 	R_CheckGLFog();
 	// submit opaque geometry into OP list.
-	g_pvr_current_list = PVR_LIST_OP_POLY;
 	pvr_list_begin( PVR_LIST_OP_POLY );
 	R_DrawWorld();
-	// draw solid entities in OP list
-	R_DrawEntitiesOnList();
+	R_DrawOpaqueEntities();
 	pvr_list_finish();
-	g_pvr_current_list = -1;
 	
 	// submit tr geom (translucent entities, sprites, etc.)
-	g_pvr_current_list = PVR_LIST_TR_POLY;
 	pvr_list_begin( PVR_LIST_TR_POLY );
-	// draw translucent entities (including HL glass) and sprites in TR list
-	R_DrawEntitiesOnList();
+	R_DrawTranslucentEntities();
+	R_DrawWaterSurfaces();
 	pvr_list_finish();
-	g_pvr_current_list = -1;
 
 	R_CheckFog();
 
 	gEngfuncs.CL_ExtraUpdate ();	// don't let sound get messed up if going slow
-
-	// Entities/water are currently still mostly OpenGL-stubbed; keep them out
-	// of the way until their PVR paths are implemented.
-	//R_DrawEntitiesOnList();
-	//R_DrawWaterSurfaces();
-
 	R_EndGL();
 }
 

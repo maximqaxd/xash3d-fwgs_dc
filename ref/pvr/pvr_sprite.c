@@ -939,13 +939,9 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	}
 
 	// Use the currently open PVR list (sprites are called from TR list in R_DrawEntitiesOnList)
-	int list = g_pvr_current_list;
+	int list = PVR_LIST_TR_POLY;
 	int rendermode = e->curstate.rendermode;
 	float blend = 1.0f;
-
-	// Sprites must be drawn in TR list (they rely on alpha in texture).
-	if( list != PVR_LIST_TR_POLY )
-		return;
 
 	// Calculate sprite blend locally (do NOT rely on global tr.blend which may be stale here).
 	if( rendermode != kRenderNormal )
@@ -983,7 +979,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	pvr_poly_cxt_t cxt;
 	pvr_poly_cxt_txr(&cxt, list, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR);
 	cxt.gen.culling = (psprite->facecull == SPR_CULL_NONE) ? PVR_CULLING_NONE : PVR_CULLING_CW;
-	cxt.gen.shading = PVR_SHADE_FLAT;
+	// Flat shading is default, don't set explicitly
 	cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
 	// Need MODULATEALPHA so vertex alpha (blend) affects output alpha (like GL_MODULATE).
 	cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
@@ -1005,8 +1001,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 		cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
 		break;
 	}
-	cxt.blend.src_enable = PVR_BLEND_ENABLE;
-	cxt.blend.dst_enable = PVR_BLEND_ENABLE;
+	// Don't explicitly enable blending - it's enabled automatically when alpha is enabled and blend src/dst are set
 
 	// Compile and submit header
 	pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
@@ -1037,7 +1032,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 				// Recompile header for old frame texture
 				pvr_poly_cxt_txr(&cxt, list, glt_old->format, glt_old->width, glt_old->height, glt_old->vram_ptr, PVR_FILTER_BILINEAR);
 				cxt.gen.culling = (psprite->facecull == SPR_CULL_NONE) ? PVR_CULLING_NONE : PVR_CULLING_CW;
-				cxt.gen.shading = PVR_SHADE_FLAT;
+				// Flat shading is default, don't set explicitly
 				cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
 				cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
 				cxt.gen.alpha = PVR_ALPHA_ENABLE;
@@ -1045,8 +1040,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 				cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
 				cxt.blend.src = PVR_BLEND_SRCALPHA;
 				cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
-				cxt.blend.src_enable = PVR_BLEND_ENABLE;
-				cxt.blend.dst_enable = PVR_BLEND_ENABLE;
+				// Don't explicitly enable blending - it's enabled automatically when alpha is enabled and blend src/dst are set
 				hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
 				pvr_poly_compile(hdr, &cxt);
 				pvr_dr_commit(hdr);
@@ -1065,7 +1059,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 				{
 					pvr_poly_cxt_txr(&cxt, list, glt_new->format, glt_new->width, glt_new->height, glt_new->vram_ptr, PVR_FILTER_BILINEAR);
 					cxt.gen.culling = (psprite->facecull == SPR_CULL_NONE) ? PVR_CULLING_NONE : PVR_CULLING_CW;
-					cxt.gen.shading = PVR_SHADE_FLAT;
+					// Flat shading is default, don't set explicitly
 					cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
 					cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
 					cxt.gen.alpha = PVR_ALPHA_ENABLE;
@@ -1073,8 +1067,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 					cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
 					cxt.blend.src = PVR_BLEND_SRCALPHA;
 					cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
-					cxt.blend.src_enable = PVR_BLEND_ENABLE;
-					cxt.blend.dst_enable = PVR_BLEND_ENABLE;
+					// Don't explicitly enable blending - it's enabled automatically when alpha is enabled and blend src/dst are set
 					hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
 					pvr_poly_compile(hdr, &cxt);
 					pvr_dr_commit(hdr);
@@ -1094,7 +1087,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 			pvr_poly_cxt_t cxt_lm;
 			pvr_poly_cxt_txr(&cxt_lm, PVR_LIST_TR_POLY, glt_white->format, glt_white->width, glt_white->height, glt_white->vram_ptr, PVR_FILTER_BILINEAR);
 			cxt_lm.gen.culling = (psprite->facecull == SPR_CULL_NONE) ? PVR_CULLING_NONE : PVR_CULLING_CW;
-			cxt_lm.gen.shading = PVR_SHADE_FLAT;
+			// Flat shading is default, don't set explicitly
 			cxt_lm.gen.fog_type = PVR_FOG_DISABLE; // no fog on lightmap pass
 			cxt_lm.txr.env = PVR_TXRENV_MODULATEALPHA;
 			cxt_lm.gen.alpha = PVR_ALPHA_ENABLE;
@@ -1102,8 +1095,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 			cxt_lm.depth.write = PVR_DEPTHWRITE_DISABLE;
 			cxt_lm.blend.src = PVR_BLEND_DESTCOLOR;
 			cxt_lm.blend.dst = PVR_BLEND_ZERO;
-			cxt_lm.blend.src_enable = PVR_BLEND_ENABLE;
-			cxt_lm.blend.dst_enable = PVR_BLEND_ENABLE;
+			// Don't explicitly enable blending - it's enabled automatically when alpha is enabled and blend src/dst are set
 
 			hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
 			pvr_poly_compile(hdr, &cxt_lm);

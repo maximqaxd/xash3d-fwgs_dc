@@ -1787,8 +1787,6 @@ static void PVR_StudioSubmitHeader( pvr_dr_state_t *dr_state, int list, int rend
 		cxt.gen.alpha = PVR_ALPHA_DISABLE;
 		cxt.depth.write = PVR_DEPTHWRITE_ENABLE;
 		cxt.txr.env = PVR_TXRENV_MODULATE;
-		cxt.blend.src_enable = PVR_BLEND_DISABLE;
-		cxt.blend.dst_enable = PVR_BLEND_DISABLE;
 	}
 	else
 	{
@@ -1796,8 +1794,6 @@ static void PVR_StudioSubmitHeader( pvr_dr_state_t *dr_state, int list, int rend
 		cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
 		cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
 
-		cxt.blend.src_enable = PVR_BLEND_ENABLE;
-		cxt.blend.dst_enable = PVR_BLEND_ENABLE;
 
 		if( rendermode == kRenderTransAdd || rendermode == kRenderGlow || FBitSet( faceFlags, STUDIO_NF_ADDITIVE ))
 		{
@@ -2404,7 +2400,6 @@ static void R_StudioDrawPoints( void )
 		short	*ptricmds;
 		float	s, t;
 		const int rendermode = RI.currententity->curstate.rendermode;
-		const int cur_list = g_pvr_current_list;
 		int desired_list;
 		pvr_dr_state_t dr_state;
 		gl_texture_t *skin_glt;
@@ -2431,11 +2426,6 @@ static void R_StudioDrawPoints( void )
 			desired_list = PVR_LIST_TR_POLY;
 		else
 			desired_list = PVR_LIST_OP_POLY;
-
-		// PVR list ownership is managed by R_RenderScene; never begin/finish lists here.
-		// Just skip meshes that belong to the other list.
-		if( cur_list != -1 && desired_list != cur_list )
-			continue;
 
 		// Setup skin and bind texture BEFORE initializing DR state
 		R_StudioSetupSkin( m_pStudioHeader, skinref_index );

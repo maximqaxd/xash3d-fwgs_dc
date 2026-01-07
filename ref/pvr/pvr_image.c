@@ -1681,22 +1681,6 @@ int GL_LoadTextureFromBuffer( const char *name, rgbdata_t *pic, texFlags_t flags
 
 	GL_ApplyTextureParams( tex ); // update texture filter, wrap etc
 	
-	// Store copy for lightmap textures (for Gouraud shading sampling)
-	if( FBitSet( flags, TF_ATLAS_PAGE ) && pic && pic->buffer )
-	{
-		// Check if this is a lightmap texture (*lightmapN)
-		if( name && Q_strncmp( name, "*lightmap", 9 ) == 0 )
-		{
-			int lightmap_index = Q_atoi( name + 9 );
-			if( lightmap_index >= 0 && lightmap_index < MAX_LIGHTMAPS )
-			{
-				// Get the lightmap buffer size (RGB565 = 2 bytes per pixel)
-				int bpp = ( pic->type == PF_RGB_5650 ) ? 2 : LIGHTMAP_BPP;
-				R_StoreLightmapCPUCopy( lightmap_index, pic->buffer, pic->width, pic->height, bpp );
-			}
-		}
-	}
-	
 	return (tex - gl_textures);
 }
 

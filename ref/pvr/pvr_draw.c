@@ -99,7 +99,6 @@ static void Batch_Flush(void)
     if (!batch_2d.list_open)
     {
         pvr_list_begin(PVR_LIST_PT_POLY);
-        g_pvr_current_list = PVR_LIST_PT_POLY;
         batch_2d.list_open = 1;
     }
     
@@ -167,23 +166,15 @@ static void Batch_Flush(void)
     // - ARGB1555: Use alpha test (no blending needed)
     // - ARGB4444: Use alpha blending (SRCALPHA, INVSRCALPHA)
     // - RGB565: Use additive blending (ONE, ONE) - black pixels (0,0,0) add nothing = transparent
-    if (is_onebit_alpha) {
-        // Alpha test handles transparency, no blending needed
-        cxt.blend.src_enable = PVR_BLEND_DISABLE;
-        cxt.blend.dst_enable = PVR_BLEND_DISABLE;
-    } else if (is_rgb565) {
+   if (is_rgb565) {
         // RGB565 has no alpha channel. Use additive blending so black pixels (0,0,0) add nothing = transparent.
         // This works for additive sprites where black is the colorkey.
         cxt.blend.src = PVR_BLEND_ONE;
         cxt.blend.dst = PVR_BLEND_ONE;
-        cxt.blend.src_enable = PVR_BLEND_ENABLE;
-        cxt.blend.dst_enable = PVR_BLEND_ENABLE;
     } else {
         // Smooth alpha (ARGB4444) or other formats: use standard alpha blending
         cxt.blend.src = PVR_BLEND_SRCALPHA;
         cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
-        cxt.blend.src_enable = PVR_BLEND_ENABLE;
-        cxt.blend.dst_enable = PVR_BLEND_ENABLE;
     }
     
     cxt.gen.alpha = PVR_ALPHA_ENABLE;
@@ -295,13 +286,9 @@ void Draw_FlushBatch(void) {
     Batch_Flush();
     
     // Close the list if it was opened
-    if (batch_2d.list_open) {
-        // Only finish if PT list is actually open; it may have been closed by other code paths.
-        if( g_pvr_current_list == PVR_LIST_PT_POLY )
-        {
-            pvr_list_finish();
-            g_pvr_current_list = -1;
-        }
+    if (batch_2d.list_open) 
+    {
+        pvr_list_finish();
         batch_2d.list_open = 0;
     }
 }
