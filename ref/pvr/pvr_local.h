@@ -449,7 +449,6 @@ void GL_InitRandomTable( void );
 void GL_BuildLightmaps( void );
 void GL_ResetFogColor( void );
 void R_LightmapCoord( const vec3_t v, const msurface_t *surf, const float sample_size, vec2_t coords );
-void R_StoreLightmapCPUCopy( int lightmap_index, const byte *data, int width, int height, int bpp );
 
 //
 // pvr_rpart.c
@@ -492,7 +491,7 @@ void R_ClearSkyBox( void );
 void R_DrawSkyBox( void );
 void R_DrawClouds( void );
 void R_UnloadSkybox( void );
-void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples );
+void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples, pvr_dr_state_t *dr_state, uint32_t water_color );
 void R_ResetRipples( void );
 void R_AnimateRipples( void );
 qboolean R_UploadRipples( texture_t *image );
@@ -625,10 +624,7 @@ typedef struct
 extern glconfig_t		glConfig;
 extern glstate_t		glState;
 
-// Tracks which PVR list is currently open (PVR_LIST_*). Updated by the renderer when beginning/finishing lists.
-// This lets subsystems (studio, etc) decide whether they need to temporarily switch lists for translucent rendering.
-extern int			g_pvr_current_list;
-
+//
 // -----------------------------------------------------------------------------
 // sh4zam helpers for working with shz_mat4x4_t as an affine transform matrix
 // -----------------------------------------------------------------------------
