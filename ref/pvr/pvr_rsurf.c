@@ -27,10 +27,7 @@ typedef struct
 	msurface_t	*dynamic_surfaces;
 	msurface_t	*lightmap_surfaces[MAX_LIGHTMAPS];
 	byte		lightmap_buffer[BLOCK_SIZE_DEFAULT*BLOCK_SIZE_DEFAULT*LIGHTMAP_BPP];
-	// CPU-side copies of uploaded lightmap pages for Gouraud shading sampling
-	// Format: RGB565 (2 bytes per pixel)
-	byte		*lightmap_pages_cpu[MAX_LIGHTMAPS];  // CPU copy of each lightmap page
-	int		lightmap_page_size;  // Size of each page (typically 128x128 = 16384 pixels = 32768 bytes)
+
 } gllightmapstate_t;
 
 static int		nColinElim; // stats
@@ -56,25 +53,6 @@ static gllightmapstate_t	gl_lms;
 static void LM_UploadBlock( qboolean dynamic );
 static void R_RenderLightmapForSurface( msurface_t *fa );
 
-// Store CPU-side copy of lightmap page for Gouraud shading sampling
-void R_StoreLightmapCPUCopy( int lightmap_index, const byte *data, int width, int height, int bpp )
-{
-	if( lightmap_index < 0 || lightmap_index >= MAX_LIGHTMAPS )
-		return;
-	
-	int size = width * height * bpp;
-	
-	// Free existing copy if re-uploading
-	if( gl_lms.lightmap_pages_cpu[lightmap_index] != NULL )
-		Mem_Free( gl_lms.lightmap_pages_cpu[lightmap_index] );
-	
-	gl_lms.lightmap_pages_cpu[lightmap_index] = (byte *)Mem_Malloc( r_temppool, size );
-	if( gl_lms.lightmap_pages_cpu[lightmap_index] && data )
-		memcpy( gl_lms.lightmap_pages_cpu[lightmap_index], data, size );
-	
-	if( gl_lms.lightmap_page_size == 0 )
-		gl_lms.lightmap_page_size = width;
-}
 
 static inline void R_AddToSeparatePass( separate_pass_t *sp, int num )
 {
@@ -756,19 +734,6 @@ static void LM_UploadBlock( qboolean dynamic )
 		r_lightmap.buffer = gl_lms.lightmap_buffer;
 		tr.lightmapTextures[i] = GL_LoadTextureInternal( lmName, &r_lightmap, TF_NOMIPMAP|TF_ATLAS_PAGE );
 		
-		// Store CPU-side copy for Gouraud shading sampling
-		if( tr.lightmapTextures[i] > 0 && i < MAX_LIGHTMAPS )
-		{
-			if( gl_lms.lightmap_pages_cpu[i] == NULL )
-			{
-				gl_lms.lightmap_pages_cpu[i] = (byte *)Mem_Malloc( r_temppool, r_lightmap.size );
-				if( gl_lms.lightmap_pages_cpu[i] )
-					memcpy( gl_lms.lightmap_pages_cpu[i], r_lightmap.buffer, r_lightmap.size );
-			}
-			if( gl_lms.lightmap_page_size == 0 )
-				gl_lms.lightmap_page_size = BLOCK_SIZE;
-		}
-
 		if( ++gl_lms.current_lightmap_texture == MAX_LIGHTMAPS )
 			gEngfuncs.Host_Error( "%s: full\n", __func__ );
 	}
@@ -882,162 +847,61 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
     #endif
 }
 
-// -----------------------------------------------------------------------------
-// PVR lightmap pass (multiply blend, depth=EQUAL) using uploaded *lightmapN pages
-// -----------------------------------------------------------------------------
-static void DrawLightmapPoly( glpoly2_t *p, pvr_dr_state_t *dr_state )
-{
-	if( !p || p->numverts < 3 )
-		return;
-
-	float *v = p->verts[0];
-	const int numverts = p->numverts;
-
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
-
-	shz_vec4_t transformed[64];
-	float uv[64][2];
-	unsigned vismask_all = 0;
-
-	for( int i = 0; i < numverts; i++, v += VERTEXSIZE )
-	{
-		shz_vec3_t pos = shz_vec3_init(v[0], v[1], v[2]);
-		transformed[i] = shz_xmtrx_transform_vec4(shz_vec3_vec4(pos, 1.0f));
-
-		// lightmap UVs are stored in v[5], v[6]
-		uv[i][0] = v[5];
-		uv[i][1] = v[6];
-
-		if( transformed[i].z >= -transformed[i].w )
-			vismask_all |= (1U << i);
-	}
-
-	if( vismask_all == 0 )
-		return;
-
-	for( int i = 1; i < numverts - 1; i++ )
-	{
-		// Clip each fan triangle against near plane and submit.
-		PVR_ClipAndSubmitTriangle(
-			dr_state,
-			transformed[0], transformed[i], transformed[i+1],
-			uv[0][0], uv[0][1],
-			uv[i][0], uv[i][1],
-			uv[i+1][0], uv[i+1][1],
-			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
-		);
-	}
-}
 
 /*
 ================
 SampleVertexLight
-Sample lightmap data at a vertex position
+Sample lightmap data at a vertex position from surf->samples (like Q2)
 ================
 */
 static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 {
 	float r = 0.0f, g = 0.0f, b = 0.0f;
-	float mod = 1.0f; 
 	
-	// Dreamcast path: sample from uploaded lightmap textures (CPU copies)
-	if( surf && surf->lightmaptexturenum >= 0 && surf->lightmaptexturenum < MAX_LIGHTMAPS )
+	// Sample static lightmap if available (like Q2 example, but using Xash3D lightstyle scaling)
+	if( surf && surf->samples && WORLDMODEL && WORLDMODEL->lightdata )
 	{
-		int lm_texnum = surf->lightmaptexturenum;
+		const mextrasurf_t *info = surf->info;
+		const int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
+		const int smax = ( info->lightextents[0] / sample_size ) + 1;
+		const int tmax = ( info->lightextents[1] / sample_size ) + 1;
+		const int size = smax * tmax;
 		
-		if( !gl_lms.lightmap_pages_cpu[lm_texnum] )
+		// Compute lightmap (s,t) in luxel space
+		float s = DotProduct( vert, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
+		float t = DotProduct( vert, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
+		
+		// Convert to luxel coordinates
+		float ls = s / sample_size;
+		float lt = t / sample_size;
+		
+		int is = (int)ls;
+		int it = (int)lt;
+		
+		// Clamp to valid range
+		if( is < 0 ) is = 0;
+		if( is >= smax ) is = smax - 1;
+		if( it < 0 ) it = 0;
+		if( it >= tmax ) it = tmax - 1;
+		
+		// Base pointer to first style samples
+		const color24 *lightmap = &surf->samples[it * smax + is];
+		
+		// Accumulate all styles (like R_BuildLightMap in gl_rsurf.c)
+		for( int maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++ )
 		{
-			// CPU copy not stored - return fullbright
-			r = g = b = 255.0f;
-			return 0xFF000000 | (255 << 16) | (255 << 8) | 255;
+			const color24 *lm = lightmap + maps * size;
+			// tr.lightstylevalue is 16.16 fixed point (256 = 1.0)
+			const float scale = (float)tr.lightstylevalue[surf->styles[maps]] / 256.0f;
+			
+			r += lm->r * scale;
+			g += lm->g * scale;
+			b += lm->b * scale;
 		}
 		
-		if( gl_lms.lightmap_page_size > 0 )
+		// If no styles, treat as fullbright
+		if( r == 0.0f && g == 0.0f && b == 0.0f )
 		{
-			const mextrasurf_t *info = surf->info;
-			const int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
-			const int page_size = gl_lms.lightmap_page_size;
-			
-			// Calculate lightmap coordinates in the atlas page
-			// surf->light_s and surf->light_t are in PIXELS (from mod_bmodel.c packing)
-			// They point to the inner start (after padding) in the lightmap page
-			float s = DotProduct( vert, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
-			float t = DotProduct( vert, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
-			
-			
-			// Convert to luxel coordinates (divide by sample_size)
-			// sample_size is already the downscaled size, so 1 luxel = 1 pixel
-			float luxel_s = s / sample_size;
-			float luxel_t = t / sample_size;
-			
-			// Add surface offset in pixels (surf->light_s/t are already in pixels)
-			// Since 1 luxel = 1 pixel in the downscaled packed page, we can add directly
-			int px = (int)( surf->light_s + luxel_s + 0.5f );
-			int py = (int)( surf->light_t + luxel_t + 0.5f );
-			
-			// Clamp to valid range within the page
-			if( px < 0 ) px = 0;
-			if( px >= page_size ) px = page_size - 1;
-			if( py < 0 ) py = 0;
-			if( py >= page_size ) py = page_size - 1;
-			
-			// Sample from RGB565 CPU copy (2 bytes per pixel)
-			const uint16_t *lm_page = (const uint16_t *)gl_lms.lightmap_pages_cpu[lm_texnum];
-			int idx = py * page_size + px;
-			if( idx < 0 || idx >= page_size * page_size )
-			{
-				// Out of bounds - return fullbright
-				r = g = b = 255.0f;
-				return 0xFF000000 | (255 << 16) | (255 << 8) | 255;
-			}
-			uint16_t pixel = lm_page[idx];
-			
-			// Extract RGB from RGB565 and expand to 8-bit
-			// RGB565: RRRRR GGGGGG BBBBB
-			uint8_t ir_raw = (uint8_t)(((pixel >> 11) & 0x1F) << 3);
-			uint8_t ig_raw = (uint8_t)(((pixel >> 5) & 0x3F) << 2);
-			uint8_t ib_raw = (uint8_t)((pixel & 0x1F) << 3);
-			
-			// Apply gamma correction similar to original Xash3D R_BuildLightMap
-			// LightToTexGamma expects 0-1023 range, so scale 0-255 to 0-1023
-			// Then apply gamma and scale back to 0-255
-			uint ir_gamma = LightToTexGamma( ir_raw << 2 ) >> 2;
-			uint ig_gamma = LightToTexGamma( ig_raw << 2 ) >> 2;
-			uint ib_gamma = LightToTexGamma( ib_raw << 2 ) >> 2;
-			
-			// Clamp gamma-corrected values
-			uint8_t ir = (uint8_t)(ir_gamma > 255 ? 255 : ir_gamma);
-			uint8_t ig = (uint8_t)(ig_gamma > 255 ? 255 : ig_gamma);
-			uint8_t ib = (uint8_t)(ib_gamma > 255 ? 255 : ib_gamma);
-			
-			// Apply brightness boost similar to original's lightscale calculation
-			// Original uses: lightscale = pow(2.0f, 1.0f / v_lightgamma->value) * 256
-			// For typical gamma 2.5, this gives ~400, which is ~1.56x brightness
-			// Since lightmaps are pre-built, we apply a brightness multiplier here
-			float brightness = 1.5f; // Boost by 50% to compensate for dark lightmaps
-			
-			// Apply lightstyle scaling if available.
-			//
-			// IMPORTANT (Dreamcast): since WORLDMODEL->lightdata is stripped, CL_RunLightStyles()
-			// forces tr.lightstylevalue[] = 256*256 (=65536) meaning "1.0" in 16.16 fixed point.
-			// So to get the original 0..255 lightmap value back, divide by 65536, not 256.
-			if( surf->styles[0] != 255 && surf->styles[0] < MAX_LIGHTSTYLES )
-			{
-				const uint scale = tr.lightstylevalue[surf->styles[0]];
-				r = (float)ir * (float)scale * brightness / 65536.0f;
-				g = (float)ig * (float)scale * brightness / 65536.0f;
-				b = (float)ib * (float)scale * brightness / 65536.0f;
-			}
-			else
-			{
-				r = (float)ir * brightness;
-				g = (float)ig * brightness;
-				b = (float)ib * brightness;
-			}
-		}
-		else
-		{
-			// No CPU copy available - fullbright
 			r = g = b = 255.0f;
 		}
 	}
@@ -1174,6 +1038,30 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 	}
 }
 
+/*
+================
+DrawGLPolySurfaceGouraud
+Gouraud shaded polygon - samples light per vertex from surf->samples (like Q2)
+================
+*/
+static void DrawGLPolySurfaceGouraud( glpoly2_t *p, pvr_dr_state_t *dr_state, const msurface_t *surf, float sOffset, float tOffset, float xScale, float yScale )
+{
+	if( !p || p->numverts < 3 || !surf )
+		return;
+
+	float *v = p->verts[0];
+	const int numverts = p->numverts;
+	
+	// Sample light per vertex from surf->samples
+	uint32_t colors[64];
+	for( int i = 0; i < numverts && i < 64; i++, v += VERTEXSIZE )
+	{
+		colors[i] = SampleVertexLight( surf, v );
+	}
+	
+	// Call DrawGLPolyVertices with per-vertex colors
+	DrawGLPolyVertices( p, dr_state, colors, sOffset, tOffset, xScale, yScale );
+}
 
 /*
 ================
@@ -1207,12 +1095,6 @@ static void DrawGLPoly( glpoly2_t *p, float xScale, float yScale, const msurface
 		rendermode = kRenderNormal;
 
 	desired_list = ( RI.currententity && rendermode != kRenderNormal ) ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
-	if( desired_list != g_pvr_current_list )
-		return;
-	
-
-	if( g_pvr_current_list == -1 )
-		return;
 
 	// Choose texture for this surface:
 	// Prefer the explicitly bound texture (supports animations via GL_Bind / R_TextureAnimation),
@@ -1261,17 +1143,6 @@ conveyor_done:
 		sOffset = tOffset = 0.0f;
 	}
 	
-	// Use shared DR state if provided (texture chain batching), otherwise create our own (entity rendering)
-	pvr_dr_state_t dr_state_local;
-	pvr_dr_state_t *dr_state_ptr = shared_dr_state;
-	qboolean own_dr_state = ( shared_dr_state == NULL );
-	
-	if( own_dr_state )
-	{
-		pvr_dr_init( &dr_state_local );
-		dr_state_ptr = &dr_state_local;
-	}
-	
 	// Get current texture (chosen above)
 	pvr_ptr_t tex_addr = NULL;
 	// Default fallback (only used if texture not loaded yet)
@@ -1296,29 +1167,39 @@ conveyor_done:
 	// Default: opaque in OP list
 	list = desired_list;
 	
-	// Sample light per vertex for Gouraud shading 
-	// Only for world surfaces with lightmaps
-	uint32_t vertex_colors[64] = { 0 };
-	const uint32_t *vertex_colors_ptr = NULL;
-	qboolean use_gouraud = false;
+	// Use shared DR state if provided (texture chain batching), otherwise create our own (entity rendering)
+	// Initialize DR state AFTER determining which list we're using (important for real hardware)
+	pvr_dr_state_t dr_state_local;
+	pvr_dr_state_t *dr_state_ptr = shared_dr_state;
+	qboolean own_dr_state = ( shared_dr_state == NULL );
 	
-	// check if we have lightmap textures (CPU copies)
-	// Enable Gouraud shading for both world surfaces AND brush entities that have lightmaps
-	if( surf && surf->lightmaptexturenum >= 0 && surf->lightmaptexturenum < MAX_LIGHTMAPS )
+	if( own_dr_state )
 	{
-		// Check if CPU copy exists and page size is set
-		if( gl_lms.lightmap_pages_cpu[surf->lightmaptexturenum] != NULL && gl_lms.lightmap_page_size > 0 )
+		// Initialize local DR state for entity rendering (especially important for TR list on real hardware)
+		pvr_dr_init( &dr_state_local );
+		dr_state_ptr = &dr_state_local;
+	}
+	
+	// Check if we need Gouraud shading (surfaces with lightmaps)
+	// Both world surfaces and brush entities can have lightmaps (surf->samples)
+	// But exclude TransTexture entities - they should use flat shading
+	qboolean use_gouraud = false;
+	if( surf && surf->samples && WORLDMODEL && WORLDMODEL->lightdata )
+	{
+		// Don't apply Gouraud to TransTexture 
+		if( rendermode == kRenderTransTexture )
 		{
-			// Surface with lightmap (world or brush entity) - sample per vertex
+			use_gouraud = false;
+		}
+		else
+		{
 			use_gouraud = true;
-			float *v = p->verts[0];
-			for( int i = 0; i < p->numverts && i < 64; i++, v += VERTEXSIZE )
-			{
-				vertex_colors[i] = SampleVertexLight( surf, v );
-			}
-			vertex_colors_ptr = vertex_colors;
 		}
 	}
+	
+	// Entity color setup (for translucent entities)
+	uint32_t vertex_colors[64] = { 0 };
+	const uint32_t *vertex_colors_ptr = NULL;
 
 	if( RI.currententity && rendermode != kRenderNormal )
 	{
@@ -1378,8 +1259,9 @@ conveyor_done:
 	}
 	cxt.gen.culling = PVR_CULLING_NONE;
 	cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
-	// Use Gouraud shading for world surfaces with lightmaps 
-	cxt.gen.shading = use_gouraud ? PVR_SHADE_GOURAUD : PVR_SHADE_FLAT;
+	// Use Gouraud shading for world surfaces with lightmaps (flat is default, don't set explicitly)
+	if( use_gouraud )
+		cxt.gen.shading = PVR_SHADE_GOURAUD;
 	// For Gouraud shaded world surfaces: MODULATE so vertex colors multiply with texture
 	// For entities: REPLACE (opaque) or MODULATEALPHA (translucent)
 	if( use_gouraud )
@@ -1392,10 +1274,10 @@ conveyor_done:
 	{
 		cxt.gen.alpha = PVR_ALPHA_ENABLE;
 		// We submit z = 1/w, so nearer pixels have *larger* Z.
-		// Depth buffer should be cleared to 0, and compare must be GEQUAL.
-		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+		// For translucent entities, use LEQUAL to allow rendering behind opaque geometry
+		// Depth buffer was written by OP list, so translucent should test against it
+		cxt.depth.comparison = PVR_DEPTHCMP_LEQUAL;
 		cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
-
 		// Map HL rendermodes to PVR blending
 		switch( rendermode )
 		{
@@ -1415,8 +1297,6 @@ conveyor_done:
 			cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
 			break;
 		}
-		cxt.blend.src_enable = PVR_BLEND_ENABLE;
-		cxt.blend.dst_enable = PVR_BLEND_ENABLE;
 	}
 	else
 	{
@@ -1424,8 +1304,7 @@ conveyor_done:
 		// We submit z = 1/w, so nearer pixels have *larger* Z.
 		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
 		cxt.depth.write = PVR_DEPTHWRITE_ENABLE;
-		cxt.blend.src_enable = PVR_BLEND_DISABLE;
-		cxt.blend.dst_enable = PVR_BLEND_DISABLE;
+		// Blending is disabled by default for opaque surfaces
 	}
 	
 	// CRITICAL: Check if we'll actually submit vertices BEFORE submitting header.
@@ -1440,10 +1319,17 @@ conveyor_done:
 		pvr_dr_commit(hdr);
 	}
 	
-	(void)surf;
-
-	// Pass vertex colors for Gouraud shading, or NULL for flat shading
-	DrawGLPolyVertices( p, dr_state_ptr, vertex_colors_ptr, sOffset, tOffset, xScale, yScale );
+	// Draw polygon: use Gouraud for world surfaces with lightmaps, flat for others
+	if( use_gouraud )
+	{
+		// Gouraud shaded - samples light per vertex from surf->samples
+		DrawGLPolySurfaceGouraud( p, dr_state_ptr, surf, sOffset, tOffset, xScale, yScale );
+	}
+	else
+	{
+		// Flat shading - pass vertex colors (for entities) or NULL (for flat white)
+		DrawGLPolyVertices( p, dr_state_ptr, vertex_colors_ptr, sOffset, tOffset, xScale, yScale );
+	}
 	
 	// Only finish DR if we created our own state (entity rendering). Texture chains finish once per texture.
 	if( own_dr_state )
@@ -1452,171 +1338,13 @@ conveyor_done:
 	if( FBitSet( p->flags, SURF_DRAWTILED ))
 		GL_SetupFogColorForSurfaces();
 }
-/*
-================
-DrawGLPolyChain
-
-Render lightmaps
-================
-*/
-static void DrawGLPolyChain( glpoly2_t *p, float soffset, float toffset )
-{
-	qboolean	dynamic = true;
-
-	if( soffset == 0.0f && toffset == 0.0f )
-		dynamic = false;
-
-	if( !p ) return;
-	
-	if( g_pvr_current_list != PVR_LIST_TR_POLY && g_pvr_current_list != PVR_LIST_OP_POLY )
-		return;
-	
-	// Initialize PVR direct rendering
-	pvr_dr_state_t dr_state;
-	pvr_dr_init(&dr_state);
-	
-	// Get current lightmap texture
-	int texnum = gl_lms.current_lightmap_texture;
-	pvr_ptr_t tex_addr = NULL;
-	// Default fallback (only used if texture not loaded yet)
-	uint32_t tex_format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED;
-	int tex_width = 64, tex_height = 64;
-	
-	if( texnum > 0 && texnum < MAX_LIGHTMAPS )
-	{
-		int lightmap_texnum = tr.lightmapTextures[texnum];
-		if( lightmap_texnum > 0 && lightmap_texnum < MAX_TEXTURES )
-		{
-			gl_texture_t *glt = R_GetTexture( lightmap_texnum );
-			if( glt && glt->loaded && glt->vram_ptr )
-			{
-				tex_addr = glt->vram_ptr;
-				tex_format = glt->format;
-				tex_width = glt->width;
-				tex_height = glt->height;
-			}
-		}
-	}
-	
-	// Setup polygon header with lightmap texture
-	pvr_poly_cxt_t cxt;
-	if( tex_addr )
-	{
-		pvr_poly_cxt_txr(&cxt, g_pvr_current_list, tex_format, 
-				tex_width, tex_height, tex_addr, PVR_FILTER_BILINEAR);
-	}
-	else
-	{
-		pvr_poly_cxt_col(&cxt, g_pvr_current_list);
-	}
-	cxt.gen.culling = PVR_CULLING_NONE;
-	
-	// Submit all polygons in chain
-	for( ; p != NULL; p = p->chain )
-	{
-		if( p->numverts < 3 ) continue;
-		
-		// Submit header for each polygon
-		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
-		pvr_poly_compile(hdr, &cxt);
-		pvr_dr_commit(hdr);
-		
-		// Transform and submit vertices
-		float *v = p->verts[0];
-		const int numverts = p->numverts;
-		
-		shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
-		
-		shz_vec4_t transformed[64];
-		float uv[64][2];
-		unsigned vismask_all = 0;
-		
-		for( int i = 0; i < numverts; i++, v += VERTEXSIZE )
-		{
-			shz_vec3_t pos = shz_vec3_init(v[0], v[1], v[2]);
-			transformed[i] = shz_xmtrx_transform_vec4(shz_vec3_vec4(pos, 1.0f));
-			
-			// Lightmap UV coordinates (v[5], v[6])
-			if( !dynamic )
-			{
-				uv[i][0] = v[5];
-				uv[i][1] = v[6];
-			}
-			else
-			{
-				uv[i][0] = v[5] - soffset;
-				uv[i][1] = v[6] - toffset;
-			}
-			
-			if( transformed[i].z >= -transformed[i].w )
-				vismask_all |= (1 << i);
-		}
-		
-		if( vismask_all == 0 ) continue;
-		
-		unsigned all_visible_mask = (1 << numverts) - 1;
-		
-		if( vismask_all == all_visible_mask )
-		{
-			// Fast path - no clipping
-			for( int i = 1; i < numverts - 1; i++ )
-			{
-				float inv_w0 = shz_invf_fsrra(transformed[0].w);
-				float inv_wi = shz_invf_fsrra(transformed[i].w);
-				float inv_wi1 = shz_invf_fsrra(transformed[i+1].w);
-				
-				pvr_vertex_t *vert = pvr_dr_target(dr_state);
-				vert->flags = PVR_CMD_VERTEX;
-				vert->x = transformed[0].x * inv_w0;
-				vert->y = transformed[0].y * inv_w0;
-				vert->z = inv_w0;
-				vert->u = uv[0][0];
-				vert->v = uv[0][1];
-				vert->argb = 0xFFFFFFFF;
-				vert->oargb = 0;
-				pvr_dr_commit(vert);
-				
-				vert = pvr_dr_target(dr_state);
-				vert->flags = PVR_CMD_VERTEX;
-				vert->x = transformed[i].x * inv_wi;
-				vert->y = transformed[i].y * inv_wi;
-				vert->z = inv_wi;
-				vert->u = uv[i][0];
-				vert->v = uv[i][1];
-				vert->argb = 0xFFFFFFFF;
-				vert->oargb = 0;
-				pvr_dr_commit(vert);
-				
-				vert = pvr_dr_target(dr_state);
-				vert->flags = PVR_CMD_VERTEX_EOL;
-				vert->x = transformed[i+1].x * inv_wi1;
-				vert->y = transformed[i+1].y * inv_wi1;
-				vert->z = inv_wi1;
-				vert->u = uv[i+1][0];
-				vert->v = uv[i+1][1];
-				vert->argb = 0xFFFFFFFF;
-				vert->oargb = 0;
-				pvr_dr_commit(vert);
-			}
-		}
-	}
-	
-	pvr_dr_finish();
-}
 static qboolean R_HasLightmap( void )
 {
     if( r_fullbright->value )
         return false;
-#if 1
-		// DC: consider lightmaps present if either prebuilt pages exist or CPU lightdata exists
-		if( !WORLDMODEL )
-			return false;
-		if( !tr.lightmapTextures[0] && !WORLDMODEL->lightdata )
-			return false;
-#else
-		if( !WORLDMODEL->lightdata )
-			return false;
-#endif
+
+	if( !WORLDMODEL->lightdata )
+		return false;
 
 	if( RI.currententity )
 	{
@@ -1956,7 +1684,8 @@ static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 	if( FBitSet( fa->flags, SURF_DRAWTURB ))
 	{
 		// warp texture, no lightmaps
-		EmitWaterPolys( fa, cull_type == CULL_BACKSIDE, R_UploadRipples( t ));
+		// Opaque water - pass NULL for DR state (not implemented yet)
+		EmitWaterPolys( fa, cull_type == CULL_BACKSIDE, R_UploadRipples( t ), NULL, 0xFFFFFFFF );
 		return;
 	}
 	else GL_Bind( XASH_TEXTURE0, t->gl_texturenum );
@@ -2053,17 +1782,18 @@ static void R_DrawTextureChains( void )
 		}
 		cxt.gen.culling = PVR_CULLING_NONE;
 		cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
-		// World base pass: we use per-vertex light sampled from prebuilt *lightmapN pages.
+		// World base pass: we use per-vertex light sampled from surf->samples.
 		// IMPORTANT: header is submitted ONCE per texture chain, so it MUST be Gouraud+Modulate,
-		// otherwise PVR will ignore vertex colors and you’ll see fullbright world.
-		const qboolean use_world_vertex_light = ( !r_fullbright->value && gl_lms.lightmap_page_size > 0 );
-		cxt.gen.shading = use_world_vertex_light ? PVR_SHADE_GOURAUD : PVR_SHADE_FLAT;
+		// otherwise PVR will ignore vertex colors and you'll see fullbright world.
+		// DrawGLPoly will call DrawGLPolySurfaceGouraud for surfaces with lightmaps.
+		const qboolean use_world_vertex_light = ( !r_fullbright->value && WORLDMODEL && WORLDMODEL->lightdata );
+		if( use_world_vertex_light )
+			cxt.gen.shading = PVR_SHADE_GOURAUD;
 		cxt.txr.env = use_world_vertex_light ? PVR_TXRENV_MODULATE : PVR_TXRENV_REPLACE;
 		cxt.gen.alpha = PVR_ALPHA_DISABLE;
 		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
 		cxt.depth.write = PVR_DEPTHWRITE_ENABLE;
-		cxt.blend.src_enable = PVR_BLEND_DISABLE;
-		cxt.blend.dst_enable = PVR_BLEND_DISABLE;
+		// Blending is disabled by default for opaque surfaces
 		
 		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
 		pvr_poly_compile( hdr, &cxt );
@@ -2075,17 +1805,11 @@ static void R_DrawTextureChains( void )
 			// Bind texture for DrawGLPoly (it reads glState.currentTexturesIndex as fallback)
 			GL_Bind( XASH_TEXTURE0, texnum );
 			
-			// Build lightmap chains and call DrawGLPoly with shared DR state for all polys
-			R_RenderFullbrightForSurface( s, t );
-			// Draw all polys in the chain (surfaces can be subdivided into multiple polys)
-			// Pass shared DR state so DrawGLPoly doesn't create its own or submit header
 			for( glpoly2_t *p = s->polys; p != NULL; p = p->chain )
 			{
-				r_stats.c_world_polys++;
 				DrawGLPoly( p, 0.0f, 0.0f, s, &dr_state );
 			}
 			R_RenderDecalsForSurface( s, CULL_VISIBLE );
-			R_RenderLightmapForSurface( s );
 		}
 
 		pvr_dr_finish();
@@ -2144,15 +1868,14 @@ void R_DrawAlphaTextureChains( void )
 		cxt.gen.culling = PVR_CULLING_NONE;
 		cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
 		cxt.gen.alpha = PVR_ALPHA_ENABLE;
-		cxt.gen.shading = PVR_SHADE_FLAT;
+		// Flat shading is default, don't set explicitly
 		cxt.txr.env = PVR_TXRENV_REPLACE;
 
 		// Depth testing: same as opaque, but allow equal. Depth write must be enabled
 		// so PT pixels participate in later TR depth=EQUAL passes (lightmaps).
 		cxt.depth.comparison = PVR_DEPTHCMP_LEQUAL;
 		cxt.depth.write = PVR_DEPTHWRITE_ENABLE;
-		cxt.blend.src_enable = PVR_BLEND_DISABLE;
-		cxt.blend.dst_enable = PVR_BLEND_DISABLE;
+		// Blending is disabled by default for opaque surfaces
 
 		// Submit header for this texture
 		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
@@ -2210,13 +1933,14 @@ void R_DrawWaterSurfaces( void )
 	// go back to the world matrix
 	R_LoadIdentity();
 
-#if 0
-	pglEnable( GL_BLEND );
-	pglDepthMask( GL_FALSE );
-	pglDisable( GL_ALPHA_TEST );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-	pglColor4f( 1.0f, 1.0f, 1.0f, tr.movevars->wateralpha );
+	// Translucent water surfaces are rendered in TR_POLY list
+	// They use alpha blending with wateralpha and no depth write
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
+
+	// Calculate water alpha color (white with wateralpha)
+	uint8_t water_alpha = (uint8_t)(tr.movevars->wateralpha * 255.0f);
+	uint32_t water_color = (water_alpha << 24) | 0x00FFFFFF; // ARGB: alpha in high byte
 
 	for( i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
 	{
@@ -2226,23 +1950,53 @@ void R_DrawWaterSurfaces( void )
 		s = t->texturechain;
 		if( !s ) continue;
 
+		// Check if first surface is water (like GL code does)
 		if( !FBitSet( s->flags, SURF_DRAWTURB ))
 			continue;
 
+		// Get texture for water surface (from first surface in chain)
+		// R_TextureAnimation expects a surface, not a texture
+		texture_t *anim_tex = R_TextureAnimation( s );
+		if( !anim_tex )
+			continue;
+		int texnum = anim_tex->gl_texturenum;
+		gl_texture_t *glt = R_GetTexture( texnum );
+		if( !glt || !glt->loaded || !glt->vram_ptr )
+			continue;
+
+		// Setup PVR context for translucent water in TR list
+		pvr_poly_cxt_t cxt;
+		pvr_poly_cxt_txr( &cxt, PVR_LIST_TR_POLY, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
+		cxt.gen.culling = PVR_CULLING_NONE;
+		cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
+		// Flat shading is default, don't set explicitly
+		cxt.gen.alpha = PVR_ALPHA_ENABLE;
+		cxt.txr.env = PVR_TXRENV_MODULATE; // MODULATE so vertex color (with alpha) affects texture
+		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+		cxt.depth.write = PVR_DEPTHWRITE_DISABLE; // No depth write for translucent water
+		cxt.blend.src = PVR_BLEND_SRCALPHA;
+		cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
+		// Don't explicitly enable blending - it's enabled automatically when alpha is enabled and blend src/dst are set
+
+		// Submit header for this texture (once per texture chain)
+		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+		pvr_poly_compile( hdr, &cxt );
+		pvr_dr_commit( hdr );
+
+		// Render all water surfaces with this texture (like GL code)
+		// Note: GL code doesn't check SURF_DRAWTURB again in the loop, it just calls EmitWaterPolys for all
 		for( ; s; s = s->texturechain )
-			EmitWaterPolys( s, false, R_UploadRipples( t ));
+		{
+			// EmitWaterPolys will handle the actual polygon submission
+			// Pass DR state and water color for translucent water
+			EmitWaterPolys( s, false, R_UploadRipples( t ), &dr_state, water_color );
+		}
 
 		t->texturechain = NULL;
 	}
 
 	R_ResetSeparatePass( &draw_wateralpha );
-
-	pglDisable( GL_BLEND );
-	pglDepthMask( GL_TRUE );
-	pglDisable( GL_ALPHA_TEST );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-	pglColor4ub( 255, 255, 255, 255 );
-#endif // TODO
+	pvr_dr_finish();
 }
 
 /*
@@ -2956,14 +2710,7 @@ void GL_RebuildLightmaps( void )
 	}
 }
 
-/*
-==================
-GL_BuildLightmaps
 
-Builds the lightmap texture
-with all the surfaces from all brush models
-==================
-*/
 /*
 ==================
 GL_BuildLightmaps
@@ -2976,61 +2723,6 @@ void GL_BuildLightmaps( void )
 {
 	int	i, j, nColinElim = 0;
 	model_t	*m;
-
-    // DC fast path: if engine prebuilt pages and CPU lightdata is missing, reuse pages and build only polygons
-    if( !WORLDMODEL->lightdata )
-    {
-        char lmName[16];
-        int tex0;
-        Q_snprintf( lmName, sizeof( lmName ), "*lightmap0" );
-        tex0 = GL_FindTexture( lmName );
-        if( tex0 > 0 )
-        {
-            // initialize minimal state similar to normal path
-            tr.block_size = BLOCK_SIZE_DEFAULT;
-            skychain = NULL;
-            tr.framecount = tr.visframecount = 1;
-            gl_lms.current_lightmap_texture = 0;
-            tr.modelviewIdentity = false;
-            tr.realframecount = 1;
-            R_InitDlightTexture();
-            CL_RunLightStyles((lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR ));
-
-            memset( tr.lightmapTextures, 0, sizeof( tr.lightmapTextures ));
-            for( i = 0; i < MAX_LIGHTMAPS; i++ )
-            {
-                int tex;
-                Q_snprintf( lmName, sizeof( lmName ), "*lightmap%i", i );
-                tex = GL_FindTexture( lmName );
-                if( tex <= 0 ) break;
-                tr.lightmapTextures[i] = tex;
-            }
-
-            // Build polygons only
-            for( i = 0; i < gp_cl->nummodels; i++ )
-            {
-                if(( m = CL_ModelHandle( i + 1 )) == NULL )
-                    continue;
-                if( m->name[0] == '*' || m->type != mod_brush )
-                    continue;
-                for( j = 0; j < m->numsurfaces; j++ )
-                {
-                    m->surfaces[j].pdecals = NULL;
-                    m->surfaces[j].visframe = 0;
-                    if( m->surfaces[j].flags & SURF_DRAWTURB )
-                        continue;
-                    nColinElim += GL_BuildPolygonFromSurface( m, m->surfaces + j );
-                }
-                for( j = 0; j < m->numleafs; j++ ) m->leafs[j+1].visframe = 0;
-                for( j = 0; j < m->numnodes; j++ ) m->nodes[j].visframe = 0;
-            }
-
-            if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
-                gEngfuncs.drawFuncs->GL_BuildLightmaps( );
-            return;
-        }
-    }
-
     // release old lightmaps
     for( i = 0; i < MAX_LIGHTMAPS; i++ )
     {
@@ -3054,65 +2746,6 @@ void GL_BuildLightmaps( void )
 
 	// setup all the lightstyles
 	CL_RunLightStyles((lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR ));
-
-    // Try to reuse prebuilt static lightmaps named as *lightmap%d (engine/DC path)
-    // If found, just fill tr.lightmapTextures and skip building from surf->samples
-    {
-        qboolean have_prebuilt = false;
-        int filled = 0;
-        for( i = 0; i < MAX_LIGHTMAPS; i++ )
-        {
-            char lmName[16];
-            int tex;
-            Q_snprintf( lmName, sizeof( lmName ), "*lightmap%i", i );
-            tex = GL_FindTexture( lmName );
-            if( tex <= 0 )
-                break;
-            tr.lightmapTextures[i] = tex;
-            filled++;
-        }
-        have_prebuilt = ( filled > 0 );
-
-        if( have_prebuilt )
-        {
-            gl_lms.current_lightmap_texture = filled;
-            // Only build polygons; placements (light_s/t and lightmaptexturenum) must be already set
-            for( i = 0; i < gp_cl->nummodels; i++ )
-            {
-                if(( m = CL_ModelHandle( i + 1 )) == NULL )
-                    continue;
-
-                if( m->name[0] == '*' || m->type != mod_brush )
-                    continue;
-
-                for( j = 0; j < m->numsurfaces; j++ )
-                {
-                    // clearing all decal chains
-                    m->surfaces[j].pdecals = NULL;
-                    m->surfaces[j].visframe = 0;
-
-                    if( m->surfaces[j].flags & SURF_DRAWTURB )
-                        continue;
-
-                    nColinElim += GL_BuildPolygonFromSurface( m, m->surfaces + j );
-                }
-
-                // clearing visframe
-                for( j = 0; j < m->numleafs; j++ )
-                    m->leafs[j+1].visframe = 0;
-                for( j = 0; j < m->numnodes; j++ )
-                    m->nodes[j].visframe = 0;
-            }
-
-            // done
-            if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
-            {
-                // allow client renderer to append if needed
-                gEngfuncs.drawFuncs->GL_BuildLightmaps( );
-            }
-            return;
-        }
-    }
 
     LM_InitBlock();
 

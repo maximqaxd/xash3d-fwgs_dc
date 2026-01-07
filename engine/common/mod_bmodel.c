@@ -388,114 +388,6 @@ static const mlumpinfo_t extlumps[EXTRA_LUMPS] =
 };
 #endif
 
-#if XASH_DREAMCAST
-// Dreamcast lightmap atlas packer helpers (C-only)
-typedef struct dc_lm_packer_s
-{
-    int pageSize;
-    byte *page;       // 16-bit RGB565 temporary page
-    int *allocated;   // skyline allocator heights, length = pageSize
-    int currentPage;
-    qboolean pageDirty;
-} dc_lm_packer_t;
-
-#if XASH_DREAMCAST
-// Downscale factor for lightmaps on Dreamcast (1 = original, 2 = half-res in each axis)
-static const int g_dc_lightmap_downscale = 2;
-// Runtime scale applied to sample size returned by Mod_SampleSizeForFace on DC
-static int g_dc_lm_sample_scale = 1;
-// Simple post-box-filter sharpen strength in [0..255], 64 ~= 0.25
-static const int g_dc_lm_sharpen_256 = 64;
-#endif
-
-// Track memory saved by disabling face bevels on Dreamcast
-static size_t g_dc_bevel_saved_bytes = 0;
-
-static void DC_LM_Init( dc_lm_packer_t *pk, int pageSize )
-{
-    memset( pk, 0, sizeof( *pk ));
-    pk->pageSize = pageSize;
-    pk->page = (byte *)Z_Calloc( pageSize * pageSize * 2 );
-    pk->allocated = (int *)Z_Calloc( sizeof( int ) * pageSize );
-    pk->currentPage = 0;
-    pk->pageDirty = false;
-}
-
-static qboolean DC_LM_FindSpot( dc_lm_packer_t *pk, int w, int h, int *outx, int *outy )
-{
-    int best = pk->pageSize;
-    int i, j, best2;
-
-    for( i = 0; i <= pk->pageSize - w; i++ )
-    {
-        int y = 0;
-        best2 = 0;
-        for( j = 0; j < w; j++ )
-        {
-            int at = pk->allocated[i + j];
-            if( at >= best ) { y = pk->pageSize; break; }
-            if( at > y ) y = at;
-            if( y + h > pk->pageSize ) break;
-            if( at > best2 ) best2 = at;
-        }
-        if( j == w )
-        {
-            *outx = i;
-            *outy = best2;
-            best = best2;
-        }
-    }
-
-    if( best + h > pk->pageSize )
-        return false;
-
-    for( i = 0; i < w; i++ )
-        pk->allocated[*outx + i] = best + h;
-    return true;
-}
-
-static void DC_LM_UploadPage( dc_lm_packer_t *pk )
-{
-    if( pk->pageDirty )
-    {
-        char name[16];
-        int flags;
-        Q_snprintf( name, sizeof( name ), "*lightmap%i", pk->currentPage );
-        flags = TF_NOMIPMAP|TF_ATLAS_PAGE;
-        // Force full replace on DC: if texture exists, delete it first
-        if( ref.dllFuncs.GL_FindTexture )
-        {
-            int texnum = ref.dllFuncs.GL_FindTexture( name );
-            if( texnum > 0 && ref.dllFuncs.GL_FreeTexture )
-                ref.dllFuncs.GL_FreeTexture( texnum );
-        }
-        {
-            // upload as explicit PF_RGB_5650
-            rgbdata_t r_lm;
-            memset( &r_lm, 0, sizeof( r_lm ));
-            r_lm.width = pk->pageSize;
-            r_lm.height = pk->pageSize;
-            r_lm.type = PF_RGB_5650;
-            r_lm.size = r_lm.width * r_lm.height * 2;
-            r_lm.flags = IMAGE_HAS_COLOR;
-            r_lm.buffer = pk->page;
-            // Always pass update=false to force full replace
-            ref.dllFuncs.GL_LoadTextureFromBuffer( name, &r_lm, flags, false );
-        }
-        pk->currentPage++;
-        memset( pk->page, 0, pk->pageSize * pk->pageSize * 2 );
-        memset( pk->allocated, 0, sizeof( int ) * pk->pageSize );
-        pk->pageDirty = false;
-    }
-}
-
-static void DC_LM_Free( dc_lm_packer_t *pk )
-{
-    if( pk->allocated ) Z_Free( pk->allocated );
-    if( pk->page ) Z_Free( pk->page );
-    memset( pk, 0, sizeof( *pk ));
-}
-#endif // XASH_DREAMCAST
 #define BOX_CLIPNODES_INITIALIZER \
 	{ \
 		.planenum = 0, \
@@ -1363,46 +1255,28 @@ int Mod_SampleSizeForFace( const msurface_t *surf )
 {
 	if( !surf || !surf->texinfo )
 	{
-#if XASH_DREAMCAST
-		return LM_SAMPLE_SIZE * g_dc_lm_sample_scale;
-#else
 		return LM_SAMPLE_SIZE;
-#endif
 	}
 
 	// world luxels has more priority
 	if( FBitSet( surf->texinfo->flags, TEX_WORLD_LUXELS ))
 	{
-#if XASH_DREAMCAST
-		return 1 * g_dc_lm_sample_scale;
-#else
+
 		return 1;
-#endif
 	}
 
 	if( FBitSet( surf->texinfo->flags, TEX_EXTRA_LIGHTMAP ))
 	{
-#if XASH_DREAMCAST
-		return LM_SAMPLE_EXTRASIZE * g_dc_lm_sample_scale;
-#else
 		return LM_SAMPLE_EXTRASIZE;
-#endif
 	}
 
 	if( surf->texinfo->faceinfo )
 	{
-#if XASH_DREAMCAST
-		return surf->texinfo->faceinfo->texture_step * g_dc_lm_sample_scale;
-#else
+
 		return surf->texinfo->faceinfo->texture_step;
-#endif
 	}
 
-#if XASH_DREAMCAST
-	return LM_SAMPLE_SIZE * g_dc_lm_sample_scale;
-#else
 	return LM_SAMPLE_SIZE;
-#endif
 }
 
 /*
@@ -3416,12 +3290,8 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
         if (lightofs != -1 && test_lightsize == -1)
         {
             // Use original BSP luxel size for inference (DC may scale runtime sample size)
-#if XASH_DREAMCAST
-            int sample_size_scaled = Mod_SampleSizeForFace(out);
-            int sample_size = Q_max( 1, sample_size_scaled / Q_max( 1, g_dc_lm_sample_scale ) );
-#else
+
             int sample_size = Mod_SampleSizeForFace(out);
-#endif
             int smax = (info->lightextents[0] / sample_size) + 1;
             int tmax = (info->lightextents[1] / sample_size) + 1;
             int lightstyles = 0;
@@ -3927,224 +3797,6 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 
     if( !bmod->lightdatasize )
 		return;
-#if XASH_DREAMCAST
-    // Dreamcast path: build static lightmap atlases at load time and do not persist CPU lightdata
-    {
-        const int pageSize = 128; // must match ref/gl lightmap block size on DC
-        dc_lm_packer_t pk;
-        // Make renderer treat luxels as larger when downscaled
-        // Set the active sample scale for this world (used by Mod_SampleSizeForFace)
-        g_dc_lm_sample_scale = g_dc_lightmap_downscale;
-        DC_LM_Init( &pk, pageSize );
-
-        // Dreamcast: gamma LUT to improve RGB565 quantization and reduce blue cast
-        static qboolean s_dc_lm_gamma_init = false;
-        static unsigned char s_dc_lm_gamma_lut[256];
-        if( !s_dc_lm_gamma_init )
-        {
-            int gi;
-            for( gi = 0; gi < 256; ++gi )
-            {
-                float x = (float)gi * (1.0f / 255.0f);
-                float y = powf( x, 1.0f / 2.2f );
-                int v = (int)( y * 255.0f + 0.5f );
-                if( v < 0 ) v = 0; else if( v > 255 ) v = 255;
-                s_dc_lm_gamma_lut[gi] = (unsigned char)v;
-            }
-            s_dc_lm_gamma_init = true;
-        }
-
-        // iterate faces and pack first lightstyle only
-        for( i = 0; i < bmod->numsurfaces; i++ )
-        {
-            int lightofs;
-            msurface_t *surf = &mod->surfaces[i];
-            mextrasurf_t *info = surf->info;
-            // scaled sample size (DC may scale with g_dc_lm_sample_scale)
-            int sample_size_scaled = Mod_SampleSizeForFace( surf );
-            // original BSP luxel size before DC downscale
-            int ds = g_dc_lightmap_downscale;
-            int sample_size_src = sample_size_scaled / ( ds > 0 ? ds : 1 );
-            if( sample_size_src < 1 ) sample_size_src = 1;
-            // compute source dimensions from original sample size
-            int smax_src = ( info->lightextents[0] / sample_size_src ) + 1;
-            int tmax_src = ( info->lightextents[1] / sample_size_src ) + 1;
-            // destination dims after DC downscale (or equal if ds==1)
-            int smax = ( ds > 1 ) ? ( ( smax_src + ds - 1 ) / ds ) : smax_src;
-            int tmax = ( ds > 1 ) ? ( ( tmax_src + ds - 1 ) / ds ) : tmax_src;
-            int size, x = 0, y = 0;
-
-            if( bmod->version == QBSP2_VERSION )
-                lightofs = bmod->surfaces32[i].lightofs;
-            else
-                lightofs = bmod->surfaces[i].lightofs;
-
-            if( lightofs < 0 )
-                continue; // no lightmap for this face
-
-            if( smax <= 0 || tmax <= 0 )
-                continue;
-            size = smax * tmax;
-
-            // allocate placement with padding around block to prevent filtering bleed
-            // use 3-texel padding when downscaled to reduce seams (half-texel bias applied in renderer)
-            const int pad = ( g_dc_lightmap_downscale > 1 ) ? 3 : 1;
-            if( !DC_LM_FindSpot( &pk, smax + pad * 2, tmax + pad * 2, &x, &y ))
-            {
-                DC_LM_UploadPage( &pk );
-                if( !DC_LM_FindSpot( &pk, smax + pad * 2, tmax + pad * 2, &x, &y ))
-                    Host_Error( "%s: LM pack failed for face %d", __func__, i );
-            }
-
-            // copy and expand into RGB565 page (with optional 2x2 average downscale)
-            {
-                const byte *src = (const byte *)bmod->lightdata + lightofs;
-                int map_bpp = bmod->lightmap_samples; // 1 or 3
-                int row, col;
-                byte *dstRow;
-                const int dstx = x + pad;
-                const int dsty = y + pad;
-                if( g_dc_lightmap_downscale > 1 )
-                {
-                    for( row = 0; row < tmax; row++ )
-                    {
-                        dstRow = pk.page + (( dsty + row ) * pageSize + dstx ) * 2;
-                        for( col = 0; col < smax; col++ )
-                        {
-                            // area-average 2x2 block from source
-                            int sx = col * ds;
-                            int sy = row * ds;
-                            int sx1 = sx + 1 < smax_src ? sx + 1 : sx;
-                            int sy1 = sy + 1 < tmax_src ? sy + 1 : sy;
-                            if( map_bpp == 3 )
-                            {
-                                const byte *p00 = src + ( sy * smax_src + sx ) * 3;
-                                const byte *p10 = src + ( sy * smax_src + sx1 ) * 3;
-                                const byte *p01 = src + ( sy1 * smax_src + sx ) * 3;
-                                const byte *p11 = src + ( sy1 * smax_src + sx1 ) * 3;
-                                int r = p00[0] + p10[0] + p01[0] + p11[0];
-                                int g = p00[1] + p10[1] + p01[1] + p11[1];
-                                int b = p00[2] + p10[2] + p01[2] + p11[2];
-                                // box average
-                                r >>= 2; g >>= 2; b >>= 2;
-                                // 1-tap sharpen: blend towards nearest source (p00)
-                                // r = r + s*(p00 - r), s in [0..1], here fixed g_dc_lm_sharpen_256/256
-                                r = r + (( g_dc_lm_sharpen_256 * ( (int)p00[0] - r ) ) >> 8);
-                                g = g + (( g_dc_lm_sharpen_256 * ( (int)p00[1] - g ) ) >> 8);
-                                b = b + (( g_dc_lm_sharpen_256 * ( (int)p00[2] - b ) ) >> 8);
-                                if( r < 0 ) r = 0; else if( r > 255 ) r = 255;
-                                if( g < 0 ) g = 0; else if( g > 255 ) g = 255;
-                                if( b < 0 ) b = 0; else if( b > 255 ) b = 255;
-                                unsigned short c = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-                                memcpy( dstRow + col * 2, &c, 2 );
-                            }
-                            else
-                            {
-                                int v00 = src[ sy * smax_src + sx ];
-                                int v10 = src[ sy * smax_src + sx1 ];
-                                int v01 = src[ sy1 * smax_src + sx ];
-                                int v11 = src[ sy1 * smax_src + sx1 ];
-                                int v = ( v00 + v10 + v01 + v11 ) >> 2;
-                                v = v + (( g_dc_lm_sharpen_256 * ( v00 - v ) ) >> 8);
-                                if( v < 0 ) v = 0; else if( v > 255 ) v = 255;
-                                unsigned short c = ((v & 0xF8) << 8) | ((v & 0xFC) << 3) | (v >> 3);
-                                memcpy( dstRow + col * 2, &c, 2 );
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    for( row = 0; row < tmax; row++ )
-                    {
-                        dstRow = pk.page + (( dsty + row ) * pageSize + dstx ) * 2;
-                        for( col = 0; col < smax; col++ )
-                        {
-                            if( map_bpp == 3 )
-                            {
-                                const byte *p = src + ( row * smax_src + col ) * 3;
-                                unsigned short c = ((p[0] & 0xF8) << 8) | ((p[1] & 0xFC) << 3) | (p[2] >> 3);
-                                memcpy( dstRow + col * 2, &c, 2 );
-                            }
-                            else
-                            {
-                                byte v = src[ row * smax_src + col ];
-                                unsigned short c = ((v & 0xF8) << 8) | ((v & 0xFC) << 3) | (v >> 3);
-                                memcpy( dstRow + col * 2, &c, 2 );
-                            }
-                        }
-                    }
-                }
-
-                // duplicate border (pad texels) around the block
-                // top rows
-                for( int pr = 1; pr <= pad; pr++ )
-                {
-                    memcpy( pk.page + (( dsty - pr ) * pageSize + dstx ) * 2,
-                            pk.page + ( dsty * pageSize + dstx ) * 2,
-                            smax * 2 );
-                }
-                // bottom rows
-                for( int pr = 1; pr <= pad; pr++ )
-                {
-                    memcpy( pk.page + (( dsty + tmax - 1 + pr ) * pageSize + dstx ) * 2,
-                            pk.page + (( dsty + tmax - 1 ) * pageSize + dstx ) * 2,
-                            smax * 2 );
-                }
-                // left and right columns
-                for( row = -pad; row < tmax + pad; row++ )
-                {
-                    byte *d = pk.page + (( dsty + row ) * pageSize + dstx ) * 2;
-                    // left pad
-                    for( int pc = 1; pc <= pad; pc++ )
-                        memcpy( (d - pc * 2), d, 2 );
-                    // right pad
-                    for( int pc = 1; pc <= pad; pc++ )
-                        memcpy( ( d + ( smax - 1 ) * 2 + pc * 2 ), ( d + ( smax - 1 ) * 2 ), 2 );
-                }
-                // corners: fill pad x pad squares
-                for( int pr = 1; pr <= pad; pr++ )
-                {
-                    for( int pc = 1; pc <= pad; pc++ )
-                    {
-                        // top-left
-                        memcpy( pk.page + (( dsty - pr ) * pageSize + ( dstx - pc )) * 2,
-                                pk.page + ( dsty * pageSize + dstx ) * 2, 2 );
-                        // top-right
-                        memcpy( pk.page + (( dsty - pr ) * pageSize + ( dstx + smax - 1 + pc )) * 2,
-                                pk.page + ( dsty * pageSize + ( dstx + smax - 1 )) * 2, 2 );
-                        // bottom-left
-                        memcpy( pk.page + (( dsty + tmax - 1 + pr ) * pageSize + ( dstx - pc )) * 2,
-                                pk.page + ( ( dsty + tmax - 1 ) * pageSize + dstx ) * 2, 2 );
-                        // bottom-right
-                        memcpy( pk.page + (( dsty + tmax - 1 + pr ) * pageSize + ( dstx + smax - 1 + pc )) * 2,
-                                pk.page + ( ( dsty + tmax - 1 ) * pageSize + ( dstx + smax - 1 ) ) * 2, 2 );
-                    }
-                }
-            }
-
-            // record placement for renderer (inner start)
-            surf->light_s = x + pad;
-            surf->light_t = y + pad;
-            surf->lightmaptexturenum = pk.currentPage;
-            pk.pageDirty = true;
-        }
-
-        // upload last page
-        DC_LM_UploadPage( &pk );
-
-        // free temps
-        DC_LM_Free( &pk );
-
-        // colored lighting flag if samples were RGB
-        if( bmod->lightmap_samples == 3 )
-            SetBits( mod->flags, MODEL_COLORED_LIGHTING );
-
-        // do not persist CPU lightdata; do not set surf->samples
-        Con_Reportf( "lighting: %s (DC atlas, x%d downscale)\n", FBitSet( mod->flags, MODEL_COLORED_LIGHTING ) ? "colored" : "monochrome", g_dc_lightmap_downscale );
-        return;
-    }
-#endif // XASH_DREAMCAST
 
     switch (bmod->lightmap_samples)
     {
