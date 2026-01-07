@@ -16,7 +16,9 @@ GNU General Public License for more details.
 #include "mod_local.h"
 #include "sprite.h"
 #include "xash3d_mathlib.h"
+#if !XASH_DREAMCAST
 #include "alias.h"
+#endif
 #include "studio.h"
 #include "wadfile.h"
 #include "world.h"
@@ -385,6 +387,7 @@ static const mlumpinfo_t extlumps[EXTRA_LUMPS] =
 	},
 };
 #endif
+
 #define BOX_CLIPNODES_INITIALIZER \
 	{ \
 		.planenum = 0, \
@@ -424,13 +427,21 @@ const mclipnode32_t box_clipnodes32[6] = { BOX_CLIPNODES_INITIALIZER };
 
 static mip_t *Mod_GetMipTexForTexture( dbspmodel_t *bmod, int i )
 {
+	if( !bmod || !bmod->textures )
+		return NULL;
 	if( i < 0 || i >= bmod->textures->nummiptex )
 		return NULL;
-
+#if XASH_DREAMCAST
+	int ofs;
+	memcpy( &ofs, &bmod->textures->dataofs[i], sizeof( ofs ) );
+	if( ofs == -1 )
+		return NULL;
+	return (mip_t *)((byte *)bmod->textures + ofs );
+#else
 	if( bmod->textures->dataofs[i] == -1 )
 		return NULL;
-
 	return (mip_t *)((byte *)bmod->textures + bmod->textures->dataofs[i] );
+#endif
 }
 // Returns index of WAD that texture was found in, or -1 if not found.
 static int Mod_LoadTextureFromWadList( wadlist_t *list, const char *name, rgbdata_t **pic, char *texpath, size_t texpathlen )
@@ -485,9 +496,15 @@ static fs_offset_t Mod_CalculateMipTexSize( const mip_t *mt, qboolean palette )
 {
 	if( !mt )
 		return 0;
-
+#if XASH_DREAMCAST
+	mip_t hdr;
+	memcpy( &hdr, mt, sizeof( hdr ) );
+	return sizeof( hdr ) + (( hdr.width * hdr.height * 85 ) >> 6 ) +
+		( palette ? MIPTEX_CUSTOM_PALETTE_SIZE_BYTES : 0 );
+#else
 	return sizeof( *mt ) + (( mt->width * mt->height * 85 ) >> 6 ) +
 		( palette ? MIPTEX_CUSTOM_PALETTE_SIZE_BYTES : 0 );
+#endif
 }
 
 static qboolean Mod_CalcMipTexUsesCustomPalette( model_t *mod, dbspmodel_t *bmod, int textureIndex )
@@ -497,9 +514,17 @@ static qboolean Mod_CalcMipTexUsesCustomPalette( model_t *mod, dbspmodel_t *bmod
 	fs_offset_t size, remainingBytes;
 
 	mipTex = Mod_GetMipTexForTexture( bmod, textureIndex );
-
-	if( !mipTex || mipTex->offsets[0] <= 0 )
+	if( !mipTex )
 		return false;
+#if XASH_DREAMCAST
+	int ofs0 = 0;
+	memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+	if( ofs0 <= 0 )
+		return false;
+#else
+	if( mipTex->offsets[0] <= 0 )
+		return false;
+#endif
 
 	// Calculate the size assuming we are not using a custom palette.
 	size = Mod_CalculateMipTexSize( mipTex, false );
@@ -507,18 +532,36 @@ static qboolean Mod_CalcMipTexUsesCustomPalette( model_t *mod, dbspmodel_t *bmod
 	// Compute next data offset to determine allocated miptex space
 	for( nextTextureIndex = textureIndex + 1; nextTextureIndex < mod->numtextures; nextTextureIndex++ )
 	{
+#if XASH_DREAMCAST
+		int nextOffset;
+		memcpy( &nextOffset, &bmod->textures->dataofs[nextTextureIndex], sizeof( nextOffset ) );
+#else
 		int nextOffset = bmod->textures->dataofs[nextTextureIndex];
-
+#endif
 		if( nextOffset != -1 )
 		{
-			remainingBytes = nextOffset - ( bmod->textures->dataofs[textureIndex] + size );
+			int curOffset;
+#if XASH_DREAMCAST
+			memcpy( &curOffset, &bmod->textures->dataofs[textureIndex], sizeof( curOffset ) );
+#else
+			curOffset = bmod->textures->dataofs[textureIndex];
+#endif
+			remainingBytes = nextOffset - ( curOffset + size );
 			return remainingBytes >= MIPTEX_CUSTOM_PALETTE_SIZE_BYTES;
 		}
 	}
 
 	// There was no other miptex after this one.
 	// See if there is enough space between the end and our offset.
-	remainingBytes = bmod->texdatasize - ( bmod->textures->dataofs[textureIndex] + size );
+	{
+		int curOffset;
+#if XASH_DREAMCAST
+		memcpy( &curOffset, &bmod->textures->dataofs[textureIndex], sizeof( curOffset ) );
+#else
+		curOffset = bmod->textures->dataofs[textureIndex];
+#endif
+		remainingBytes = bmod->texdatasize - ( curOffset + size );
+	}
 	return remainingBytes >= MIPTEX_CUSTOM_PALETTE_SIZE_BYTES;
 }
 
@@ -1211,17 +1254,27 @@ return the current lightmap resolution per face
 int Mod_SampleSizeForFace( const msurface_t *surf )
 {
 	if( !surf || !surf->texinfo )
+	{
 		return LM_SAMPLE_SIZE;
+	}
 
 	// world luxels has more priority
 	if( FBitSet( surf->texinfo->flags, TEX_WORLD_LUXELS ))
+	{
+
 		return 1;
+	}
 
 	if( FBitSet( surf->texinfo->flags, TEX_EXTRA_LIGHTMAP ))
+	{
 		return LM_SAMPLE_EXTRASIZE;
+	}
 
 	if( surf->texinfo->faceinfo )
+	{
+
 		return surf->texinfo->faceinfo->texture_step;
+	}
 
 	return LM_SAMPLE_SIZE;
 }
@@ -1262,7 +1315,13 @@ determine face contents by name
 */
 static mvertex_t *Mod_GetVertexByNumber( model_t *mod, int surfedge, const dbspmodel_t *bmod )
 {
-	int	lindex = mod->surfedges[surfedge];
+    int	lindex;
+#if XASH_DREAMCAST
+    if( mod->surfedges16 ) lindex = (int)mod->surfedges16[surfedge];
+    else lindex = mod->surfedges[surfedge];
+#else
+    lindex = mod->surfedges[surfedge];
+#endif
 
 	if( bmod->version == QBSP2_VERSION )
 	{
@@ -1395,7 +1454,14 @@ static void Mod_CalcSurfaceExtents( model_t *mod, msurface_t *surf, const dbspmo
 
 	for( i = 0; i < surf->numedges; i++ )
 	{
-		e = mod->surfedges[surf->firstedge + i];
+        {
+            int idx = surf->firstedge + i;
+#if XASH_DREAMCAST
+            e = mod->surfedges16 ? (int)mod->surfedges16[idx] : mod->surfedges[idx];
+#else
+            e = mod->surfedges[idx];
+#endif
+        }
 
 		if( e >= mod->numedges || e <= -mod->numedges )
 			Host_Error( "%s: bad edge\n", __func__ );
@@ -1472,7 +1538,12 @@ static void Mod_CalcSurfaceBounds( model_t *mod, msurface_t *surf, const dbspmod
 
 	for( i = 0; i < surf->numedges; i++ )
 	{
-		e = mod->surfedges[surf->firstedge + i];
+		int idx = surf->firstedge + i;
+#if XASH_DREAMCAST
+		e = mod->surfedges16 ? (int)mod->surfedges16[idx] : mod->surfedges[idx];
+#else
+		e = mod->surfedges[idx];
+#endif
 
 		if( e >= mod->numedges || e <= -mod->numedges )
 			Host_Error( "%s: bad edge\n", __func__ );
@@ -1508,6 +1579,10 @@ static void Mod_CreateFaceBevels( model_t *mod, msurface_t *surf, const dbspmode
 	int		i, size;
 	vec_t		radius;
 	mfacebevel_t	*fb;
+
+#if XASH_DREAMCAST
+    return;
+#endif
 
 	if( surf->texinfo && surf->texinfo->texture )
 		contents = Mod_GetFaceContents( surf->texinfo->texture->name );
@@ -1777,6 +1852,7 @@ static void Mod_SetupHull( dbspmodel_t *bmod, model_t *mod, poolhandle_t mempool
 
 static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_size, color24 **out, size_t *outsize )
 {
+#if !XASH_DREAMCAST
 	char        modelname[64], path[64];
 	int         iCompare;
 	fs_offset_t datasize;
@@ -1838,6 +1914,7 @@ static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_
 cleanup_and_error:
 	FS_Close( f );
 	return false;
+#endif
 }
 
 /*
@@ -2189,28 +2266,30 @@ static void Mod_LoadVertexes( model_t *mod, dbspmodel_t *bmod )
 	int	i;
 
 	in = bmod->vertexes;
-	out = mod->vertexes = Mem_Malloc( mod->mempool, bmod->numvertexes * sizeof( mvertex_t ));
-	mod->numvertexes = bmod->numvertexes;
 
-	if( bmod->isworld ) ClearBounds( world.mins, world.maxs );
+    out = mod->vertexes = Mem_Malloc(mod->mempool, bmod->numvertexes * sizeof(mvertex_t));
 
-	for( i = 0; i < bmod->numvertexes; i++, in++, out++ )
-	{
-		if( bmod->isworld )
-			AddPointToBounds( in->point, world.mins, world.maxs );
-		VectorCopy( in->point, out->position );
-	}
+    mod->numvertexes = bmod->numvertexes;
 
-	if( !bmod->isworld ) return;
+    if (bmod->isworld) ClearBounds(world.mins, world.maxs);
 
-	VectorSubtract( world.maxs, world.mins, world.size );
+    for (i = 0; i < bmod->numvertexes; i++, in++, out++)
+    {
+        if (bmod->isworld)
+            AddPointToBounds(in->point, world.mins, world.maxs);
+        VectorCopy(in->point, out->position);
+    }
 
-	for( i = 0; i < 3; i++ )
-	{
-		// spread the mins / maxs by a pixel
-		world.mins[i] -= 1.0f;
-		world.maxs[i] += 1.0f;
-	}
+    if (!bmod->isworld) return;
+
+    VectorSubtract(world.maxs, world.mins, world.size);
+
+    for (i = 0; i < 3; i++)
+    {
+        // Spread the mins / maxs by a pixel
+        world.mins[i] -= 1.0f;
+        world.maxs[i] += 1.0f;
+    }
 }
 
 /*
@@ -2223,31 +2302,30 @@ static void Mod_LoadEdges( model_t *mod, dbspmodel_t *bmod )
 	int	i;
 
 	mod->numedges = bmod->numedges;
+    if (bmod->version == QBSP2_VERSION)
+    {
+        dedge32_t *in = bmod->edges32;
+        medge32_t *out;
+        mod->edges32 = out = Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge32_t));
 
-	if( bmod->version == QBSP2_VERSION )
-	{
-		dedge32_t *in = bmod->edges32;
-		medge32_t *out;
-		mod->edges32 = out = Mem_Malloc( mod->mempool, bmod->numedges * sizeof( *out ));
+        for (i = 0; i < bmod->numedges; i++, in++, out++)
+        {
+            out->v[0] = in->v[0];
+            out->v[1] = in->v[1];
+        }
+    }
+    else
+    {
+        dedge_t *in = bmod->edges;
+        medge16_t *out;
+        mod->edges16 = out = Mem_Malloc(mod->mempool, bmod->numedges * sizeof(medge16_t));
 
-		for( i = 0; i < bmod->numedges; i++, in++, out++ )
-		{
-			out->v[0] = in->v[0];
-			out->v[1] = in->v[1];
-		}
-	}
-	else
-	{
-		dedge_t	*in = bmod->edges;
-		medge16_t *out;
-		mod->edges16 = out = Mem_Malloc( mod->mempool, bmod->numedges * sizeof( *out ));
-
-		for( i = 0; i < bmod->numedges; i++, in++, out++ )
-		{
-			out->v[0] = (word)in->v[0];
-			out->v[1] = (word)in->v[1];
-		}
-	}
+        for (i = 0; i < bmod->numedges; i++, in++, out++)
+        {
+            out->v[0] = (word)in->v[0];
+            out->v[1] = (word)in->v[1];
+        }
+    }
 }
 
 /*
@@ -2257,9 +2335,46 @@ Mod_LoadSurfEdges
 */
 static void Mod_LoadSurfEdges( model_t *mod, dbspmodel_t *bmod )
 {
-	mod->surfedges = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( dsurfedge_t ));
-	memcpy( mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof( dsurfedge_t ));
+#if XASH_DREAMCAST
+	// Prefer 16-bit surfedges when safe
+    if( bmod->numsurfedges <= INT16_MAX )
+	{
+		short *out;
+		const dsurfedge_t *in = bmod->surfedges;
+		int i;
+		mod->surfedges16 = out = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( short ));
+		mod->surfedges = NULL;
+		for( i = 0; i < bmod->numsurfedges; i++ )
+		{
+			int v = in[i];
+            if( v < INT16_MIN || v > INT16_MAX )
+			{
+				// fallback to 32-bit if any value overflows
+				mod->surfedges16 = NULL;
+				break;
+			}
+			out[i] = (short)v;
+		}
+		if( !mod->surfedges16 )
+		{
+			// allocate 32-bit fallback
+            Mem_Free( out );
+			mod->surfedges = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( dsurfedge_t ));
+			memcpy( mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof( dsurfedge_t ));
+		}
+	}
+	else
+	{
+		mod->surfedges = Mem_Malloc( mod->mempool, bmod->numsurfedges * sizeof( dsurfedge_t ));
+		memcpy( mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof( dsurfedge_t ));
+	}
 	mod->numsurfedges = bmod->numsurfedges;
+#else
+	mod->surfedges = Mem_Malloc(mod->mempool, bmod->numsurfedges * sizeof(dsurfedge_t));
+
+	memcpy(mod->surfedges, bmod->surfedges, bmod->numsurfedges * sizeof(dsurfedge_t));
+	mod->numsurfedges = bmod->numsurfedges;
+#endif
 }
 
 /*
@@ -2524,8 +2639,15 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 	// but count the wadusage for automatic precache
 	texture_t *texture = mod->textures[textureIndex];
 	const mip_t *mipTex = Mod_GetMipTexForTexture( bmod, textureIndex );
+	if( !mipTex ) return;
+	// Safe local name
+	char mtname[17];
+	memcpy( mtname, mipTex->name, 16 );
+	mtname[16] = '\0';
+	if( mtname[0] == '\0' )
+		Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
 	const qboolean usesCustomPalette = Mod_CalcMipTexUsesCustomPalette( mod, bmod, textureIndex );
-	const qboolean iswater = Mod_LooksLikeWaterTexture( mipTex->name );
+	const qboolean iswater = Mod_LooksLikeWaterTexture( mtname );
 
 #if !XASH_DREAMCAST
 	// check for multi-layered sky texture (quake1 specific)
@@ -2535,7 +2657,7 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 		return;
 	}
 #endif
-	if( FBitSet( host.features, ENGINE_IMPROVED_LINETRACE ) && mipTex->name[0] == '{' )
+	if( FBitSet( host.features, ENGINE_IMPROVED_LINETRACE ) && mtname[0] == '{' )
 		SetBits( txFlags, TF_KEEP_SOURCE ); // Paranoia2 texture alpha-tracing
 
 	// check if this is water to keep the source texture and expand it to RGBA (so ripple effect works)
@@ -2548,61 +2670,96 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 	// 3. Internal from map
 
 	texture->gl_texturenum = 0;
-	Q_strncpy( safemtname, mipTex->name, sizeof( safemtname ));
+	Q_strncpy( safemtname, mtname, sizeof( safemtname ));
 	if( safemtname[0] == '*' )
 		safemtname[0] = '!'; // replace unexpected symbol
 
 	if( Mod_AllowMaterials( ))
 	{
-#if !XASH_DEDICATED
+#if !XASH_DREAMCAST
 		if( Mod_SearchForTextureReplacement( texpath, sizeof( texpath ), mod->name, safemtname, "" ))
 		{
 			texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texpath, NULL, 0, txFlags );
 			load_external = texture->gl_texturenum != 0;
 			Mod_TextureReplacementReport( mod->name, safemtname, "", texture->gl_texturenum, texpath );
 		}
-#endif // !XASH_DEDICATED
+#endif // !XASH_DREAMCAST
 	}
 
 	// Try WAD texture (force while r_wadtextures is 1)
-	if( !texture->gl_texturenum && (( r_wadtextures.value && world.wadlist.count > 0 ) || mipTex->offsets[0] <= 0 ))
 	{
-		rgbdata_t *pic = NULL;
-		int wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, mipTex->name, Host_IsDedicated() ? NULL : &pic, texpath, sizeof( texpath ));
-
-		if( wadIndex >= 0 )
+		int ofs0;
+		memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+		if( !texture->gl_texturenum && (( r_wadtextures.value && world.wadlist.count > 0 ) || ofs0 <= 0 ))
 		{
-#if !XASH_DEDICATED
-			if( !Host_IsDedicated( ) && pic != NULL )
+			rgbdata_t *pic = NULL;
+			int wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, mtname, Host_IsDedicated() ? NULL : &pic, texpath, sizeof( texpath ));
+
+			if( wadIndex >= 0 )
 			{
-				texture->gl_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texpath, pic, txFlags, false );
-				FS_FreeImage( pic );
+				if( !Host_IsDedicated( ) && pic != NULL )
+				{
+					int tnum = ref.dllFuncs.GL_LoadTextureFromBuffer( texpath, pic, txFlags, false );
+					if( tnum == 0 )
+						Con_DPrintf( "DC: GL_LoadTextureFromBuffer failed for %s (WAD)\n", texpath );
+					texture->gl_texturenum = tnum;
+					FS_FreeImage( pic );
+				}
+				world.wadlist.wadusage[wadIndex]++;
 			}
-#endif // !XASH_DEDICATED
-			world.wadlist.wadusage[wadIndex]++;
 		}
 	}
 
-#if !XASH_DEDICATED
+#if !XASH_DREAMCAST
 	if( Host_IsDedicated( ))
 		return;
+#endif
 
 	// WAD failed, so use internal texture (if present)
-	if( mipTex->offsets[0] > 0 && texture->gl_texturenum == 0 )
 	{
-		char texName[64];
-		const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
+		int ofs0;
+		memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+		if( ofs0 > 0 && texture->gl_texturenum == 0 )
+		{
+			char texName[64];
+			const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
 
-		Q_snprintf( texName, sizeof( texName ), "#%s:%s.mip", loadstat.name, mipTex->name );
-		texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, txFlags );
+			Q_snprintf( texName, sizeof( texName ), "#%s:%s.mip", loadstat.name, mtname );
+#if XASH_DREAMCAST
+			// Use aligned copy when passing raw mip data
+			{
+				byte *aligned = Mem_Malloc( mod->mempool, size );
+				if( aligned )
+				{
+					memcpy( aligned, mipTex, size );
+					texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texName, aligned, size, txFlags );
+					Mem_Free( aligned );
+				}
+			}
+			if( texture->gl_texturenum == 0 )
+			{
+				int nextOffset = -1, curOffset = 0, ofs0_dbg = 0;
+				memcpy( &ofs0_dbg, &mipTex->offsets[0], sizeof( ofs0_dbg ) );
+				memcpy( &curOffset, &bmod->textures->dataofs[textureIndex], sizeof( curOffset ) );
+				if( textureIndex + 1 < mod->numtextures )
+					memcpy( &nextOffset, &bmod->textures->dataofs[textureIndex + 1], sizeof( nextOffset ) );
+				Con_DPrintf( "DC: GL_LoadTexture failed for %s, size=%u ofs0=%d curOfs=%d nextOfs=%d txFlags=0x%x\n",
+					texName, (unsigned)size, ofs0_dbg, curOffset, nextOffset, txFlags );
+			}
+#else
+			texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, txFlags );
+#endif
+		}
 	}
 
+#if !XASH_DREAMCAST
 	// If texture is completely missed:
 	if( texture->gl_texturenum == 0 )
 	{
-		Con_DPrintf( S_ERROR "Unable to find %s.mip\n", mipTex->name );
+		Con_DPrintf( S_ERROR "Unable to find %s.mip\n", mtname );
 		texture->gl_texturenum = R_GetBuiltinTexture( REF_DEFAULT_TEXTURE );
 	}
+#endif
 
 	texture->fb_texturenum = 0;
 	// Check for luma texture
@@ -2623,33 +2780,44 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 	{
 		char texName[64];
 
-		Q_snprintf( texName, sizeof( texName ), "#%s:%s_luma.mip", loadstat.name, mipTex->name );
+		Q_snprintf( texName, sizeof( texName ), "#%s:%s_luma.mip", loadstat.name, mtname );
 
-		if( mipTex->offsets[0] > 0 )
 		{
-			const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
-			texture->fb_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, TF_MAKELUMA );
-		}
-		else
-		{
-			int wadIndex;
-			rgbdata_t *pic = NULL;
-
-			// NOTE: We can't load the _luma texture from the WAD as normal because it
-			// doesn't exist there. The original texture is already loaded, but cannot be modified.
-			// Instead, load the original texture again and convert it to luma.
-			wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, texture->name, &pic, NULL, 0 );
-
-			if( wadIndex >= 0 && pic != NULL )
+			int ofs0;
+			memcpy( &ofs0, &mipTex->offsets[0], sizeof( ofs0 ) );
+			if( ofs0 > 0 )
 			{
-				// OK, loading it from wad or hi-res(??) version
-				texture->fb_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texName, pic, TF_MAKELUMA, false );
-				FS_FreeImage( pic );
-				world.wadlist.wadusage[wadIndex]++;
+				const size_t size = Mod_CalculateMipTexSize( mipTex, usesCustomPalette );
+#if XASH_DREAMCAST
+				byte *aligned = Mem_Malloc( mod->mempool, size );
+				if( aligned )
+				{
+					memcpy( aligned, mipTex, size );
+					texture->fb_texturenum = ref.dllFuncs.GL_LoadTexture( texName, aligned, size, TF_MAKELUMA );
+					Mem_Free( aligned );
+				}
+#else
+				texture->fb_texturenum = ref.dllFuncs.GL_LoadTexture( texName, (byte *)mipTex, size, TF_MAKELUMA );
+#endif
+			}
+			else
+			{
+				int wadIndex;
+				rgbdata_t *pic = NULL;
+
+				// NOTE: We can't load the _luma texture from the WAD as normal because it
+				// doesn't exist there. The original texture is already loaded, but cannot be modified.
+				// Instead, load the original texture again and convert it to luma.
+				wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, texture->name, &pic, NULL, 0 );
+				if( wadIndex >= 0 && pic != NULL )
+				{
+					texture->fb_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texName, pic, TF_MAKELUMA, false );
+					FS_FreeImage( pic );
+					world.wadlist.wadusage[wadIndex]++;
+				}
 			}
 		}
 	}
-#endif // !XASH_DEDICATED
 }
 
 static void Mod_LoadTexture( model_t *mod, dbspmodel_t *bmod, int textureIndex )
@@ -2670,17 +2838,41 @@ static void Mod_LoadTexture( model_t *mod, dbspmodel_t *bmod, int textureIndex )
 		return;
 	}
 
-	if( mipTex->name[0] == '\0' )
-		Q_snprintf( mipTex->name, sizeof( mipTex->name ), "miptex_%i", textureIndex );
+	// Safe name handling: copy, terminate and log without touching lump
+	{
+		char mtname[17];
+		memcpy( mtname, mipTex->name, 16 );
+		mtname[16] = '\0';
+		if( mtname[0] == '\0' )
+			Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
+		Con_Printf( "Loading texture %s\n", mtname );
+	}
 
 	texture = (texture_t *)Mem_Calloc( mod->mempool, sizeof( *texture ));
 	mod->textures[textureIndex] = texture;
 
-	// Ensure texture name is lowercase.
-	Q_strnlwr( mipTex->name, texture->name, sizeof( texture->name ));
+	// Ensure lowercase name copied into destination from a safe buffer
+	{
+		char mtname[17];
+		memcpy( mtname, mipTex->name, 16 );
+		mtname[16] = '\0';
+		if( mtname[0] == '\0' )
+			Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
+		Q_strnlwr( mtname, texture->name, sizeof( texture->name ));
+	}
 
-	texture->width = mipTex->width;
-	texture->height = mipTex->height;
+	// Read header fields safely (avoid unaligned access)
+	{
+		mip_t hdr;
+		memcpy( &hdr, mipTex, sizeof( hdr ) );
+		if( hdr.width <= 0 || hdr.height <= 0 || hdr.width > 4096 || hdr.height > 4096 )
+		{
+			Mod_CreateDefaultTexture( mod, &mod->textures[textureIndex] );
+			return;
+		}
+		texture->width = hdr.width;
+		texture->height = hdr.height;
+	}
 
 	Mod_LoadTextureData( mod, bmod, textureIndex );
 }
@@ -2924,116 +3116,198 @@ static void Mod_LoadSurfaces( model_t *mod, dbspmodel_t *bmod )
 	mextrasurf_t	*info;
 	msurface_t	*out;
 
-	mod->surfaces = out = Mem_Calloc( mod->mempool, bmod->numsurfaces * sizeof( msurface_t ));
-	info = Mem_Calloc( mod->mempool, bmod->numsurfaces * sizeof( mextrasurf_t ));
-	mod->numsurfaces = bmod->numsurfaces;
+#if 0
+    size_t surfaces_size = bmod->numsurfaces * sizeof(msurface_t);
+    size_t extrasurf_size = bmod->numsurfaces * sizeof(mextrasurf_t);
+    size_t pvr_free = alloc_count_free(pvr_pool);
+    size_t pvr_contiguous = alloc_count_continuous(pvr_pool);
 
-	// predict samplecount based on bspversion
-	if( bmod->version == Q1BSP_VERSION || bmod->version == QBSP2_VERSION )
-		bmod->lightmap_samples = 1;
-	else bmod->lightmap_samples = 3;
-
-	for( i = 0; i < bmod->numsurfaces; i++, out++, info++ )
+    // Try to allocate msurface_t array in VRAM (PVR pool) first
+    out = (msurface_t *)alloc_malloc(pvr_pool, surfaces_size);
+    if( !out )
+    {
+        if( surfaces_size > pvr_contiguous && pvr_free > surfaces_size )
+        {
+            Con_Printf("PVR alloc failed for surfaces (fragmented): free %zu > request %zu, contiguous %zu < request. Defragmenting...\n",
+                    pvr_free, surfaces_size, pvr_contiguous);
+            glDefragmentTextureMemory_KOS();
+            pvr_free = alloc_count_free(pvr_pool);
+            pvr_contiguous = alloc_count_continuous(pvr_pool);
+            Con_Printf("Post-defrag: PVR free: %zu bytes, contiguous: %zu bytes\n", pvr_free, pvr_contiguous);
+            out = (msurface_t *)alloc_malloc(pvr_pool, surfaces_size);
+        }
+        if( !out )
+        {
+            Con_Printf("PVR alloc failed for surfaces: %zu bytes, falling back to main RAM\n", surfaces_size);
+            out = (msurface_t *)Mem_Calloc(mod->mempool, surfaces_size);
+            if( !out )
+            {
+                Host_Error("Failed to allocate memory for surfaces\n");
+                return;
+            }
+        }
+        else
+        {
+            memset( out, 0, surfaces_size );
+            Con_Printf("PVR alloc succeeded for surfaces: %zu bytes\n", surfaces_size);
+        }
+    }
+    else
+    {
+        memset( out, 0, surfaces_size );
+        Con_Printf("PVR alloc succeeded for surfaces: %zu bytes\n", surfaces_size);
+    }
+    mod->surfaces = out;
+    info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
+	if (!info)
 	{
-		texture_t	*tex;
-
-		// setup crosslinks between two parts of msurface_t
-		out->info = info;
-		info->surf = out;
-
-		if( bmod->version == QBSP2_VERSION )
+		// Allocation failed; check if defragmentation could help
+		if (extrasurf_size > pvr_contiguous && pvr_free > extrasurf_size)
 		{
-			dface32_t	*in = &bmod->surfaces32[i];
+			Con_Printf("PVR alloc failed (fragmented): free %zu > request %zu, contiguous %zu < request. Defragmenting...\n", 
+					pvr_free, extrasurf_size, pvr_contiguous);
+			glDefragmentTextureMemory_KOS();
+			pvr_free = alloc_count_free(pvr_pool);
+			pvr_contiguous = alloc_count_continuous(pvr_pool);
+			Con_Printf("Post-defrag: PVR free: %zu bytes, contiguous: %zu bytes\n", pvr_free, pvr_contiguous);
 
-			if(( in->firstedge + in->numedges ) > mod->numsurfedges )
-				continue;	// corrupted level?
-			out->firstedge = in->firstedge;
-			out->numedges = in->numedges;
-			if( in->side ) SetBits( out->flags, SURF_PLANEBACK );
-			out->plane = mod->planes + in->planenum;
-			out->texinfo = mod->texinfo + in->texinfo;
-
-			for( j = 0; j < MAXLIGHTMAPS; j++ )
-				out->styles[j] = in->styles[j];
-			lightofs = in->lightofs;
+			// Try allocation again after defrag
+            info = (mextrasurf_t *)alloc_malloc(pvr_pool, extrasurf_size);
 		}
-		else
-		{
-			dface_t	*in = &bmod->surfaces[i];
 
-			if(( in->firstedge + in->numedges ) > mod->numsurfedges )
+		// If still no success, fall back to main RAM
+		if (!info)
+		{
+			Con_Printf("PVR alloc failed for extrasurf: %zu bytes, falling back to main RAM\n", extrasurf_size);
+			info = (mextrasurf_t *)Mem_Calloc(mod->mempool, extrasurf_size);
+			if (!info)
 			{
-				Con_Reportf( S_ERROR "bad surface %i from %zu\n", i, bmod->numsurfaces );
-				continue;
+				Mem_Free(mod->surfaces);
+				mod->surfaces = NULL;
+				Host_Error("Failed to allocate memory for extrasurf\n");
+				return;
 			}
-
-			out->firstedge = in->firstedge;
-			out->numedges = in->numedges;
-			if( in->side ) SetBits( out->flags, SURF_PLANEBACK );
-			out->plane = mod->planes + in->planenum;
-			out->texinfo = mod->texinfo + in->texinfo;
-
-			for( j = 0; j < MAXLIGHTMAPS; j++ )
-				out->styles[j] = in->styles[j];
-			lightofs = in->lightofs;
 		}
+	}
+    else
+    {
+        memset( info, 0, extrasurf_size );
+        Con_Printf("PVR alloc succeeded for extrasurf: %zu bytes\n", extrasurf_size);
+    }
+#else
+   	mod->surfaces = out = Mem_Calloc(mod->mempool, bmod->numsurfaces * sizeof(msurface_t));
+    info = Mem_Calloc(mod->mempool, bmod->numsurfaces * sizeof(mextrasurf_t));
+#endif
 
-		tex = out->texinfo->texture;
+    mod->numsurfaces = bmod->numsurfaces;
 
-		if( !Q_strncmp( tex->name, "sky", 3 ))
-			SetBits( out->flags, SURF_DRAWSKY );
+    // Predict samplecount based on bspversion
+    if (bmod->version == Q1BSP_VERSION || bmod->version == QBSP2_VERSION)
+        bmod->lightmap_samples = 1;
+    else
+        bmod->lightmap_samples = 3;
 
-		if( Mod_LooksLikeWaterTexture( tex->name ))
-			SetBits( out->flags, SURF_DRAWTURB );
+    for (i = 0; i < bmod->numsurfaces; i++, out++, info++)
+    {
+        texture_t *tex;
 
-		if( !Q_strncmp( tex->name, "scroll", 6 ))
-			SetBits( out->flags, SURF_CONVEYOR );
+        // Setup crosslinks between two parts of msurface_t
+        out->info = info;
+        info->surf = out;
 
-		if( FBitSet( out->texinfo->flags, TEX_SCROLL ))
-			SetBits( out->flags, SURF_CONVEYOR );
+        if (bmod->version == QBSP2_VERSION)
+        {
+            dface32_t *in = &bmod->surfaces32[i];
 
-		// g-cont. added a combined conveyor-transparent
-		if( !Q_strncmp( tex->name, "{scroll", 7 ))
-			SetBits( out->flags, SURF_CONVEYOR|SURF_TRANSPARENT );
+            if ((in->firstedge + in->numedges) > mod->numsurfedges)
+                continue; // Corrupted level?
+            out->firstedge = in->firstedge;
+            out->numedges = in->numedges;
+            if (in->side) SetBits(out->flags, SURF_PLANEBACK);
+            out->plane = mod->planes + in->planenum;
+            out->texinfo = mod->texinfo + in->texinfo;
 
-		if( tex->name[0] == '{' )
-			SetBits( out->flags, SURF_TRANSPARENT );
+            for (j = 0; j < MAXLIGHTMAPS; j++)
+                out->styles[j] = in->styles[j];
+            lightofs = in->lightofs;
+        }
+        else
+        {
+            dface_t *in = &bmod->surfaces[i];
 
-		if( FBitSet( out->texinfo->flags, TEX_SPECIAL ))
-			SetBits( out->flags, SURF_DRAWTILED );
+            if ((in->firstedge + in->numedges) > mod->numsurfedges)
+            {
+                Con_Reportf(S_ERROR "bad surface %i from %zu\n", i, bmod->numsurfaces);
+                continue;
+            }
 
-		Mod_CalcSurfaceBounds( mod, out, bmod );
-		Mod_CalcSurfaceExtents( mod, out, bmod );
-		Mod_CreateFaceBevels( mod, out, bmod );
+            out->firstedge = in->firstedge;
+            out->numedges = in->numedges;
+            if (in->side) SetBits(out->flags, SURF_PLANEBACK);
+            out->plane = mod->planes + in->planenum;
+            out->texinfo = mod->texinfo + in->texinfo;
 
-		// grab the second sample to detect colored lighting
-		if( test_lightsize > 0 && lightofs != -1 )
-		{
-			if( lightofs > prev_lightofs && lightofs < next_lightofs )
-				next_lightofs = lightofs;
-		}
+            for (j = 0; j < MAXLIGHTMAPS; j++)
+                out->styles[j] = in->styles[j];
+            lightofs = in->lightofs;
+        }
 
-		// grab the first sample to determine lightmap size
-		if( lightofs != -1 && test_lightsize == -1 )
-		{
-			int	sample_size = Mod_SampleSizeForFace( out );
-			int	smax = (info->lightextents[0] / sample_size) + 1;
-			int	tmax = (info->lightextents[1] / sample_size) + 1;
-			int	lightstyles = 0;
+        tex = out->texinfo->texture;
 
-			test_lightsize = smax * tmax;
-			// count styles to right compute test_lightsize
-			for( j = 0; j < MAXLIGHTMAPS && out->styles[j] != 255; j++ )
-				lightstyles++;
+        if (!Q_strncmp(tex->name, "sky", 3))
+            SetBits(out->flags, SURF_DRAWSKY);
 
-			test_lightsize *= lightstyles;
-			prev_lightofs = lightofs;
-			next_lightofs = 99999999;
-		}
+        if (Mod_LooksLikeWaterTexture(tex->name))
+            SetBits(out->flags, SURF_DRAWTURB);
 
-#if !XASH_DEDICATED // TODO: Do we need subdivide on server?
-		if( FBitSet( out->flags, SURF_DRAWTURB ) && !Host_IsDedicated() )
-			ref.dllFuncs.GL_SubdivideSurface( mod, out ); // cut up polygon for warps
+        if (!Q_strncmp(tex->name, "scroll", 6))
+            SetBits(out->flags, SURF_CONVEYOR);
+
+        if (FBitSet(out->texinfo->flags, TEX_SCROLL))
+            SetBits(out->flags, SURF_CONVEYOR);
+
+        if (!Q_strncmp(tex->name, "{scroll", 7))
+            SetBits(out->flags, SURF_CONVEYOR | SURF_TRANSPARENT);
+
+        if (tex->name[0] == '{')
+            SetBits(out->flags, SURF_TRANSPARENT);
+
+        if (FBitSet(out->texinfo->flags, TEX_SPECIAL))
+            SetBits(out->flags, SURF_DRAWTILED);
+
+        Mod_CalcSurfaceBounds(mod, out, bmod);
+        Mod_CalcSurfaceExtents(mod, out, bmod);
+        Mod_CreateFaceBevels(mod, out, bmod);
+
+        // Grab the second sample to detect colored lighting
+        if (test_lightsize > 0 && lightofs != -1)
+        {
+            if (lightofs > prev_lightofs && lightofs < next_lightofs)
+                next_lightofs = lightofs;
+        }
+
+        // Grab the first sample to determine lightmap size
+        if (lightofs != -1 && test_lightsize == -1)
+        {
+            // Use original BSP luxel size for inference (DC may scale runtime sample size)
+
+            int sample_size = Mod_SampleSizeForFace(out);
+            int smax = (info->lightextents[0] / sample_size) + 1;
+            int tmax = (info->lightextents[1] / sample_size) + 1;
+            int lightstyles = 0;
+
+            test_lightsize = smax * tmax;
+            for (j = 0; j < MAXLIGHTMAPS && out->styles[j] != 255; j++)
+                lightstyles++;
+
+            test_lightsize *= lightstyles;
+            prev_lightofs = lightofs;
+            next_lightofs = 99999999;
+        }
+
+#if !XASH_DEDICATED
+        if (FBitSet(out->flags, SURF_DRAWTURB) && !Host_IsDedicated())
+            ref.dllFuncs.GL_SubdivideSurface(mod, out); // Cut up polygon for warps
 #endif
 	}
 
@@ -3521,74 +3795,54 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 {
 	int     i;
 
-	if( !bmod->lightdatasize )
+    if( !bmod->lightdatasize )
 		return;
 
-	switch( bmod->lightmap_samples )
-	{
-	case 1:
-		if( !Mod_LoadLitfile( mod, "lit", bmod->lightdatasize * 3, &mod->lightdata, &bmod->lightdatasize ))
-		{
-			mod->lightdata = (color24 *)Mem_Malloc( mod->mempool, bmod->lightdatasize * sizeof( color24 ));
+    switch (bmod->lightmap_samples)
+    {
+    case 1:
+        if (!Mod_LoadLitfile(mod, "lit", bmod->lightdatasize * 3, &mod->lightdata, &bmod->lightdatasize))
+        {
 
-			// expand the white lighting data
-			for( i = 0; i < bmod->lightdatasize; i++ )
-				mod->lightdata[i].r = mod->lightdata[i].g = mod->lightdata[i].b = bmod->lightdata[i];
-		}
-		else SetBits( mod->flags, MODEL_COLORED_LIGHTING );
-		break;
-	case 3:	// load colored lighting
-		mod->lightdata = Mem_Malloc( mod->mempool, bmod->lightdatasize );
-		memcpy( mod->lightdata, bmod->lightdata, bmod->lightdatasize );
-		SetBits( mod->flags, MODEL_COLORED_LIGHTING );
-		break;
-	default:
-		Host_Error( "%s: bad lightmap sample count %i\n", __func__, bmod->lightmap_samples );
-		break;
-	}
+            mod->lightdata = (color24 *)Mem_Malloc(mod->mempool, bmod->lightdatasize * sizeof(color24));
+            for (i = 0; i < bmod->lightdatasize; i++)
+                mod->lightdata[i].r = mod->lightdata[i].g = mod->lightdata[i].b = bmod->lightdata[i];
+        }
+        else
+            SetBits(mod->flags, MODEL_COLORED_LIGHTING);
+        break;
 
-	Con_Reportf( "lighting: %s\n", FBitSet( mod->flags, MODEL_COLORED_LIGHTING ) ? "colored" : "monochrome" );
+    case 3:
+            mod->lightdata = Mem_Malloc(mod->mempool, bmod->lightdatasize);
+            memcpy(mod->lightdata, bmod->lightdata, bmod->lightdatasize);
+            SetBits(mod->flags, MODEL_COLORED_LIGHTING);
+            break;
 
-	// not supposed to be load ?
-	if( FBitSet( host.features, ENGINE_LOAD_DELUXEDATA ))
-	{
-		Mod_LoadLightVecs( mod, bmod );
-		Mod_LoadShadowmap( mod, bmod );
+    default:
+        Host_Error("%s: bad lightmap sample count %i\n", __func__, bmod->lightmap_samples);
+        break;
+    }
 
-		if( bmod->isworld && bmod->deluxdatasize )
-			SetBits( world.flags, FWORLD_HAS_DELUXEMAP );
-	}
+    Con_Reportf("lighting: %s\n", FBitSet(mod->flags, MODEL_COLORED_LIGHTING) ? "colored" : "monochrome");
 
-	// setup lightdata pointers
-	if( !mod->lightdata )
-		return;
+    if (!mod->lightdata)
+        return;
 
-	for( i = 0; i < mod->numsurfaces; i++ )
-	{
-		int lightofs;
+    for (i = 0; i < mod->numsurfaces; i++)
+    {
+        int lightofs;
 
-		if( bmod->version == QBSP2_VERSION )
-			lightofs = bmod->surfaces32[i].lightofs;
-		else
-			lightofs = bmod->surfaces[i].lightofs;
+        if (bmod->version == QBSP2_VERSION)
+            lightofs = bmod->surfaces32[i].lightofs;
+        else
+            lightofs = bmod->surfaces[i].lightofs;
 
-		if( lightofs != -1 )
-		{
-			int offset = lightofs / bmod->lightmap_samples;
-
-			// NOTE: we divide offset by three because lighting and deluxemap keep their pointers
-			// into three-bytes structs and shadowmap just monochrome
-			mod->surfaces[i].samples = mod->lightdata + offset;
-
-			// if deluxemap is present setup it too
-			if( bmod->deluxedata_out )
-				mod->surfaces[i].info->deluxemap = bmod->deluxedata_out + offset;
-
-			// will be used by mods
-			if( bmod->shadowdata_out )
-				mod->surfaces[i].info->shadowmap = bmod->shadowdata_out + offset;
-		}
-	}
+        if (lightofs != -1)
+        {
+            int offset = lightofs / bmod->lightmap_samples;
+            mod->surfaces[i].samples = mod->lightdata + offset;
+        }
+    }
 }
 
 /*
@@ -3725,24 +3979,41 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
     Con_Printf("Total lump size: %s\n", Q_memprint(total_size));
 	// load into heap
 	Mod_LoadEntities( mod, bmod );
+	Con_Printf("Loaded entities\n");
 	Mod_LoadPlanes( mod, bmod );
+	Con_Printf("Loaded planes\n");
 	Mod_LoadSubmodels( mod, bmod );
+	Con_Printf("Loaded submodels\n");
 	Mod_LoadVertexes( mod, bmod );
+	Con_Printf("Loaded vertexes\n");
 	Mod_LoadEdges( mod, bmod );
+	Con_Printf("Loaded edges\n");
 	Mod_LoadSurfEdges( mod, bmod );
+	Con_Printf("Loaded surf edges\n");
 	Mod_LoadTextures( mod, bmod );
+	Con_Printf("Loaded textures\n");
 	Mod_LoadVisibility( mod, bmod );
+	Con_Printf("Loaded visibility\n");
 	Mod_LoadTexInfo( mod, bmod );
+	Con_Printf("Loaded tex info\n");
 	Mod_LoadSurfaces( mod, bmod );
+	Con_Printf("Loaded surfaces\n");
 	Mod_LoadLighting( mod, bmod );
+	Con_Printf("Loaded lighting\n");
 	Mod_LoadMarkSurfaces( mod, bmod );
+	Con_Printf("Loaded mark surfaces\n");
 	Mod_LoadLeafs( mod, bmod );
+	Con_Printf("Loaded leafs\n");
 	Mod_LoadNodes( mod, bmod );
+	Con_Printf("Loaded nodes\n");
 	Mod_LoadClipnodes( mod, bmod );
-
+	Con_Printf("Loaded clipnodes\n");
 	// preform some post-initalization
 	Mod_MakeHull0( mod, bmod );
+	Con_Printf("Made hull 0\n");
 	Mod_SetupSubmodels( mod, bmod );
+	Con_Printf("Setup submodels\n");
+
 	if( isworld )
 	{
 		world.version = bmod->version;

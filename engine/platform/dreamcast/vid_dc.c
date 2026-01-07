@@ -26,10 +26,8 @@ static void GL_SetupAttributes( void );
 static qboolean vsync;
 
 pvr_init_params_t params = {
-	// Real HW: 8-word bins are often too small and can result in missing geometry / blank output.
-	// Use 16-word bins for enabled lists (OP/TR/PT).
-	{ PVR_BINSIZE_16, PVR_BINSIZE_0, PVR_BINSIZE_16, PVR_BINSIZE_0, PVR_BINSIZE_16 },
-	2536 * 256,    /* vertex buffer */
+	{ PVR_BINSIZE_8, PVR_BINSIZE_0, PVR_BINSIZE_8, PVR_BINSIZE_0, PVR_BINSIZE_8 },
+	3072 * 256,    /* vertex buffer */
 	0,             /* dma disabled for TA  */
 	0,             /* fsaa off */
 	0,             /* keep PVR translucent autosort OFF  */
