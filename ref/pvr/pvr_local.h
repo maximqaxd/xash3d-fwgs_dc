@@ -232,7 +232,15 @@ typedef struct
 	int		draw_stack_pos;
 	draw_list_t	*draw_list;
 
-	msurface_t	*draw_decals[MAX_DECAL_SURFS];
+	// Decals are queued during world/entity submission, but must be emitted in TR list
+	// (alpha blended + depth test, no depth write). We snapshot the active
+	// screen*proj*view*object matrix at queue time so we can render later even
+	// after RI/currententity changes.
+	struct
+	{
+		msurface_t	*surf;
+		float		world_matrix[16]; // column-major, used by sh4zam (same convention as r_world_matrix)
+	} draw_decals[MAX_DECAL_SURFS];
 	int		num_draw_decals;
 
 	// OpenGL matrix states
@@ -299,6 +307,8 @@ extern gl_globals_t	tr;
 
 extern float		gldepthmin, gldepthmax;
 extern float		r_world_matrix[16];  // sh4zam column-major screen*proj*worldview matrix
+
+extern int		g_pvr_current_list;
 #define r_numEntities	(tr.draw_list->num_solid_entities + tr.draw_list->num_trans_entities)
 #define r_numStatics	(r_stats.c_client_ents)
 #define Mod_AllowMaterials() (host_allow_materials->value && !FBitSet( gp_host->features, ENGINE_DISABLE_HDTEXTURES ))
@@ -491,7 +501,7 @@ void R_ClearSkyBox( void );
 void R_DrawSkyBox( void );
 void R_DrawClouds( void );
 void R_UnloadSkybox( void );
-void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples, pvr_dr_state_t *dr_state, uint32_t water_color );
+void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples );
 void R_ResetRipples( void );
 void R_AnimateRipples( void );
 qboolean R_UploadRipples( texture_t *image );

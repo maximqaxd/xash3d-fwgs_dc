@@ -538,6 +538,28 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 
 	Assert( tex != NULL );
 
+	switch( format )
+	{
+	case PF_RGBA_32:
+	case PF_BGRA_32:
+		haveColor = true;
+		// alpha presence is driven by flags (e.g., opaque RGBA) but format supports it.
+		break;
+	case PF_RGB_24:
+	case PF_BGR_24:
+	case PF_RGB_5650:
+	case PF_RGB_5650_TWID:
+		haveColor = true;
+		break;
+	case PF_ARGB_1555:
+	case PF_ARGB_4444:
+		haveColor = true;
+		haveAlpha = true;
+		break;
+	default:
+		break;
+	}
+
 	if( ImageCompressed( format ))
 	{
 		// Handle compressed formats
@@ -574,14 +596,71 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 		}
 	}
 	
+	if( !ImageCompressed( format ))
+	{
+		switch( format )
+		{
+		case PF_ARGB_4444:
+			tex->format = PVR_TXRFMT_ARGB4444 | PVR_TXRFMT_NONTWIDDLED;
+			return;
+		case PF_ARGB_1555:
+			tex->format = PVR_TXRFMT_ARGB1555 | PVR_TXRFMT_NONTWIDDLED;
+			return;
+		case PF_RGB_5650:
+			tex->format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED;
+			return;
+		case PF_RGB_5650_TWID:
+			tex->format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_TWIDDLED;
+			return;
+		case PF_RGBA_32:
+		case PF_BGRA_32:
+			// If alpha is present (or requested as 1-bit), use ARGB formats.
+			if( haveAlpha || FBitSet( channelMask, IMAGE_ONEBIT_ALPHA ))
+			{
+				if( FBitSet( tex->flags, TF_QUAKEPAL ) || FBitSet( channelMask, IMAGE_ONEBIT_ALPHA ))
+					tex->format = PVR_TXRFMT_ARGB1555 | PVR_TXRFMT_NONTWIDDLED;
+				else
+					tex->format = PVR_TXRFMT_ARGB4444 | PVR_TXRFMT_NONTWIDDLED;
+			}
+			else
+			{
+				tex->format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED;
+			}
+			return;
+		case PF_RGB_24:
+		case PF_BGR_24:
+		case PF_LUMINANCE:
+			tex->format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED;
+			return;
+		case PF_INDEXED_24:
+		case PF_INDEXED_32:
+			// These should normally be expanded to PF_RGBA_32 by Image_Process before upload.
+			// Keep a sensible mapping anyway.
+			if( haveAlpha || FBitSet( channelMask, IMAGE_ONEBIT_ALPHA ))
+			{
+				if( FBitSet( tex->flags, TF_QUAKEPAL ) || FBitSet( channelMask, IMAGE_ONEBIT_ALPHA ))
+					tex->format = PVR_TXRFMT_ARGB1555 | PVR_TXRFMT_NONTWIDDLED;
+				else
+					tex->format = PVR_TXRFMT_ARGB4444 | PVR_TXRFMT_NONTWIDDLED;
+			}
+			else
+			{
+				tex->format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED;
+			}
+			return;
+		default:
+			break;
+		}
+	}
+
 	// Handle uncompressed formats or fallback
 	if( !ImageCompressed( format ) || tex->format == 0 )
 	{
 		if( haveAlpha )
 		{
-			// Quake palette cutouts (SURF_TRANSPARENT / "{...") are effectively alpha-tested.
-			// Use 1-bit alpha (ARGB1555) so punch-through polys work reliably.
-			if( FBitSet( tex->flags, TF_QUAKEPAL ))
+			// Alpha-tested cutouts (IMAGE_ONEBIT_ALPHA or quake palette cutouts) should use 1-bit alpha
+			// so punch-through polys work reliably. Smooth alpha (fonts/sprites/ui/decals) uses ARGB4444.
+			if( FBitSet( tex->flags, TF_QUAKEPAL ) || FBitSet( channelMask, IMAGE_ONEBIT_ALPHA ))
 				tex->format = PVR_TXRFMT_ARGB1555 | PVR_TXRFMT_NONTWIDDLED;
 			else
 				// Use ARGB4444 for smooth alpha (fonts, sprites, UI)

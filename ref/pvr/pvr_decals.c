@@ -14,6 +14,7 @@ GNU General Public License for more details.
 */
 
 #include "pvr_local.h"
+#include "pvr_clip.h"
 
 #define DECAL_OVERLAP_DISTANCE	2
 #define DECAL_DISTANCE		4	// too big values produce more clipped polygons
@@ -55,6 +56,101 @@ decal_t	gDecalPool[MAX_RENDER_DECALS];
 static int	gDecalCount;
 
 extern convar_t r_decals;
+
+// NOTE:
+// - On GL, decals are alpha blended overlays with depth test enabled, depth writes disabled,
+//   and polygon offset to avoid z-fighting.
+// - On PVR, we submit them in TR list with depth test enabled (same compare direction as z=1/w),
+//   depth writes disabled. For z-fighting avoidance we apply a small world-space push along the
+//   surface normal (approximation of GL_POLYGON_OFFSET_FILL).
+
+static inline float PVR_DecalPushDistance( void )
+{
+	// Deprecated: view-dependent and can still fight at distance.
+	// Keep this disabled and use z-bias instead (see PVR_DecalZBias).
+	return 0.0f;
+}
+
+static inline uint32_t PVR_PackARGB( int r, int g, int b, int a )
+{
+	r = bound( 0, r, 255 );
+	g = bound( 0, g, 255 );
+	b = bound( 0, b, 255 );
+	a = bound( 0, a, 255 );
+	return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+// NOTE: We intentionally keep decal vertex color at full white for now.
+// Once textured decals are confirmed correct, we can reintroduce light sampling
+// (matching pvr_rsurf.c SampleVertexLight) so decals are affected by lighting.
+
+static void PVR_SubmitDecalPoly( pvr_dr_state_t *dr_state, const float *world_matrix, const msurface_t *surf, float *v, int numVerts )
+{
+	shz_vec4_t transformed[MAX_DECALCLIPVERT];
+	float uv[MAX_DECALCLIPVERT][2];
+	uint32_t color[MAX_DECALCLIPVERT];
+	__attribute__((aligned(8))) float aligned_matrix[16];
+
+	// A small positive bias in submitted z (=1/w) makes decals slightly nearer than the surface,
+	// reducing z-fighting especially at distance.
+	// Tune with gl_polyoffset (acts as "strength" knob like GL polygon offset).
+	float z_bias = 0.0f;
+	if( gl_polyoffset.value > 0.0f )
+		z_bias = (float)gl_polyoffset.value * 0.00001f;
+
+	// Clamp: too large bias will cause decals to punch through other geometry.
+	if( z_bias > 0.0002f ) z_bias = 0.0002f;
+
+	vec3_t n;
+
+	if( numVerts < 3 )
+		return;
+
+	// Determine an "outward" normal for the face in the same space as vertices.
+	// This is an approximation of polygon offset to reduce z-fighting.
+	if( surf && surf->plane )
+	{
+		if( FBitSet( surf->flags, SURF_PLANEBACK ))
+			VectorNegate( surf->plane->normal, n );
+		else VectorCopy( surf->plane->normal, n );
+	}
+	else VectorSet( n, 0.0f, 0.0f, 0.0f );
+
+	memcpy( aligned_matrix, world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((const shz_mat4x4_t *)aligned_matrix);
+
+	for( int i = 0; i < numVerts; i++, v += VERTEXSIZE )
+	{
+		vec3_t pos;
+		VectorCopy( v, pos );
+		(void)n;
+
+		shz_vec3_t p = shz_vec3_init( pos[0], pos[1], pos[2] );
+		transformed[i] = shz_xmtrx_transform_vec4( shz_vec3_vec4( p, 1.0f ));
+
+		uv[i][0] = v[3];
+		uv[i][1] = v[4];
+
+		// Force full white so decal texture shows correctly (debug-friendly).
+		// Alpha comes from the decal texture via MODULATEALPHA/REPLACE.
+		(void)surf;
+		color[i] = 0xFFFFFFFF;
+	}
+
+	// Fan triangulation
+	for( int i = 1; i < numVerts - 1; i++ )
+	{
+		PVR_ClipAndSubmitTriangleZBias(
+			dr_state,
+			transformed[0], transformed[i], transformed[i+1],
+			uv[0][0], uv[0][1],
+			uv[i][0], uv[i][1],
+			uv[i+1][0], uv[i+1][1],
+			color[0], color[i], color[i+1],
+			z_bias
+		);
+	}
+}
 
 void R_ClearDecals( void )
 {
@@ -861,19 +957,8 @@ void DrawSingleDecal( decal_t *pDecal, msurface_t *fa )
 
 	v = R_DecalSetupVerts( pDecal, fa, pDecal->texture, &numVerts );
 	if( !numVerts ) return;
-#if 0
-	GL_Bind( XASH_TEXTURE0, pDecal->texture );
-
-	pglBegin( GL_POLYGON );
-
-	for( i = 0; i < numVerts; i++, v += VERTEXSIZE )
-	{
-		pglTexCoord2f( v[3], v[4] );
-		pglVertex3fv( v );
-	}
-
-	pglEnd();
-#endif // PVR decals TODO
+	(void)i;
+	// Actual submission happens in DrawSurfaceDecals/DrawDecalsBatch where we have DR state + header.
 }
 
 void DrawSurfaceDecals( msurface_t *fa, qboolean single, qboolean reverse )
@@ -885,133 +970,67 @@ void DrawSurfaceDecals( msurface_t *fa, qboolean single, qboolean reverse )
 
 	e = RI.currententity;
 	Assert( e != NULL );
-#if 0
-	if( single )
+
+	// Sequential path for non-kRenderNormal entities (called from pvr_rsurf.c).
+	// Assumes we're already inside the correct PVR list (typically TR list).
+	(void)single;
+	(void)reverse;
+
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
+
+	int last_texnum = -1;
+	gl_texture_t *last_tex = NULL;
+
+	for( p = fa->pdecals; p; p = p->pnext )
 	{
-		if( e->curstate.rendermode == kRenderNormal || e->curstate.rendermode == kRenderTransAlpha )
+		if( p->texture <= 0 || p->texture >= MAX_TEXTURES )
+			continue;
+
+		if( p->texture != last_texnum )
 		{
-			pglDepthMask( GL_FALSE );
-			pglEnable( GL_BLEND );
+			last_texnum = p->texture;
+			last_tex = R_GetTexture( (unsigned int)last_texnum );
 
-			if( e->curstate.rendermode == kRenderTransAlpha )
-				pglDisable( GL_ALPHA_TEST );
-		}
-
-		if( e->curstate.rendermode == kRenderTransColor )
-			pglEnable( GL_TEXTURE_2D );
-
-		if( e->curstate.rendermode == kRenderTransTexture || e->curstate.rendermode == kRenderTransAdd )
-			GL_Cull( GL_NONE );
-
-		if( gl_polyoffset.value )
-		{
-			pglEnable( GL_POLYGON_OFFSET_FILL );
-			pglPolygonOffset( -1.0f, -gl_polyoffset.value );
-		}
-	}
-
-	if( FBitSet( fa->flags, SURF_TRANSPARENT ) && glState.stencilEnabled )
-	{
-		mtexinfo_t	*tex = fa->texinfo;
-
-		for( p = fa->pdecals; p; p = p->pnext )
-		{
-			if( p->texture )
+			if( !last_tex || !last_tex->loaded || !last_tex->vram_ptr )
 			{
-				float *o, *v;
-				int i, numVerts;
-				o = R_DecalSetupVerts( p, fa, p->texture, &numVerts );
-
-				pglEnable( GL_STENCIL_TEST );
-				pglStencilFunc( GL_ALWAYS, 1, 0xFFFFFFFF );
-				pglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
-
-				pglStencilOp( GL_KEEP, GL_KEEP, GL_REPLACE );
-				pglBegin( GL_POLYGON );
-
-				for( i = 0, v = o; i < numVerts; i++, v += VERTEXSIZE )
-				{
-					v[5] = ( DotProduct( v, tex->vecs[0] ) + tex->vecs[0][3] ) / tex->texture->width;
-					v[6] = ( DotProduct( v, tex->vecs[1] ) + tex->vecs[1][3] ) / tex->texture->height;
-
-					pglTexCoord2f( v[5], v[6] );
-					pglVertex3fv( v );
-				}
-
-				pglEnd();
-				pglStencilOp( GL_KEEP, GL_KEEP, GL_DECR );
-
-				pglEnable( GL_ALPHA_TEST );
-				pglBegin( GL_POLYGON );
-
-				for( i = 0, v = o; i < numVerts; i++, v += VERTEXSIZE )
-				{
-					pglTexCoord2f( v[5], v[6] );
-					pglVertex3fv( v );
-				}
-
-				pglEnd();
-				pglDisable( GL_ALPHA_TEST );
-
-				pglColorMask( GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE );
-				pglStencilFunc( GL_EQUAL, 0, 0xFFFFFFFF );
-				pglStencilOp( GL_KEEP, GL_KEEP, GL_KEEP );
+				last_tex = NULL;
+				continue;
 			}
+
+			pvr_poly_cxt_t cxt;
+			pvr_poly_cxt_txr( &cxt, PVR_LIST_TR_POLY, last_tex->format, last_tex->width, last_tex->height, last_tex->vram_ptr, PVR_FILTER_BILINEAR );
+			cxt.gen.culling = PVR_CULLING_NONE;
+			cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
+			cxt.gen.alpha = PVR_ALPHA_ENABLE;
+			cxt.gen.shading = PVR_SHADE_GOURAUD;
+			cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
+			cxt.txr.alpha = PVR_TXRALPHA_ENABLE;
+			cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL; // z = 1/w convention
+			cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
+			cxt.blend.src = PVR_BLEND_SRCALPHA;
+			cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
+
+			pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+			pvr_poly_compile( hdr, &cxt );
+			pvr_dr_commit( hdr );
 		}
-	}
 
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+		if( !last_tex )
+			continue;
 
-	if( reverse && e->curstate.rendermode == kRenderTransTexture )
-	{
-		decal_t	*list[1024];
-		int	i, count;
-
-		for( p = fa->pdecals, count = 0; p && count < 1024; p = p->pnext )
-			if( p->texture ) list[count++] = p;
-
-		for( i = count - 1; i >= 0; i-- )
-			DrawSingleDecal( list[i], fa );
-	}
-	else
-	{
-		for( p = fa->pdecals; p; p = p->pnext )
 		{
-			if( !p->texture ) continue;
-			DrawSingleDecal( p, fa );
+			float *v;
+			int numVerts;
+			v = R_DecalSetupVerts( p, fa, p->texture, &numVerts );
+			if( !v || numVerts < 3 || numVerts > MAX_DECALCLIPVERT )
+				continue;
+
+			PVR_SubmitDecalPoly( &dr_state, r_world_matrix, fa, v, numVerts );
 		}
 	}
 
-	if( FBitSet( fa->flags, SURF_TRANSPARENT ) && glState.stencilEnabled )
-		pglDisable( GL_STENCIL_TEST );
-
-	if( single )
-	{
-		if( e->curstate.rendermode == kRenderNormal || e->curstate.rendermode == kRenderTransAlpha )
-		{
-			pglDepthMask( GL_TRUE );
-			pglDisable( GL_BLEND );
-
-			if( e->curstate.rendermode == kRenderTransAlpha )
-				pglEnable( GL_ALPHA_TEST );
-		}
-
-		if( gl_polyoffset.value )
-			pglDisable( GL_POLYGON_OFFSET_FILL );
-
-		if( e->curstate.rendermode == kRenderTransTexture || e->curstate.rendermode == kRenderTransAdd )
-			GL_Cull( GL_FRONT );
-
-		if( e->curstate.rendermode == kRenderTransColor )
-			pglDisable( GL_TEXTURE_2D );
-
-		// restore blendfunc here
-		if( e->curstate.rendermode == kRenderTransAdd || e->curstate.rendermode == kRenderGlow )
-			pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
-
-		pglTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-	}
-#endif // PVR decals TODO
+	pvr_dr_finish();
 }
 void DrawDecalsBatch( void )
 {
@@ -1023,41 +1042,77 @@ void DrawDecalsBatch( void )
 
 	e = RI.currententity;
 	Assert( e != NULL );
-#if 0
-	if( e->curstate.rendermode != kRenderTransTexture )
-	{
-		pglEnable( GL_BLEND );
-		pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-		pglDepthMask( GL_FALSE );
-	}
 
-	if( e->curstate.rendermode == kRenderTransTexture || e->curstate.rendermode == kRenderTransAdd )
-		GL_Cull( GL_NONE );
+	// Decals are always submitted as blended TR polygons with depth test enabled and depth write disabled.
+	// We assume the caller is inside PVR_LIST_TR_POLY (see pvr_rmain.c).
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
 
-	if( gl_polyoffset.value )
-	{
-		pglEnable( GL_POLYGON_OFFSET_FILL );
-		pglPolygonOffset( -1.0f, -gl_polyoffset.value );
-	}
+	int last_texnum = -1;
+	gl_texture_t *last_tex = NULL;
 
 	for( i = 0; i < tr.num_draw_decals; i++ )
 	{
-		DrawSurfaceDecals( tr.draw_decals[i], false, false );
+		msurface_t *fa = tr.draw_decals[i].surf;
+		const float *wm = tr.draw_decals[i].world_matrix;
+		decal_t *p;
+
+		if( !fa || !fa->pdecals )
+			continue;
+
+		for( p = fa->pdecals; p; p = p->pnext )
+		{
+			if( p->texture <= 0 || p->texture >= MAX_TEXTURES )
+				continue;
+
+			if( p->texture != last_texnum )
+			{
+				last_texnum = p->texture;
+				last_tex = R_GetTexture( (unsigned int)last_texnum );
+
+				if( !last_tex || !last_tex->loaded || !last_tex->vram_ptr )
+				{
+					last_tex = NULL;
+					continue;
+				}
+
+				pvr_poly_cxt_t cxt;
+				pvr_poly_cxt_txr( &cxt, PVR_LIST_TR_POLY, last_tex->format, last_tex->width, last_tex->height, last_tex->vram_ptr, PVR_FILTER_BILINEAR );
+				cxt.gen.culling = PVR_CULLING_NONE;
+				cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
+				cxt.gen.alpha = PVR_ALPHA_ENABLE;
+				cxt.gen.shading = PVR_SHADE_GOURAUD;
+				cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
+				cxt.txr.alpha = PVR_TXRALPHA_ENABLE;
+				cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+				cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
+				cxt.blend.src = PVR_BLEND_SRCALPHA;
+				cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
+
+				pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+				pvr_poly_compile( hdr, &cxt );
+				pvr_dr_commit( hdr );
+			}
+
+			if( !last_tex )
+				continue;
+
+			// Generate decal verts and submit triangles
+			{
+				float *v;
+				int numVerts;
+				v = R_DecalSetupVerts( p, fa, p->texture, &numVerts );
+				if( !v || numVerts < 3 || numVerts > MAX_DECALCLIPVERT )
+					continue;
+
+				PVR_SubmitDecalPoly( &dr_state, wm, fa, v, numVerts );
+			}
+		}
 	}
 
-	if( e->curstate.rendermode != kRenderTransTexture )
-	{
-		pglDepthMask( GL_TRUE );
-		pglDisable( GL_BLEND );
-		pglDisable( GL_ALPHA_TEST );
-	}
+	pvr_dr_finish();
 
-	if( gl_polyoffset.value )
-		pglDisable( GL_POLYGON_OFFSET_FILL );
-
-	if( e->curstate.rendermode == kRenderTransTexture || e->curstate.rendermode == kRenderTransAdd )
-		GL_Cull( GL_FRONT );
-#endif // PVR decals TODO
+	// Clear queue
 	tr.num_draw_decals = 0;
 }
 

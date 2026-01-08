@@ -31,6 +31,7 @@ ref_instance_t	RI;
 float r_world_matrix[16] __attribute__((aligned(32)));
 // base screen*proj*view for current frame (column-major)
 static float r_viewproj_matrix[16] __attribute__((aligned(32)));
+int g_pvr_current_list = -1;
 // Quake coordinate system transform matrix (column major)
 static const float quake_coord_matrix[16] __attribute__((aligned(8))) = {
      0,  0, -1,  0,
@@ -997,16 +998,21 @@ void R_RenderScene( void )
 
 	R_CheckGLFog();
 	// submit opaque geometry into OP list.
+	g_pvr_current_list = PVR_LIST_OP_POLY;
 	pvr_list_begin( PVR_LIST_OP_POLY );
 	R_DrawWorld();
 	R_DrawOpaqueEntities();
 	pvr_list_finish();
+	g_pvr_current_list = -1;
 	
 	// submit tr geom (translucent entities, sprites, etc.)
+	g_pvr_current_list = PVR_LIST_TR_POLY;
 	pvr_list_begin( PVR_LIST_TR_POLY );
+	DrawDecalsBatch();
 	R_DrawTranslucentEntities();
 	R_DrawWaterSurfaces();
 	pvr_list_finish();
+	g_pvr_current_list = -1;
 
 	R_CheckFog();
 

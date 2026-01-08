@@ -36,8 +36,24 @@ static inline void PVR_NearZ_ClipEdge( const ClipVert_t *v1, const ClipVert_t *v
 	const float d0 = v1->pos.w + v1->pos.z;
 	const float d1 = v2->pos.w + v2->pos.z;
 
-	// t = d0 / (d0 - d1) but using FSRRA for reciprocal
-	const float t = fabsf( d0 ) * shz_invf_fsrra( d1 - d0 );
+	// Intersection parameter for plane (w+z)=0 along segment v1->v2:
+	// t = d0 / (d0 - d1)
+	// d0 >= 0 is "inside", d1 < 0 is "outside" (or vice versa). This yields t in [0,1].
+	const float denom = ( d0 - d1 );
+	float t;
+	if( fabsf( denom ) < 1e-8f )
+		t = 0.0f;
+	else
+	{
+		// IMPORTANT: use precise division here. shz_invf_fsrra() is great for positive values,
+		// but near-plane clipping frequently involves negative denominators; using FSRRA-based
+		// reciprocal can introduce large errors and warp geometry.
+		t = d0 / denom;
+	}
+
+	// Clamp for numerical safety (FSRRA is approximate).
+	if( t < 0.0f ) t = 0.0f;
+	if( t > 1.0f ) t = 1.0f;
 
 	out->pos.x = shz_lerpf( v1->pos.x, v2->pos.x, t );
 	out->pos.y = shz_lerpf( v1->pos.y, v2->pos.y, t );
@@ -49,7 +65,8 @@ static inline void PVR_NearZ_ClipEdge( const ClipVert_t *v1, const ClipVert_t *v
 
 	// Color lerp
 	{
-		const uint8_t ti = (uint8_t)(t * 255.0f);
+		const float tf = t * 255.0f;
+		const uint8_t ti = (uint8_t)bound( 0, (int)tf, 255 );
 		out->argb = PVR_LerpARGB( v1->argb, v2->argb, ti );
 	}
 }
@@ -63,6 +80,22 @@ static inline void PVR_SubmitClipVert( pvr_dr_state_t *dr_state, const ClipVert_
 	vert->x = cv->pos.x * invw;
 	vert->y = cv->pos.y * invw;
 	vert->z = invw;
+	vert->u = cv->u;
+	vert->v = cv->v;
+	vert->argb = cv->argb;
+	vert->oargb = 0;
+	pvr_dr_commit( vert );
+}
+
+static inline void PVR_SubmitClipVertZBias( pvr_dr_state_t *dr_state, const ClipVert_t *cv, uint32_t flags, float z_bias )
+{
+	const float invw = shz_invf_fsrra( cv->pos.w );
+
+	pvr_vertex_t *vert = pvr_dr_target( *dr_state );
+	vert->flags = flags;
+	vert->x = cv->pos.x * invw;
+	vert->y = cv->pos.y * invw;
+	vert->z = invw + z_bias;
 	vert->u = cv->u;
 	vert->v = cv->v;
 	vert->argb = cv->argb;
@@ -149,6 +182,84 @@ void PVR_ClipAndSubmitTriangle(
 		PVR_SubmitClipVert( dr_state, &verts[1], PVR_CMD_VERTEX );
 		PVR_SubmitClipVert( dr_state, &verts[2], PVR_CMD_VERTEX );
 		PVR_SubmitClipVert( dr_state, &verts[3], PVR_CMD_VERTEX_EOL );
+	}
+}
+
+void PVR_ClipAndSubmitTriangleZBias(
+	pvr_dr_state_t *dr_state,
+	shz_vec4_t p0, shz_vec4_t p1, shz_vec4_t p2,
+	float u0, float v0, float u1, float v1, float u2, float v2,
+	uint32_t c0, uint32_t c1, uint32_t c2,
+	float z_bias )
+{
+	ClipVert_t verts[5];
+	unsigned n_verts = 3;
+
+	// Clamp bias to something sane (safety belt).
+	if( z_bias < 0.0f ) z_bias = 0.0f;
+	if( z_bias > 0.01f ) z_bias = 0.01f;
+
+	verts[0].pos = p0; verts[0].u = u0; verts[0].v = v0; verts[0].argb = c0;
+	verts[1].pos = p1; verts[1].u = u1; verts[1].v = v1; verts[1].argb = c1;
+	verts[2].pos = p2; verts[2].u = u2; verts[2].v = v2; verts[2].argb = c2;
+
+	const unsigned vismask = PVR_NearZ_VisMaskTri( verts );
+
+	if( vismask == 0 )
+		return;
+
+	if( vismask == 7 )
+	{
+		PVR_SubmitClipVertZBias( dr_state, &verts[0], PVR_CMD_VERTEX, z_bias );
+		PVR_SubmitClipVertZBias( dr_state, &verts[1], PVR_CMD_VERTEX, z_bias );
+		PVR_SubmitClipVertZBias( dr_state, &verts[2], PVR_CMD_VERTEX_EOL, z_bias );
+		return;
+	}
+
+	switch( vismask )
+	{
+	case 1:
+		PVR_NearZ_ClipEdge( &verts[0], &verts[1], &verts[1] );
+		PVR_NearZ_ClipEdge( &verts[0], &verts[2], &verts[2] );
+		break;
+	case 2:
+		PVR_NearZ_ClipEdge( &verts[1], &verts[0], &verts[0] );
+		PVR_NearZ_ClipEdge( &verts[1], &verts[2], &verts[2] );
+		break;
+	case 3:
+		n_verts = 4;
+		PVR_NearZ_ClipEdge( &verts[1], &verts[2], &verts[3] );
+		PVR_NearZ_ClipEdge( &verts[0], &verts[2], &verts[2] );
+		break;
+	case 4:
+		PVR_NearZ_ClipEdge( &verts[2], &verts[0], &verts[0] );
+		PVR_NearZ_ClipEdge( &verts[2], &verts[1], &verts[1] );
+		break;
+	case 5:
+		n_verts = 4;
+		PVR_NearZ_ClipEdge( &verts[1], &verts[2], &verts[3] );
+		PVR_NearZ_ClipEdge( &verts[0], &verts[1], &verts[1] );
+		break;
+	case 6:
+		n_verts = 4;
+		verts[3] = verts[2];
+		PVR_NearZ_ClipEdge( &verts[0], &verts[2], &verts[2] );
+		PVR_NearZ_ClipEdge( &verts[0], &verts[1], &verts[0] );
+		break;
+	}
+
+	if( n_verts == 3 )
+	{
+		PVR_SubmitClipVertZBias( dr_state, &verts[0], PVR_CMD_VERTEX, z_bias );
+		PVR_SubmitClipVertZBias( dr_state, &verts[1], PVR_CMD_VERTEX, z_bias );
+		PVR_SubmitClipVertZBias( dr_state, &verts[2], PVR_CMD_VERTEX_EOL, z_bias );
+	}
+	else
+	{
+		PVR_SubmitClipVertZBias( dr_state, &verts[0], PVR_CMD_VERTEX, z_bias );
+		PVR_SubmitClipVertZBias( dr_state, &verts[1], PVR_CMD_VERTEX, z_bias );
+		PVR_SubmitClipVertZBias( dr_state, &verts[2], PVR_CMD_VERTEX, z_bias );
+		PVR_SubmitClipVertZBias( dr_state, &verts[3], PVR_CMD_VERTEX_EOL, z_bias );
 	}
 }
 
