@@ -1149,6 +1149,7 @@ conveyor_done:
 	// Actual format comes from GL_SetTextureFormat() in pvr_image.c which sets NONTWIDDLED for uncompressed textures
 	uint32_t tex_format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED;
 	int tex_width = 64, tex_height = 64;
+	qboolean tex_has_mips = false;
 	
 	if( texnum > 0 && texnum < MAX_TEXTURES )
 	{
@@ -1161,6 +1162,7 @@ conveyor_done:
 			tex_format = glt->format;
 			tex_width = glt->width;
 			tex_height = glt->height;
+			tex_has_mips = ( glt->numMips > 1 ) ? true : false;
 		}
 	}
 	
@@ -1252,6 +1254,10 @@ conveyor_done:
 	{
 		pvr_poly_cxt_txr(&cxt, list, tex_format,
 				tex_width, tex_height, tex_addr, PVR_FILTER_BILINEAR);
+		// IMPORTANT: VQ mipmapped textures have a different memory layout than non-mip VQ.
+		// If we don't set mipmap mode here, the PVR will interpret the payload incorrectly
+		// and even the base level will look corrupted (diagonal garbage).
+		cxt.txr.mipmap = tex_has_mips ? PVR_MIPMAP_ENABLE : PVR_MIPMAP_DISABLE;
 	}
 	else
 	{
@@ -1771,6 +1777,7 @@ static void R_DrawTextureChains( void )
 		pvr_ptr_t tex_addr = NULL;
 		uint32_t tex_format = PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED;
 		int tex_width = 64, tex_height = 64;
+		qboolean tex_has_mips = false;
 		
 		if( texnum > 0 && texnum < MAX_TEXTURES )
 		{
@@ -1781,6 +1788,7 @@ static void R_DrawTextureChains( void )
 				tex_format = glt->format;
 				tex_width = glt->width;
 				tex_height = glt->height;
+				tex_has_mips = ( glt->numMips > 1 ) ? true : false;
 			}
 		}
 		
@@ -1788,6 +1796,8 @@ static void R_DrawTextureChains( void )
 		if( tex_addr )
 		{
 			pvr_poly_cxt_txr( &cxt, PVR_LIST_OP_POLY, tex_format, tex_width, tex_height, tex_addr, PVR_FILTER_BILINEAR );
+			// See note above: must enable mipmap mode for mipmapped payloads (VQ mipmaps in particular).
+			cxt.txr.mipmap = tex_has_mips ? PVR_MIPMAP_ENABLE : PVR_MIPMAP_DISABLE;
 		}
 		else
 		{
