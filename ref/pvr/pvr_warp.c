@@ -803,7 +803,8 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 
 			shz_vec3_t pos = shz_vec3_init( v[0], v[1], nv );
 			shz_vec4_t tp = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
-			if( tp.z >= -tp.w )
+			// sh4zam perspective: near plane is (w >= z)
+			if( tp.w >= tp.z )
 			{
 				any_visible = true;
 				break;
