@@ -27,7 +27,7 @@ static qboolean vsync;
 
 pvr_init_params_t params = {
 	{ PVR_BINSIZE_8, PVR_BINSIZE_0, PVR_BINSIZE_8, PVR_BINSIZE_0, PVR_BINSIZE_8 },
-	3072 * 256,    /* vertex buffer */
+	4096 * 256,    /* vertex buffer */
 	0,             /* dma disabled for TA  */
 	0,             /* fsaa off */
 	0,             /* keep PVR translucent autosort OFF  */
