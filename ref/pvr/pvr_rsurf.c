@@ -851,7 +851,7 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 /*
 ================
 SampleVertexLight
-Sample lightmap data at a vertex position from surf->samples (like Q2)
+Sample lightmap data at a vertex position from surf->samples
 ================
 */
 static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
@@ -936,7 +936,9 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 	const int numverts = p->numverts;
 	
 	// Load matrix once
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 	
 	// Transform all vertices
 	shz_vec4_t transformed[64];
@@ -1040,8 +1042,39 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 
 /*
 ================
+DrawGLPoly_AnyVertexVisible
+
+Quick visibility test used to avoid submitting a polygon header with zero
+vertices afterwards 
+================
+*/
+static qboolean DrawGLPoly_AnyVertexVisible( glpoly2_t *p )
+{
+	if( !p || p->numverts < 3 )
+		return false;
+
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
+
+	float *v = p->verts[0];
+	const int numverts = p->numverts;
+
+	for( int i = 0; i < numverts; i++, v += VERTEXSIZE )
+	{
+		shz_vec3_t pos = shz_vec3_init( v[0], v[1], v[2] );
+		shz_vec4_t tp = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
+		if( tp.z >= -tp.w )
+			return true;
+	}
+
+	return false;
+}
+
+/*
+================
 DrawGLPolySurfaceGouraud
-Gouraud shaded polygon - samples light per vertex from surf->samples (like Q2)
+Gouraud shaded polygon - samples light per vertex from surf->samples 
 ================
 */
 static void DrawGLPolySurfaceGouraud( glpoly2_t *p, pvr_dr_state_t *dr_state, const msurface_t *surf, float sOffset, float tOffset, float xScale, float yScale )
@@ -1517,33 +1550,6 @@ static void R_RenderFullbrights( void )
 		return;
 
 	R_AllowFog( false );
-#if 0
-	pglEnable( GL_BLEND );
-	pglDepthMask( GL_FALSE );
-	pglDisable( GL_ALPHA_TEST );
-	pglBlendFunc( GL_ONE, GL_ONE );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-
-	for( i = draw_fullbrights.first; i <= draw_fullbrights.last; i++ )
-	{
-		es = fullbright_surfaces[i];
-		if( !es )
-			continue;
-
-		GL_Bind( XASH_TEXTURE0, i );
-
-		for( p = es; p; p = p->lumachain )
-			DrawGLPoly( p->surf->polys, 0.0f, 0.0f, NULL, NULL );
-
-		fullbright_surfaces[i] = NULL;
-		es->lumachain = NULL;
-	}
-
-	pglDisable( GL_BLEND );
-	pglDepthMask( GL_TRUE );
-	pglDisable( GL_ALPHA_TEST );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-#endif // TODO
 	R_ResetSeparatePass( &draw_fullbrights );
 	R_AllowFog( true );
 }
@@ -1770,6 +1776,27 @@ static void R_DrawTextureChains( void )
 		// Initialize DR state once per texture (Quake2 pattern: init once, submit header once, all polys share it, finish once)
 		pvr_dr_state_t dr_state;
 		pvr_dr_init( &dr_state );
+
+		// Real HW safety: never submit a poly header unless we are sure we will emit at least one vertex afterward.
+		// If a header is submitted and all polys get clipped/culled, the TA can mis-parse the next header as a vertex,
+		// which manifests as gray screen + tiny quad and then no frames.
+		qboolean will_emit_any = false;
+		for( msurface_t *s2 = s; s2 != NULL && !will_emit_any; s2 = s2->texturechain )
+		{
+			for( glpoly2_t *p2 = s2->polys; p2 != NULL; p2 = p2->chain )
+			{
+				if( DrawGLPoly_AnyVertexVisible( p2 ))
+				{
+					will_emit_any = true;
+					break;
+				}
+			}
+		}
+		if( !will_emit_any )
+		{
+			t->texturechain = NULL;
+			continue;
+		}
 		
 		// Submit header once per texture (all surfaces with this texture share it)
 		// Get texture info for header

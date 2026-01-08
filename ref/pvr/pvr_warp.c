@@ -735,20 +735,32 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 	const uint8_t a = (uint8_t)bound( 0, (int)(wateralpha * 255.0f), 255 );
 	const uint32_t water_color = ((uint32_t)a << 24) | 0x00FFFFFF;
 
-	pvr_dr_state_t dr_state;
-	pvr_dr_init( &dr_state );
+	// Safety: never submit a polygon header if we won't submit any vertices afterwards.
+	//
+	// List routing:
+	// - Prefer the currently open list (g_pvr_current_list) so TA stream stays consistent.
+	// - If list tracking is unavailable (g_pvr_current_list == -1), fall back to the expected list
+	//   derived from wateralpha (legacy behavior).
+	const int expected_list = translucent ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
+	int list = expected_list;
+	if( g_pvr_current_list == PVR_LIST_OP_POLY || g_pvr_current_list == PVR_LIST_TR_POLY )
+		list = g_pvr_current_list;
+
+	// If we're forced into TR, treat it as translucent for state (depthwrite off).
+	// If we're forced into OP, treat it as opaque for state (depthwrite on).
+	const qboolean effective_translucent = ( list == PVR_LIST_TR_POLY ) ? true : translucent;
 
 	pvr_poly_cxt_t cxt;
-	pvr_poly_cxt_txr( &cxt, translucent ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
+	pvr_poly_cxt_txr( &cxt, list, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
 	cxt.gen.culling = PVR_CULLING_NONE;
 	cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
 	cxt.txr.env = PVR_TXRENV_MODULATE;
 	cxt.txr.uv_flip = PVR_UVFLIP_NONE;
 	cxt.txr.uv_clamp = PVR_UVCLAMP_NONE; // water wraps naturally
-	cxt.txr.alpha = translucent ? PVR_TXRALPHA_ENABLE : PVR_TXRALPHA_DISABLE;
+	cxt.txr.alpha = effective_translucent ? PVR_TXRALPHA_ENABLE : PVR_TXRALPHA_DISABLE;
 	cxt.txr.mipmap = PVR_MIPMAP_DISABLE;
 
-	if( translucent )
+	if( effective_translucent )
 	{
 		cxt.gen.alpha = PVR_ALPHA_ENABLE;
 		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
@@ -763,12 +775,58 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 		cxt.depth.write = PVR_DEPTHWRITE_ENABLE;
 	}
 
+	// Load matrix once (sh4zam requires 8-byte alignment)
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
+
+	qboolean any_visible = false;
+	for( p = warp->polys; p && !any_visible; p = p->next )
+	{
+		if( reverse )
+			v = p->verts[0] + ( p->numverts - 1 ) * VERTEXSIZE;
+		else v = p->verts[0];
+
+		const int numverts = p->numverts;
+		if( numverts < 3 || numverts > 64 )
+			continue;
+
+		for( i = 0; i < numverts; i++ )
+		{
+			if( waveHeight )
+			{
+				nv = r_turbsin[(int)(gp_cl->time * 160.0f + v[1] + v[0]) & 255] + 8.0f;
+				nv = (r_turbsin[(int)(v[0] * 5.0f + gp_cl->time * 171.0f - v[1]) & 255] + 8.0f ) * 0.8f + nv;
+				nv = nv * waveHeight + v[2];
+			}
+			else nv = v[2];
+
+			shz_vec3_t pos = shz_vec3_init( v[0], v[1], nv );
+			shz_vec4_t tp = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
+			if( tp.z >= -tp.w )
+			{
+				any_visible = true;
+				break;
+			}
+
+			if( reverse )
+				v -= VERTEXSIZE;
+			else v += VERTEXSIZE;
+		}
+	}
+
+	if( !any_visible )
+	{
+		GL_SetupFogColorForSurfaces();
+		return;
+	}
+
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
+
 	pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
 	pvr_poly_compile( hdr, &cxt );
 	pvr_dr_commit( hdr );
-
-	// Load matrix once
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
 
 	for( p = warp->polys; p; p = p->next )
 	{

@@ -1973,7 +1973,9 @@ static void R_StudioDrawNormalMesh( short *ptricmds, vec3_t *pstudionorms, float
 	if( !g_pvr_studio_dr )
 		return;
 
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 
 	while(( i = *( ptricmds++ )))
 	{
@@ -2055,7 +2057,9 @@ static void R_StudioDrawFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 	if( !g_pvr_studio_dr )
 		return;
 
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 
 	while(( i = *( ptricmds++ )))
 	{
@@ -2137,7 +2141,9 @@ static void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, float
 	if( !g_pvr_studio_dr )
 		return;
 
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 
 	while(( i = *( ptricmds++ )))
 	{

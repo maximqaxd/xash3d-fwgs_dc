@@ -643,8 +643,10 @@ static void R_DrawSpriteQuad( mspriteframe_t *frame, vec3_t org, vec3_t v_right,
 	uv[3][0] = 1.0f;
 	uv[3][1] = 1.0f;
 
-	// Transform all vertices using current world matrix
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
+	// Transform all vertices using current world matrix (sh4zam requires 8-byte alignment)
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 	for( int i = 0; i < 4; i++ )
 	{
 		transformed[i] = shz_xmtrx_transform_vec4(shz_vec3_vec4(shz_vec3_init(points[i][0], points[i][1], points[i][2]), 1.0f));
@@ -766,6 +768,46 @@ static void R_DrawSpriteQuad( mspriteframe_t *frame, vec3_t org, vec3_t v_right,
 			);
 		}
 	}
+}
+
+/*
+=================
+R_SpriteQuadAnyVisible
+
+Quick near-plane visibility test to avoid submitting a polygon header with no vertices.
+If a header is committed and all quads early-out, the TA stream can be corrupted on real HW.
+=================
+*/
+static qboolean R_SpriteQuadAnyVisible( mspriteframe_t *frame, vec3_t org, vec3_t v_right, vec3_t v_up, float scale )
+{
+	vec3_t	points[4];
+	unsigned vismask = 0;
+
+	// Build corners (same as R_DrawSpriteQuad)
+	VectorMA( org, frame->down * scale, v_up, points[0] );
+	VectorMA( points[0], frame->left * scale, v_right, points[0] );
+
+	VectorMA( org, frame->up * scale, v_up, points[1] );
+	VectorMA( points[1], frame->left * scale, v_right, points[1] );
+
+	VectorMA( org, frame->up * scale, v_up, points[2] );
+	VectorMA( points[2], frame->right * scale, v_right, points[2] );
+
+	VectorMA( org, frame->down * scale, v_up, points[3] );
+	VectorMA( points[3], frame->right * scale, v_right, points[3] );
+
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
+
+	for( int i = 0; i < 4; i++ )
+	{
+		shz_vec4_t tp = shz_xmtrx_transform_vec4( shz_vec3_vec4( shz_vec3_init( points[i][0], points[i][1], points[i][2] ), 1.0f ));
+		if( tp.z >= -tp.w )
+			vismask |= (1U << i);
+	}
+
+	return ( vismask != 0 ) ? true : false;
 }
 
 static qboolean R_SpriteHasLightmap( cl_entity_t *e, int texFormat )
@@ -960,6 +1002,7 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	// Initialize PVR direct rendering
 	pvr_dr_state_t dr_state;
 	pvr_dr_init(&dr_state);
+	pvr_poly_hdr_t *hdr; 
 
 	// Get texture for current frame
 	int texnum = frame->gl_texturenum;
@@ -1010,17 +1053,26 @@ void R_DrawSpriteModel( cl_entity_t *e )
 	}
 	// Don't explicitly enable blending - it's enabled automatically when alpha is enabled and blend src/dst are set
 
-	// Compile and submit header
-	pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
-	pvr_poly_compile(hdr, &cxt);
-	pvr_dr_commit(hdr);
-
 	// Pack vertex color (alpha comes from blend)
 	uint32_t argb_base = PVR_PACK_COLOR(blend, color[0], color[1], color[2]);
 
 	// Draw sprite frame(s)
 	if( oldframe == frame )
 	{
+		// Real HW safety: don't submit header if quad is fully behind near plane.
+		if( !R_SpriteQuadAnyVisible( frame, origin, v_right, v_up, scale ))
+		{
+			pvr_dr_finish();
+			if( e->curstate.rendermode == kRenderGlow || e->curstate.rendermode == kRenderTransAdd )
+				R_AllowFog( true );
+			return;
+		}
+
+		// Compile and submit header
+		hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
+		pvr_poly_compile(hdr, &cxt);
+		pvr_dr_commit(hdr);
+
 		// Single non-lerped frame
 		R_DrawSpriteQuad( frame, origin, v_right, v_up, scale, argb_base, &dr_state );
 	}
@@ -1029,6 +1081,26 @@ void R_DrawSpriteModel( cl_entity_t *e )
 		// Lerped frames: draw both with alpha blending
 		lerp = bound( 0.0f, lerp, 1.0f );
 		ilerp = 1.0f - lerp;
+
+		// Real HW safety: don't submit header if neither quad would emit vertices.
+		// (Geometry can differ between frames: different extents in the sprite frames)
+		qboolean any_visible = false;
+		if( ilerp > 0.0f )
+			any_visible |= R_SpriteQuadAnyVisible( oldframe, origin, v_right, v_up, scale );
+		if( lerp > 0.0f )
+			any_visible |= R_SpriteQuadAnyVisible( frame, origin, v_right, v_up, scale );
+		if( !any_visible )
+		{
+			pvr_dr_finish();
+			if( e->curstate.rendermode == kRenderGlow || e->curstate.rendermode == kRenderTransAdd )
+				R_AllowFog( true );
+			return;
+		}
+
+		// Compile and submit header for the base frame (we may recompile below for old/new textures).
+		hdr = (pvr_poly_hdr_t *)pvr_dr_target(dr_state);
+		pvr_poly_compile(hdr, &cxt);
+		pvr_dr_commit(hdr);
 
 		if( ilerp > 0.0f )
 		{
