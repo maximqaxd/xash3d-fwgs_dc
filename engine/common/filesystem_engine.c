@@ -176,20 +176,10 @@ static qboolean FS_DetermineRootDirectory( char *out, size_t size )
 #endif
 
 #if XASH_DREAMCAST
-	if (!fs_fat_mount_sd())
-	{
-		path = "/sd/Xash3D";
-	}
-	else if (!fs_fat_mount_ide())
-	{
-		path = "/ide/Xash3D";
-	}
-	else 
 	{
 		path = "/vmu/a1";
 	}
 	
-	fs_mkdir( path ); // create RW directorty on device manually
 #endif
 	if( COM_CheckString( path ))
 	{

@@ -27,7 +27,9 @@ NOTE: number at end of pixelformat name it's a total bitscount e.g. PF_RGB_24 ==
 	|| type == PF_VQ_ARGB_4444 \
 	|| type == PF_VQ_ARGB_1555 \
 	|| type == PF_VQ_RGB_5650 \
+	|| type == PF_SMALL_VQ_RGB_5650 \
 	|| type == PF_VQ_MIPMAP_RGB_5650 \
+	|| type == PF_VQ_MIPMAP_ARGB_1555 \
 	|| type == PF_KTX2_RAW )
 
 typedef enum
@@ -61,9 +63,10 @@ typedef enum
 	PF_VQ_ARGB_4444,	// 16-bit A4 R4 G4 B4 VQ compressed
 	PF_ARGB_1555,
 	PF_VQ_ARGB_1555,	// 16-bit A1 R5 G5 B5 VQ compressed
-	PF_RGB_332,		// 8-bit  R3 G3 B2
+	PF_VQ_MIPMAP_ARGB_1555,	// 16-bit A1 R5 G5 B5 VQ Mipmap compressed
 	PF_RGB_5650,	// 8-bit R5 G6 B5
 	PF_VQ_RGB_5650,	// 8-bit R5 G6 B5 VQ compressed
+	PF_SMALL_VQ_RGB_5650, // 8-bit R5 G6 B5 small VQ compressed
 	PF_VQ_MIPMAP_RGB_5650, // 8-bit R5 G6 B5 VQ Mipmap compressed
 	PF_RGB_5650_TWID, // // 8-bit R5 G6 B5 Twiddled
 	PF_RGBA_5551,	// 16-bit R5 G5 B5 A1

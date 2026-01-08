@@ -337,6 +337,7 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
     }
 #endif
 
+    // Handle cue points for looping
     FindChunk(name, "cue ");
 
     if(iff_dataPtr && iff_end - iff_dataPtr >= 36)
@@ -374,24 +375,29 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
 #if XASH_DREAMCAST
     if(fmt == 32 || fmt == 20)  // Yamaha ADPCM format
     {
-        uint32_t raw_samples = GetLittleLong();
+        uint32_t chunk_size = GetLittleLong();
         
         // ADPCM block alignment
         #define ADPCM_BLOCK_SIZE 32
 
+        // Calculate total samples using correct formula
+        int total_samples = (int)((float)chunk_size / (((float)(sound.width * 8) / 8) * (float)sound.channels));
+        
         // Calculate aligned size (keep original size)
-        size_t aligned_size = ALIGN(raw_samples, ADPCM_BLOCK_SIZE);
-        sound.samples = raw_samples;
-        sound.size = raw_samples;
+        size_t aligned_size = ALIGN(total_samples, ADPCM_BLOCK_SIZE);
+        sound.samples = total_samples;
+        sound.size = chunk_size;
 
         // Try to allocate AICA memory
         uint32_t aica_addr = snd_mem_malloc(aligned_size);
         
         if(aica_addr)
         {
-            // Allocate aligned buffer for DMA
-            void* aligned_buffer = memalign(32, aligned_size);
-            if(!aligned_buffer)
+            // Map AICA memory to SH4 address space
+            uint32_t sh4_addr = 0x00800000 + aica_addr;
+
+            void *aligned_buffer = memalign(32, aligned_size); // 32-byte alignment for safety
+            if (!aligned_buffer)
             {
                 Con_DPrintf(S_ERROR "AICA: Failed to allocate aligned buffer for %s\n", name);
                 snd_mem_free(aica_addr);
@@ -400,62 +406,33 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
 
             // Copy ADPCM data to aligned buffer
             const byte* src = buffer + (iff_dataPtr - buffer);
-            memcpy(aligned_buffer, src, raw_samples);
-            if(aligned_size > raw_samples)
-                memset((uint8_t*)aligned_buffer + raw_samples, 0, aligned_size - raw_samples);
+            memcpy(aligned_buffer, src, total_samples);
 
-            // Transfer using DMA
-            if(spu_dma_transfer(aligned_buffer, aica_addr, aligned_size, 1, NULL, NULL) < 0)
+            // Pad with zeros if necessary
+            if (aligned_size > total_samples)
             {
-                Con_DPrintf(S_ERROR "AICA: DMA transfer failed for %s\n", name);
-                free(aligned_buffer);
-                snd_mem_free(aica_addr);
-                return false;
+                memset((uint8_t *)aligned_buffer + total_samples, 0, aligned_size - total_samples);
             }
+
+            // Copy from aligned buffer to AICA memory
+            memcpy((void *)sh4_addr, aligned_buffer, aligned_size);
+
+            // Flush data cache to ensure write completion
+            dcache_flush_range((void *)sh4_addr, aligned_size);
 
             free(aligned_buffer);
 
             // Store AICA position and type
             sound.aica_pos = aica_addr;
             sound.type = WF_ADPCMDATA;
-            sound.wav = (void*)aica_addr;
-            
+            sound.wav = (void *)aica_addr;
+
             return true;
         }
         else
         {
-            // Fallback to PCM decoding in main memory
-            sound.size = sound.samples * sizeof(int16_t);
-            sound.wav = Mem_Malloc(host.soundpool, sound.size);
-            
-            const byte *src = buffer + (iff_dataPtr - buffer);
-            int16_t *dst = (int16_t *)sound.wav;
-            
-            // Decode ADPCM to PCM
-            aica_decode(src, dst, sound.samples);
-            
-            // Apply sample smoothing
-            int16_t prev = 0;
-            for(int i = 0; i < sound.samples; i++)
-            {
-                int32_t current = dst[i];
-                int32_t smoothed = (current + prev) >> 1;
-                dst[i] = (int16_t)smoothed;
-                prev = current;
-            }
-            
-            // Simple 8-sample ramp at the end
-            const int ramp_samples = 8;
-            for(int i = 0; i < ramp_samples && i < sound.samples; i++)
-            {
-                float scale = 1.0f - ((float)i / ramp_samples);
-                dst[sound.samples - 1 - i] = (int16_t)(dst[sound.samples - 1 - i] * scale);
-            }
-            
-            sound.type = WF_PCMDATA;
-            sound.aica_pos = 0;  // Mark as main memory
-            Con_Printf("AICA: Using main RAM for %s (%d bytes)\n", name, sound.size);
-            return true;
+            Con_Printf("%s: dropped sound %s not enough free mem in SRAM, requested %zu bytes\n", __func__, name, sound.size);
+            return false;
         }
     }
     else
@@ -694,8 +671,6 @@ stream_t *Stream_OpenWAV(const char *filename)
     dc_file_t *file;
     short t, fmt;
 
-    Con_DPrintf("Opening WAV: %s\n", filename);
-
     if(!filename || !*filename)
         return NULL;
 
@@ -738,7 +713,6 @@ stream_t *Stream_OpenWAV(const char *filename)
 
     FS_Read(file, &chunkName, 4);
     FS_Read(file, &fmt, sizeof(fmt));
-    Con_DPrintf("Format: %d\n", fmt);
 
     if(fmt != 1 && fmt != 32 && fmt != 20)
     {
@@ -749,16 +723,13 @@ stream_t *Stream_OpenWAV(const char *filename)
 
     FS_Read(file, &t, sizeof(t));
     sound.channels = t;
-    Con_DPrintf("Channels: %d\n", sound.channels);
 
     FS_Read(file, &sound.rate, sizeof(int));
-    Con_DPrintf("Rate: %d\n", sound.rate);
 
     FS_Seek(file, 6, SEEK_CUR);
 
     FS_Read(file, &t, sizeof(t));
     sound.width = t / 8;
-    Con_DPrintf("Bits: %d\n", t);
 
     if(fmt == 32 || fmt == 20)
     {
@@ -777,7 +748,6 @@ stream_t *Stream_OpenWAV(const char *filename)
     }
 
     FS_Read(file, &sound.samples, sizeof(int));
-    Con_DPrintf("Data chunk size: %d\n", sound.samples);
 
     // at this point we have valid stream
     stream = Mem_Calloc(host.soundpool, sizeof(stream_t));
@@ -794,11 +764,6 @@ stream_t *Stream_OpenWAV(const char *filename)
 		stream->type = WF_ADPCMDATA;
 		sound.samples = raw_samples * 2;
 
-		Con_DPrintf("ADPCM details:\n");
-		Con_DPrintf("  Raw data size: %u\n", raw_samples);
-		Con_DPrintf("  Stream size: %u\n", stream->size);
-		Con_DPrintf("  Header size: %u\n", stream->buffsize);
-		Con_DPrintf("  Final samples: %u\n", sound.samples);
 	}
 
     else

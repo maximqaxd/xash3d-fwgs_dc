@@ -26,6 +26,7 @@ GNU General Public License for more details.
 #include <dc/video.h>
 #include <arch/arch.h>
 #include <dc/sound/sound.h>
+#include <kos/dbglog.h>
 
 /*
  * OpenBOR - http://www.LavaLit.com
@@ -140,7 +141,7 @@ void getRamStatus(void)
 		getFreeRam() / 1024,                     // KB
 		(float)getUsedRam() / (1024*1024),      // MB
 		getUsedRam() / 1024);                    // KB
-
+}
 //-----------------------------------------------------------------------------
 extern void bfont_draw_str(void *b, uint32_t width, bool opaque, const char *str);
 static void drawtext(int x, int y, char *string) {
