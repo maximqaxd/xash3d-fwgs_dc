@@ -14,6 +14,7 @@ GNU General Public License for more details.
 */
 
 #include "pvr_local.h"
+#include "pvr_clip.h"
 #include "r_efx.h"
 #include "event_flags.h"
 #include "entity_types.h"
@@ -55,16 +56,45 @@ void CL_DrawParticles( double frametime, particle_t *cl_active_particles, float 
 
 	if( !cl_active_particles )
 		return;	// nothing to draw?
-#if 0
-	pglEnable( GL_BLEND );
-	pglDisable( GL_ALPHA_TEST );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
 
-	GL_Bind( XASH_TEXTURE0, tr.particleTexture );
-	pglTexEnvf( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-	pglDepthMask( GL_FALSE );
+	// Particles are translucent, render in TR list
+	// We assume the caller is inside PVR_LIST_TR_POLY (see pvr_rmain.c or CL_DrawEFX)
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
 
-	pglBegin( GL_QUADS );
+	// Get particle texture
+	gl_texture_t *glt = R_GetTexture( tr.particleTexture );
+	if( !glt || !glt->loaded || !glt->vram_ptr )
+	{
+		pvr_dr_finish();
+		return;
+	}
+
+	// Setup PVR context for translucent particles
+	pvr_poly_cxt_t cxt;
+	pvr_poly_cxt_txr( &cxt, PVR_LIST_TR_POLY, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
+	cxt.gen.culling = PVR_CULLING_NONE;
+	cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
+	cxt.gen.alpha = PVR_ALPHA_ENABLE;
+	cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
+	cxt.txr.alpha = PVR_TXRALPHA_ENABLE;
+	cxt.txr.uv_flip = PVR_UVFLIP_NONE;
+	cxt.txr.uv_clamp = PVR_UVCLAMP_UV;
+	cxt.txr.mipmap = PVR_MIPMAP_DISABLE;
+	cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+	cxt.depth.write = PVR_DEPTHWRITE_DISABLE; // No depth write for particles
+	cxt.blend.src = PVR_BLEND_SRCALPHA;
+	cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
+
+	// Submit header once
+	pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+	pvr_poly_compile( hdr, &cxt );
+	pvr_dr_commit( hdr );
+
+	// Load world matrix (should be viewproj after R_LoadIdentity())
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 
 	for( p = cl_active_particles; p; p = p->next )
 	{
@@ -91,25 +121,58 @@ void CL_DrawParticles( double frametime, particle_t *cl_active_particles, float 
 			if( alpha > 255 || p->type == pt_static )
 				alpha = 255;
 
-			pglColor4ub( color.r, color.g, color.b, alpha );
+			// Pack color as ARGB
+			uint32_t argb = (alpha << 24) | (color.r << 16) | (color.g << 8) | color.b;
 
-			pglTexCoord2f( 0.0f, 1.0f );
-			pglVertex3f( p->org[0] - right[0] + up[0], p->org[1] - right[1] + up[1], p->org[2] - right[2] + up[2] );
-			pglTexCoord2f( 0.0f, 0.0f );
-			pglVertex3f( p->org[0] + right[0] + up[0], p->org[1] + right[1] + up[1], p->org[2] + right[2] + up[2] );
-			pglTexCoord2f( 1.0f, 0.0f );
-			pglVertex3f( p->org[0] + right[0] - up[0], p->org[1] + right[1] - up[1], p->org[2] + right[2] - up[2] );
-			pglTexCoord2f( 1.0f, 1.0f );
-			pglVertex3f( p->org[0] - right[0] - up[0], p->org[1] - right[1] - up[1], p->org[2] - right[2] - up[2] );
+			// Build 4 corners of particle quad
+			vec3_t corners[4];
+			VectorAdd( p->org, right, corners[0] );
+			VectorSubtract( corners[0], up, corners[0] ); // org + right - up
+			VectorAdd( p->org, right, corners[1] );
+			VectorAdd( corners[1], up, corners[1] ); // org + right + up
+			VectorSubtract( p->org, right, corners[2] );
+			VectorAdd( corners[2], up, corners[2] ); // org - right + up
+			VectorSubtract( p->org, right, corners[3] );
+			VectorSubtract( corners[3], up, corners[3] ); // org - right - up
+
+			// Transform vertices
+			shz_vec4_t transformed[4];
+			for( int i = 0; i < 4; i++ )
+			{
+				transformed[i] = shz_xmtrx_transform_vec4( shz_vec3_vec4( shz_vec3_init( corners[i][0], corners[i][1], corners[i][2] ), 1.0f ));
+			}
+
+			// UV coordinates (matching GL order)
+			float uv[4][2] = {
+				{ 0.0f, 1.0f }, // corner 0
+				{ 0.0f, 0.0f }, // corner 1
+				{ 1.0f, 0.0f }, // corner 2
+				{ 1.0f, 1.0f }  // corner 3
+			};
+
+			// Submit as two triangles (fan: 0-1-2, 0-2-3)
+			PVR_ClipAndSubmitTriangle( &dr_state,
+				transformed[0], transformed[1], transformed[2],
+				uv[0][0], uv[0][1],
+				uv[1][0], uv[1][1],
+				uv[2][0], uv[2][1],
+				argb, argb, argb
+			);
+			PVR_ClipAndSubmitTriangle( &dr_state,
+				transformed[0], transformed[2], transformed[3],
+				uv[0][0], uv[0][1],
+				uv[2][0], uv[2][1],
+				uv[3][0], uv[3][1],
+				argb, argb, argb
+			);
+
 			r_stats.c_particle_count++;
 		}
 
 		gEngfuncs.CL_ThinkParticle( frametime, p );
 	}
 
-	pglEnd();
-	pglDepthMask( GL_TRUE );
-#endif // TODO
+	pvr_dr_finish();
 }
 
 /*
@@ -182,17 +245,49 @@ void CL_DrawTracers( double frametime, particle_t *cl_active_tracers )
 	if( !TriSpriteTexture( gEngfuncs.GetDefaultSprite( REF_DOT_SPRITE ), 0 ))
 		return;
 
-#if 0
-	pglEnable( GL_BLEND );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
-	pglDisable( GL_ALPHA_TEST );
-	pglDepthMask( GL_FALSE );
+	// Tracers are translucent with additive blending, render in TR list
+	// We assume the caller is inside PVR_LIST_TR_POLY (see pvr_rmain.c or CL_DrawEFX)
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
+
+	// Get sprite texture (from TriSpriteTexture call above)
+	int sprite_texnum = glState.currentTexturesIndex;
+	gl_texture_t *glt = R_GetTexture( sprite_texnum );
+	if( !glt || !glt->loaded || !glt->vram_ptr )
+	{
+		pvr_dr_finish();
+		return;
+	}
+
+	// Setup PVR context for additive blending tracers
+	pvr_poly_cxt_t cxt;
+	pvr_poly_cxt_txr( &cxt, PVR_LIST_TR_POLY, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
+	cxt.gen.culling = PVR_CULLING_NONE;
+	cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
+	cxt.gen.alpha = PVR_ALPHA_ENABLE;
+	cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
+	cxt.txr.alpha = PVR_TXRALPHA_ENABLE;
+	cxt.txr.uv_flip = PVR_UVFLIP_NONE;
+	cxt.txr.uv_clamp = PVR_UVCLAMP_UV;
+	cxt.txr.mipmap = PVR_MIPMAP_DISABLE;
+	cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+	cxt.depth.write = PVR_DEPTHWRITE_DISABLE; // No depth write for tracers
+	cxt.blend.src = PVR_BLEND_SRCALPHA;
+	cxt.blend.dst = PVR_BLEND_ONE; // Additive blending
+
+	// Submit header once
+	pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+	pvr_poly_compile( hdr, &cxt );
+	pvr_dr_commit( hdr );
+
+	// Load world matrix (should be viewproj after R_LoadIdentity())
+	__attribute__((aligned(8))) float aligned_matrix[16];
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 
 	gravity = frametime * tr.movevars->gravity;
 	scale = 1.0 - (frametime * 0.9);
 	if( scale < 0.0f ) scale = 0.0f;
-
-	pglBegin( GL_QUADS );
 
 	for( p = cl_active_tracers; p; p = p->next )
 	{
@@ -220,7 +315,7 @@ void CL_DrawTracers( double frametime, particle_t *cl_active_tracers )
 			tmp[2] = 0;
 			VectorNormalize( tmp );
 
-			// build point along noraml line (normal is -y, x)
+			// build point along normal line (normal is -y, x)
 			VectorScale( RI.cull_vup, tmp[0] * gTracerSize[p->type], normal );
 			VectorScale( RI.cull_vright, -tmp[1] * gTracerSize[p->type], tmp2 );
 			VectorSubtract( normal, tmp2, normal );
@@ -237,16 +332,41 @@ void CL_DrawTracers( double frametime, particle_t *cl_active_tracers )
 			}
 
 			color = gTracerColors[p->color];
-			pglColor4ub( color.r, color.g, color.b, p->packedColor );
+			// Pack color as ARGB (alpha from packedColor)
+			uint32_t argb = (p->packedColor << 24) | (color.r << 16) | (color.g << 8) | color.b;
 
-				pglTexCoord2f( 0.0f, 0.8f );
-				pglVertex3fv( verts[2] );
-				pglTexCoord2f( 1.0f, 0.8f );
-				pglVertex3fv( verts[3] );
-				pglTexCoord2f( 1.0f, 0.0f );
-				pglVertex3fv( verts[1] );
-				pglTexCoord2f( 0.0f, 0.0f );
-				pglVertex3fv( verts[0] );
+			// Transform vertices
+			shz_vec4_t transformed[4];
+			for( int i = 0; i < 4; i++ )
+			{
+				transformed[i] = shz_xmtrx_transform_vec4( shz_vec3_vec4( shz_vec3_init( verts[i][0], verts[i][1], verts[i][2] ), 1.0f ));
+			}
+
+			// UV coordinates matching GL order: verts[2] (0.0, 0.8), verts[3] (1.0, 0.8), verts[1] (1.0, 0.0), verts[0] (0.0, 0.0)
+			// GL submitted as: 2, 3, 1, 0 (which forms a valid quad when triangulated)
+			// We'll submit as: 2-3-1 (first tri), 2-1-0 (second tri)
+			float uv[4][2] = {
+				{ 0.0f, 0.0f }, // verts[0]
+				{ 1.0f, 0.0f }, // verts[1]
+				{ 0.0f, 0.8f }, // verts[2]
+				{ 1.0f, 0.8f }  // verts[3]
+			};
+
+			// Submit as two triangles matching GL order: 2-3-1, 2-1-0
+			PVR_ClipAndSubmitTriangle( &dr_state,
+				transformed[2], transformed[3], transformed[1],
+				uv[2][0], uv[2][1],
+				uv[3][0], uv[3][1],
+				uv[1][0], uv[1][1],
+				argb, argb, argb
+			);
+			PVR_ClipAndSubmitTriangle( &dr_state,
+				transformed[2], transformed[1], transformed[0],
+				uv[2][0], uv[2][1],
+				uv[1][0], uv[1][1],
+				uv[0][0], uv[0][1],
+				argb, argb, argb
+			);
 		}
 
 		// evaluate position
@@ -266,10 +386,8 @@ void CL_DrawTracers( double frametime, particle_t *cl_active_tracers )
 			p->vel[2] = gravity * 0.05f;
 		}
 	}
-	pglEnd();
 
-	pglDepthMask( GL_TRUE );
-#endif // TODO
+	pvr_dr_finish();
 }
 
 /*

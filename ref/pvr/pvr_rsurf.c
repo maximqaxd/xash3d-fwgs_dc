@@ -1573,7 +1573,11 @@ static void R_RenderDecalsForSurface( msurface_t *fa, int cull_type )
 	{
 		// batch decals to draw later
 		if( tr.num_draw_decals < MAX_DECAL_SURFS && fa->pdecals )
-			tr.draw_decals[tr.num_draw_decals++] = fa;
+		{
+			tr.draw_decals[tr.num_draw_decals].surf = fa;
+			memcpy( tr.draw_decals[tr.num_draw_decals].world_matrix, r_world_matrix, sizeof( r_world_matrix ));
+			tr.num_draw_decals++;
+		}
 	}
 	else
 	{
@@ -1683,9 +1687,18 @@ static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 
 	if( FBitSet( fa->flags, SURF_DRAWTURB ))
 	{
-		// warp texture, no lightmaps
-		// Opaque water - pass NULL for DR state (not implemented yet)
-		EmitWaterPolys( fa, cull_type == CULL_BACKSIDE, R_UploadRipples( t ), NULL, 0xFFFFFFFF );
+		// Water/warp surface, no lightmaps.
+		// If wateralpha < 1, render later in TR pass; otherwise render now in OP list.
+		if( tr.movevars->wateralpha < 1.0f )
+		{
+			// keep existing separate-pass bookkeeping
+			// (draw_wateralpha is managed in R_DrawTextureChains).
+			return;
+		}
+
+		// Bind ripple texture (or base texture) before emitting polys.
+		qboolean use_ripples = R_UploadRipples( t );
+		EmitWaterPolys( fa, cull_type == CULL_BACKSIDE, use_ripples );
 		return;
 	}
 	else GL_Bind( XASH_TEXTURE0, t->gl_texturenum );
@@ -1808,8 +1821,8 @@ static void R_DrawTextureChains( void )
 			for( glpoly2_t *p = s->polys; p != NULL; p = p->chain )
 			{
 				DrawGLPoly( p, 0.0f, 0.0f, s, &dr_state );
+				R_RenderDecalsForSurface( s, CULL_VISIBLE );
 			}
-			R_RenderDecalsForSurface( s, CULL_VISIBLE );
 		}
 
 		pvr_dr_finish();
@@ -1894,8 +1907,6 @@ void R_DrawAlphaTextureChains( void )
 			if( s->polys )
 				DrawGLPolyVertices( s->polys, &dr_state, NULL, 0.0f, 0.0f, 0.0f, 0.0f );
 
-			// Queue this surface for the TR lightmap pass (depth=EQUAL multiply).
-			R_RenderLightmapForSurface( s );
 		}
 
 		t->texturechain = NULL;
@@ -1933,15 +1944,6 @@ void R_DrawWaterSurfaces( void )
 	// go back to the world matrix
 	R_LoadIdentity();
 
-	// Translucent water surfaces are rendered in TR_POLY list
-	// They use alpha blending with wateralpha and no depth write
-	pvr_dr_state_t dr_state;
-	pvr_dr_init( &dr_state );
-
-	// Calculate water alpha color (white with wateralpha)
-	uint8_t water_alpha = (uint8_t)(tr.movevars->wateralpha * 255.0f);
-	uint32_t water_color = (water_alpha << 24) | 0x00FFFFFF; // ARGB: alpha in high byte
-
 	for( i = draw_wateralpha.first; i <= draw_wateralpha.last; i++ )
 	{
 		t = WORLDMODEL->textures[i];
@@ -1954,49 +1956,19 @@ void R_DrawWaterSurfaces( void )
 		if( !FBitSet( s->flags, SURF_DRAWTURB ))
 			continue;
 
-		// Get texture for water surface (from first surface in chain)
-		// R_TextureAnimation expects a surface, not a texture
-		texture_t *anim_tex = R_TextureAnimation( s );
-		if( !anim_tex )
-			continue;
-		int texnum = anim_tex->gl_texturenum;
-		gl_texture_t *glt = R_GetTexture( texnum );
-		if( !glt || !glt->loaded || !glt->vram_ptr )
-			continue;
-
-		// Setup PVR context for translucent water in TR list
-		pvr_poly_cxt_t cxt;
-		pvr_poly_cxt_txr( &cxt, PVR_LIST_TR_POLY, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
-		cxt.gen.culling = PVR_CULLING_NONE;
-		cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
-		// Flat shading is default, don't set explicitly
-		cxt.gen.alpha = PVR_ALPHA_ENABLE;
-		cxt.txr.env = PVR_TXRENV_MODULATE; // MODULATE so vertex color (with alpha) affects texture
-		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
-		cxt.depth.write = PVR_DEPTHWRITE_DISABLE; // No depth write for translucent water
-		cxt.blend.src = PVR_BLEND_SRCALPHA;
-		cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
-		// Don't explicitly enable blending - it's enabled automatically when alpha is enabled and blend src/dst are set
-
-		// Submit header for this texture (once per texture chain)
-		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
-		pvr_poly_compile( hdr, &cxt );
-		pvr_dr_commit( hdr );
-
 		// Render all water surfaces with this texture (like GL code)
 		// Note: GL code doesn't check SURF_DRAWTURB again in the loop, it just calls EmitWaterPolys for all
 		for( ; s; s = s->texturechain )
 		{
-			// EmitWaterPolys will handle the actual polygon submission
-			// Pass DR state and water color for translucent water
-			EmitWaterPolys( s, false, R_UploadRipples( t ), &dr_state, water_color );
+			// Bind ripple texture (or base texture) before emitting polys.
+			qboolean use_ripples = R_UploadRipples( t );
+			EmitWaterPolys( s, false, use_ripples );
 		}
 
 		t->texturechain = NULL;
 	}
 
 	R_ResetSeparatePass( &draw_wateralpha );
-	pvr_dr_finish();
 }
 
 /*
@@ -2205,10 +2177,8 @@ void R_DrawBrushModel( cl_entity_t *e )
 	for( i = 0; i < num_sorted; i++ )
 		R_RenderBrushPoly( gpGlobals->draw_surfaces[i].surf, gpGlobals->draw_surfaces[i].cull );
 
-
-	DrawDecalsBatch();
 	GL_ResetFogColor();
-	R_RenderFullbrights();
+	//DrawDecalsBatch();
 
 	// restore fog here
 	if( e->curstate.rendermode == kRenderTransAdd )
@@ -2523,17 +2493,19 @@ void R_DrawWorld( void )
 
 	if( !ENGINE_GET_PARM( PARM_DEV_OVERVIEW ))
 	{
-		DrawDecalsBatch();
 		GL_ResetFogColor();
-		R_RenderFullbrights();
+	//	DrawDecalsBatch();
 		if( skychain )
+		{
+			// Ensure world matrix is set to viewproj for skybox (camera-relative)
+			R_LoadIdentity();
 			R_DrawSkyBox();
+		}
 	}
 
 	end = gEngfuncs.pfnTime();
 
 	r_stats.t_world_draw = end - start;
-	tr.num_draw_decals = 0;
 	skychain = NULL;
 
 	R_DrawTriangleOutlines ();

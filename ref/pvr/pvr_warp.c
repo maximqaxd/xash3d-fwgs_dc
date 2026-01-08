@@ -16,6 +16,7 @@ GNU General Public License for more details.
 
 #include "pvr_local.h"
 #include "wadfile.h"
+#include "pvr_clip.h"
 
 #define SKYCLOUDS_QUALITY	12
 #define MAX_CLIP_VERTS	128 // skybox clip vertices
@@ -78,7 +79,8 @@ static struct
 	short buf[2][RIPPLES_TEXSIZE];
 	qboolean update;
 
-	uint32_t texture[RIPPLES_TEXSIZE];
+	// Dynamic ripple texture in RGB565 (uploaded to PVR VRAM).
+	uint16_t texture[RIPPLES_TEXSIZE];
 } g_ripple;
 
 
@@ -257,6 +259,40 @@ static void MakeSkyVec( float s, float t, int axis )
 #endif // TODO
 }
 
+// PVR helper: compute skybox vertex in world space + its UV in [0..1].
+static void MakeSkyVecPVR( float s_in, float t_in, int axis, vec3_t out_xyz, float *out_u, float *out_v )
+{
+	int j, k, farclip;
+	vec3_t v, b;
+	float s, t;
+
+	farclip = RI.farClip;
+
+	b[0] = s_in * (farclip >> 1);
+	b[1] = t_in * (farclip >> 1);
+	b[2] = (farclip >> 1);
+
+	for( j = 0; j < 3; j++ )
+	{
+		k = st_to_vec[axis][j];
+		v[j] = (k < 0) ? -b[-k-1] : b[k-1];
+		v[j] += RI.cullorigin[j];
+	}
+
+	// avoid bilerp seam
+	s = (s_in + 1.0f) * 0.5f;
+	t = (t_in + 1.0f) * 0.5f;
+
+	s = bound( 1.0f / 512.0f, s, 511.0f / 512.0f );
+	t = bound( 1.0f / 512.0f, t, 511.0f / 512.0f );
+
+	t = 1.0f - t;
+
+	VectorCopy( v, out_xyz );
+	if( out_u ) *out_u = s;
+	if( out_v ) *out_v = t;
+}
+
 /*
 ==============
 R_ClearSkyBox
@@ -341,43 +377,143 @@ R_DrawSkybox
 void R_DrawSkyBox( void )
 {
 	int	i;
-
+	__attribute__((aligned(8))) float aligned_matrix[16];
 	RI.isSkyVisible = true;
 
 	// don't fogging skybox (this fix old Half-Life bug)
 	if( !RI.fogSkybox ) R_AllowFog( false );
 
-#if 0
-	if( RI.fogEnabled )
-		pglFogf( GL_FOG_DENSITY, RI.fogDensity * 0.5f );
+	// PVR: submit skybox into the currently open list (expected OP list).
+	// We draw it *after* world surfaces, so depth compare must fail where world wrote depth.
+	// With z = 1/w convention and depthcmp=GEQUAL, submitting a very small z works well.
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
 
-	pglDisable( GL_BLEND );
-	pglDisable( GL_ALPHA_TEST );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
+	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 
 	for( i = 0; i < SKYBOX_MAX_SIDES; i++ )
 	{
 		if( RI.skyMins[0][i] >= RI.skyMaxs[0][i] || RI.skyMins[1][i] >= RI.skyMaxs[1][i] )
 			continue;
 
-		if( tr.skyboxTextures[r_skyTexOrder[i]] )
-			GL_Bind( XASH_TEXTURE0, tr.skyboxTextures[r_skyTexOrder[i]] );
-		else GL_Bind( XASH_TEXTURE0, tr.grayTexture ); // stub
+		const int texnum = tr.skyboxTextures[r_skyTexOrder[i]] ? tr.skyboxTextures[r_skyTexOrder[i]] : tr.grayTexture;
+		gl_texture_t *glt = R_GetTexture( texnum );
+		if( !glt || !glt->loaded || !glt->vram_ptr )
+			continue;
 
-		pglBegin( GL_QUADS );
-		MakeSkyVec( RI.skyMins[0][i], RI.skyMins[1][i], i );
-		MakeSkyVec( RI.skyMins[0][i], RI.skyMaxs[1][i], i );
-		MakeSkyVec( RI.skyMaxs[0][i], RI.skyMaxs[1][i], i );
-		MakeSkyVec( RI.skyMaxs[0][i], RI.skyMins[1][i], i );
-		pglEnd();
+		pvr_poly_cxt_t cxt;
+		pvr_poly_cxt_txr( &cxt, PVR_LIST_OP_POLY, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
+		cxt.gen.culling = PVR_CULLING_NONE;
+		cxt.gen.alpha = PVR_ALPHA_DISABLE;
+		cxt.gen.fog_type = ( glState.isFogEnabled && RI.fogSkybox ) ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
+		cxt.txr.env = PVR_TXRENV_REPLACE;
+		cxt.txr.uv_flip = PVR_UVFLIP_NONE;
+		cxt.txr.uv_clamp = PVR_UVCLAMP_UV;
+		cxt.txr.alpha = PVR_TXRALPHA_DISABLE;
+		cxt.txr.mipmap = PVR_MIPMAP_DISABLE;
+		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+		cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
+
+		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+		pvr_poly_compile( hdr, &cxt );
+		pvr_dr_commit( hdr );
+
+		// Build quad vertices + UVs
+		vec3_t p[4];
+		float uv[4][2];
+		MakeSkyVecPVR( RI.skyMins[0][i], RI.skyMins[1][i], i, p[0], &uv[0][0], &uv[0][1] );
+		MakeSkyVecPVR( RI.skyMins[0][i], RI.skyMaxs[1][i], i, p[1], &uv[1][0], &uv[1][1] );
+		MakeSkyVecPVR( RI.skyMaxs[0][i], RI.skyMaxs[1][i], i, p[2], &uv[2][0], &uv[2][1] );
+		MakeSkyVecPVR( RI.skyMaxs[0][i], RI.skyMins[1][i], i, p[3], &uv[3][0], &uv[3][1] );
+
+		// Transform to clip space. Use computed z (1/w) so sky only fills pixels where no depth was written.
+		// This avoids any chance of sky overdrawing far world geometry due to z precision.
+		shz_vec4_t tp[4];
+		float invw[4];
+		for( int k = 0; k < 4; k++ )
+		{
+			tp[k] = shz_xmtrx_transform_vec4( shz_vec3_vec4( shz_vec3_init( p[k][0], p[k][1], p[k][2] ), 1.0f ));
+			if( tp[k].w <= 0.0001f )
+				invw[k] = 0.0f;
+			else invw[k] = shz_invf_fsrra( tp[k].w );
+		}
+
+		// Triangle 0-1-2
+		{
+			pvr_vertex_t *vtx = pvr_dr_target( dr_state );
+			vtx->flags = PVR_CMD_VERTEX;
+			vtx->x = tp[0].x * invw[0];
+			vtx->y = tp[0].y * invw[0];
+			vtx->z = invw[0];
+			vtx->u = uv[0][0];
+			vtx->v = uv[0][1];
+			vtx->argb = 0xFFFFFFFF;
+			vtx->oargb = 0;
+			pvr_dr_commit( vtx );
+
+			vtx = pvr_dr_target( dr_state );
+			vtx->flags = PVR_CMD_VERTEX;
+			vtx->x = tp[1].x * invw[1];
+			vtx->y = tp[1].y * invw[1];
+			vtx->z = invw[1];
+			vtx->u = uv[1][0];
+			vtx->v = uv[1][1];
+			vtx->argb = 0xFFFFFFFF;
+			vtx->oargb = 0;
+			pvr_dr_commit( vtx );
+
+			vtx = pvr_dr_target( dr_state );
+			vtx->flags = PVR_CMD_VERTEX_EOL;
+			vtx->x = tp[2].x * invw[2];
+			vtx->y = tp[2].y * invw[2];
+			vtx->z = invw[2];
+			vtx->u = uv[2][0];
+			vtx->v = uv[2][1];
+			vtx->argb = 0xFFFFFFFF;
+			vtx->oargb = 0;
+			pvr_dr_commit( vtx );
+		}
+
+		// Triangle 0-2-3
+		{
+			pvr_vertex_t *vtx = pvr_dr_target( dr_state );
+			vtx->flags = PVR_CMD_VERTEX;
+			vtx->x = tp[0].x * invw[0];
+			vtx->y = tp[0].y * invw[0];
+			vtx->z = invw[0];
+			vtx->u = uv[0][0];
+			vtx->v = uv[0][1];
+			vtx->argb = 0xFFFFFFFF;
+			vtx->oargb = 0;
+			pvr_dr_commit( vtx );
+
+			vtx = pvr_dr_target( dr_state );
+			vtx->flags = PVR_CMD_VERTEX;
+			vtx->x = tp[2].x * invw[2];
+			vtx->y = tp[2].y * invw[2];
+			vtx->z = invw[2];
+			vtx->u = uv[2][0];
+			vtx->v = uv[2][1];
+			vtx->argb = 0xFFFFFFFF;
+			vtx->oargb = 0;
+			pvr_dr_commit( vtx );
+
+			vtx = pvr_dr_target( dr_state );
+			vtx->flags = PVR_CMD_VERTEX_EOL;
+			vtx->x = tp[3].x * invw[3];
+			vtx->y = tp[3].y * invw[3];
+			vtx->z = invw[3];
+			vtx->u = uv[3][0];
+			vtx->v = uv[3][1];
+			vtx->argb = 0xFFFFFFFF;
+			vtx->oargb = 0;
+			pvr_dr_commit( vtx );
+		}
 	}
 
-	if( !RI.fogSkybox )
-		R_AllowFog( true );
+	pvr_dr_finish();
 
-	if( RI.fogEnabled )
-		pglFogf( GL_FOG_DENSITY, RI.fogDensity );
-#endif // TODO
 	R_LoadIdentity();
 }
 
@@ -584,9 +720,55 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 
 	// reset fog color for nonlightmapped water
 	GL_ResetFogColor();
-#if 0
-	if( useQuads )
-		pglBegin( GL_QUADS );
+
+	// PVR submit (uses currently bound texture via glState.currentTexturesIndex if available).
+	const int texnum = ( glState.currentTexturesIndex > 0 ) ? glState.currentTexturesIndex : ( warp->texinfo && warp->texinfo->texture ? warp->texinfo->texture->gl_texturenum : 0 );
+	gl_texture_t *glt = ( texnum > 0 ) ? R_GetTexture( texnum ) : NULL;
+	if( !glt || !glt->loaded || !glt->vram_ptr )
+	{
+		GL_SetupFogColorForSurfaces();
+		return;
+	}
+
+	const float wateralpha = tr.movevars ? tr.movevars->wateralpha : 1.0f;
+	const qboolean translucent = ( wateralpha < 1.0f );
+	const uint8_t a = (uint8_t)bound( 0, (int)(wateralpha * 255.0f), 255 );
+	const uint32_t water_color = ((uint32_t)a << 24) | 0x00FFFFFF;
+
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
+
+	pvr_poly_cxt_t cxt;
+	pvr_poly_cxt_txr( &cxt, translucent ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY, glt->format, glt->width, glt->height, glt->vram_ptr, PVR_FILTER_BILINEAR );
+	cxt.gen.culling = PVR_CULLING_NONE;
+	cxt.gen.fog_type = glState.isFogEnabled ? PVR_FOG_TABLE : PVR_FOG_DISABLE;
+	cxt.txr.env = PVR_TXRENV_MODULATE;
+	cxt.txr.uv_flip = PVR_UVFLIP_NONE;
+	cxt.txr.uv_clamp = PVR_UVCLAMP_NONE; // water wraps naturally
+	cxt.txr.alpha = translucent ? PVR_TXRALPHA_ENABLE : PVR_TXRALPHA_DISABLE;
+	cxt.txr.mipmap = PVR_MIPMAP_DISABLE;
+
+	if( translucent )
+	{
+		cxt.gen.alpha = PVR_ALPHA_ENABLE;
+		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+		cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
+		cxt.blend.src = PVR_BLEND_SRCALPHA;
+		cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
+	}
+	else
+	{
+		cxt.gen.alpha = PVR_ALPHA_DISABLE;
+		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
+		cxt.depth.write = PVR_DEPTHWRITE_ENABLE;
+	}
+
+	pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+	pvr_poly_compile( hdr, &cxt );
+	pvr_dr_commit( hdr );
+
+	// Load matrix once
+	shz_xmtrx_load_4x4((shz_mat4x4_t*)r_world_matrix);
 
 	for( p = warp->polys; p; p = p->next )
 	{
@@ -594,10 +776,14 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 			v = p->verts[0] + ( p->numverts - 1 ) * VERTEXSIZE;
 		else v = p->verts[0];
 
-		if( !useQuads )
-			pglBegin( GL_POLYGON );
+		const int numverts = p->numverts;
+		if( numverts < 3 || numverts > 64 )
+			continue;
 
-		for( i = 0; i < p->numverts; i++ )
+		shz_vec4_t transformed[64];
+		float uv[64][2];
+
+		for( i = 0; i < numverts; i++ )
 		{
 			if( waveHeight )
 			{
@@ -624,21 +810,31 @@ void EmitWaterPolys( msurface_t *warp, qboolean reverse, qboolean ripples )
 			s *= ( 1.0f / SUBDIVIDE_SIZE );
 			t *= ( 1.0f / SUBDIVIDE_SIZE );
 
-			pglTexCoord2f( s, t );
-			pglVertex3f( v[0], v[1], nv );
+			uv[i][0] = s;
+			uv[i][1] = t;
+
+			shz_vec3_t pos = shz_vec3_init( v[0], v[1], nv );
+			transformed[i] = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
 
 			if( reverse )
 				v -= VERTEXSIZE;
 			else v += VERTEXSIZE;
 		}
 
-		if( !useQuads )
-			pglEnd();
+		// Fan triangulation with near-plane clipping
+		for( i = 1; i < numverts - 1; i++ )
+		{
+			PVR_ClipAndSubmitTriangle( &dr_state,
+				transformed[0], transformed[i], transformed[i+1],
+				uv[0][0], uv[0][1],
+				uv[i][0], uv[i][1],
+				uv[i+1][0], uv[i+1][1],
+				water_color, water_color, water_color );
+		}
 	}
 
-	if( useQuads )
-		pglEnd();
-#endif
+	pvr_dr_finish();
+
 	GL_SetupFogColorForSurfaces();
 }
 
@@ -778,8 +974,8 @@ qboolean R_UploadRipples( texture_t *image )
 		pic.depth = 1;
 		pic.flags = IMAGE_HAS_COLOR;
 		pic.buffer = (byte *)g_ripple.texture;
-		pic.type = PF_RGBA_32;
-		pic.size = width * height * 4;
+		pic.type = PF_RGB_5650;
+		pic.size = width * height * 2;
 		pic.numMips = 1;
 		memset( pic.buffer, 0, pic.size );
 
@@ -823,12 +1019,42 @@ qboolean R_UploadRipples( texture_t *image )
 			if( py < 0 ) py = image->height + py;
 			if( px < 0 ) px = image->width + px;
 
-			g_ripple.texture[y * width + x] = pixels[py * image->width + px];
+			// Convert source RGBA32 (little-endian packed) to RGB565.
+			{
+				const uint32_t c = pixels[py * image->width + px];
+				const uint8_t r = (uint8_t)(c & 0xFF);
+				const uint8_t g = (uint8_t)((c >> 8) & 0xFF);
+				const uint8_t b = (uint8_t)((c >> 16) & 0xFF);
+				g_ripple.texture[y * width + x] = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+			}
 		}
 	}
-#if 0
-	pglTexImage2D( GL_TEXTURE_2D, 0, glt->format, width, height, 0,
-		GL_RGBA, GL_UNSIGNED_BYTE, g_ripple.texture );
-#endif // TODO
+
+	// Upload updated ripple texture to PVR VRAM.
+	{
+		gl_texture_t *dst = R_GetTexture( image->fb_texturenum );
+		if( dst && dst->loaded && dst->vram_ptr )
+		{
+			const size_t bytes = (size_t)width * (size_t)height * 2;
+			const size_t padded = ( bytes + 31 ) & ~31;
+
+			if( padded == bytes )
+			{
+				pvr_txr_load( g_ripple.texture, dst->vram_ptr, bytes );
+			}
+			else
+			{
+				byte *tmp = (byte *)Mem_Malloc( r_temppool, padded );
+				if( tmp )
+				{
+					memcpy( tmp, g_ripple.texture, bytes );
+					memset( tmp + bytes, 0, padded - bytes );
+					pvr_txr_load( tmp, dst->vram_ptr, padded );
+					Mem_Free( tmp );
+				}
+			}
+		}
+	}
+
 	return true;
 }
