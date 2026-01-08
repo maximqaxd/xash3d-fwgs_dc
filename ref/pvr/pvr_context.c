@@ -57,26 +57,137 @@ CL_FillRGBA
 */
 static void CL_FillRGBA( int rendermode, float _x, float _y, float _w, float _h, byte r, byte g, byte b, byte a )
 {
-#if 0
-	pglDisable( GL_TEXTURE_2D );
-	pglEnable( GL_BLEND );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+	// Skip if fully transparent
+	if( a == 0 )
+		return;
+
+	// Ensure TR list is open for 2D drawing
+	if( g_pvr_current_list != PVR_LIST_TR_POLY )
+	{
+		// If we're not in 2D mode, this might be called outside normal rendering
+		// Just skip silently to avoid corruption
+		return;
+	}
+
+	// Convert screen coordinates to clip space (-1 to 1)
+	// PVR uses screen space directly when 2D mode is active
+	const float screen_width = (float)gpGlobals->width;
+	const float screen_height = (float)gpGlobals->height;
+	
+	// Convert to normalized device coordinates
+	float x1 = (_x / screen_width) * 2.0f - 1.0f;
+	float y1 = 1.0f - ((_y + _h) / screen_height) * 2.0f; // Y is flipped
+	float x2 = ((_x + _w) / screen_width) * 2.0f - 1.0f;
+	float y2 = 1.0f - (_y / screen_height) * 2.0f;
+
+	// Pack color (ARGB format)
+	uint32_t argb = (a << 24) | (r << 16) | (g << 8) | b;
+
+	// Initialize DR state
+	pvr_dr_state_t dr_state;
+	pvr_dr_init( &dr_state );
+
+	// Setup colored polygon context (no texture)
+	pvr_poly_cxt_t cxt;
+	pvr_poly_cxt_col( &cxt, PVR_LIST_TR_POLY );
+	cxt.gen.culling = PVR_CULLING_NONE;
+	cxt.gen.fog_type = PVR_FOG_DISABLE;
+	cxt.gen.alpha = PVR_ALPHA_ENABLE;
+	cxt.depth.comparison = PVR_DEPTHCMP_ALWAYS; // Always pass depth test for 2D
+	cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
+	
+	// Set blend mode based on rendermode
 	if( rendermode == kRenderTransAdd )
-		pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
+	{
+		// Additive blending
+		cxt.blend.src = PVR_BLEND_SRCALPHA;
+		cxt.blend.dst = PVR_BLEND_ONE;
+	}
 	else
-		pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
-	pglColor4ub( r, g, b, a );
+	{
+		// Normal alpha blending
+		cxt.blend.src = PVR_BLEND_SRCALPHA;
+		cxt.blend.dst = PVR_BLEND_INVSRCALPHA;
+	}
 
-	pglBegin( GL_QUADS );
-		pglVertex2f( _x, _y );
-		pglVertex2f( _x + _w, _y );
-		pglVertex2f( _x + _w, _y + _h );
-		pglVertex2f( _x, _y + _h );
-	pglEnd ();
+	// Submit header
+	pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+	pvr_poly_compile( hdr, &cxt );
+	pvr_dr_commit( hdr );
 
-	pglEnable( GL_TEXTURE_2D );
-	pglDisable( GL_BLEND );
-#endif
+	// Draw quad as two triangles
+	// GL order: (_x, _y), (_x+_w, _y), (_x+_w, _y+_h), (_x, _y+_h)
+	// In screen space: top-left, top-right, bottom-right, bottom-left
+	// In clip space: (x1, y2), (x2, y2), (x2, y1), (x1, y1)
+	// Triangle 1: top-left, top-right, bottom-left
+	pvr_vertex_t *vert = pvr_dr_target( dr_state );
+	vert->flags = PVR_CMD_VERTEX;
+	vert->x = x1; // top-left
+	vert->y = y2;
+	vert->z = 0.1f; // Small Z for 2D (in front of everything)
+	vert->u = 0.0f;
+	vert->v = 0.0f;
+	vert->argb = argb;
+	vert->oargb = 0;
+	pvr_dr_commit( vert );
+
+	vert = pvr_dr_target( dr_state );
+	vert->flags = PVR_CMD_VERTEX;
+	vert->x = x2; // top-right
+	vert->y = y2;
+	vert->z = 0.1f;
+	vert->u = 0.0f;
+	vert->v = 0.0f;
+	vert->argb = argb;
+	vert->oargb = 0;
+	pvr_dr_commit( vert );
+
+	vert = pvr_dr_target( dr_state );
+	vert->flags = PVR_CMD_VERTEX_EOL;
+	vert->x = x1; // bottom-left
+	vert->y = y1;
+	vert->z = 0.1f;
+	vert->u = 0.0f;
+	vert->v = 0.0f;
+	vert->argb = argb;
+	vert->oargb = 0;
+	pvr_dr_commit( vert );
+
+	// Triangle 2: top-right, bottom-right, bottom-left
+	vert = pvr_dr_target( dr_state );
+	vert->flags = PVR_CMD_VERTEX;
+	vert->x = x2; // top-right
+	vert->y = y2;
+	vert->z = 0.1f;
+	vert->u = 0.0f;
+	vert->v = 0.0f;
+	vert->argb = argb;
+	vert->oargb = 0;
+	pvr_dr_commit( vert );
+
+	vert = pvr_dr_target( dr_state );
+	vert->flags = PVR_CMD_VERTEX;
+	vert->x = x2; // bottom-right
+	vert->y = y1;
+	vert->z = 0.1f;
+	vert->u = 0.0f;
+	vert->v = 0.0f;
+	vert->argb = argb;
+	vert->oargb = 0;
+	pvr_dr_commit( vert );
+
+	vert = pvr_dr_target( dr_state );
+	vert->flags = PVR_CMD_VERTEX_EOL;
+	vert->x = x1; // bottom-left
+	vert->y = y1;
+	vert->z = 0.1f;
+	vert->u = 0.0f;
+	vert->v = 0.0f;
+	vert->argb = argb;
+	vert->oargb = 0;
+	pvr_dr_commit( vert );
+
+	pvr_dr_finish();
 }
 
 static qboolean Mod_LooksLikeWaterTexture( const char *name )
