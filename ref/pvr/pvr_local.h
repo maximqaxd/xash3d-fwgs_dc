@@ -37,6 +37,32 @@ GNU General Public License for more details.
 #include <dc/pvr.h>
 #include <sh4zam/shz_sh4zam.h>
 
+// PVR profiling support (uses SH4 performance counters)
+#ifndef REF_PVR_PROFILE
+#define REF_PVR_PROFILE 1 // Set to 1 to enable profiling
+#endif
+
+// Profiling helpers.
+#if REF_PVR_PROFILE
+#include <dc/perfctr.h>
+static inline void PVR_Prof_Start( void )
+{
+	// Use PRFC1 to avoid interfering with KOS internal timing (PRFC0).
+	perf_cntr_clear( PRFC1 );
+	perf_cntr_start( PRFC1, PMCR_ELAPSED_TIME_MODE, PMCR_COUNT_CPU_CYCLES );
+}
+
+static inline double PVR_Prof_End( void )
+{
+	perf_cntr_stop( PRFC1 );
+	// Dreamcast SH4 runs at 200MHz -> 1 cycle ~= 5ns, so ms = cycles * 5e-6.
+	const uint64_t cycles = perf_cntr_count( PRFC1 );
+	return (double)cycles * 0.000005;
+}
+#else
+static inline void PVR_Prof_Start( void ) {}
+static inline double PVR_Prof_End( void ) { return 0.0; }
+#endif
 
 #ifndef offsetof
 #ifdef __GNUC__
@@ -299,6 +325,20 @@ typedef struct
 	uint		c_client_ents;	// entities that moved to client
 	double		t_world_node;
 	double		t_world_draw;
+#if REF_PVR_PROFILE
+	// Profiling data (in milliseconds)
+	double		t_world_setup;		// World rendering setup time
+	double		t_world_lighting;	// World lighting (SampleVertexLight) time
+	double		t_world_transforms;	// World vertex transforms time
+	double		t_world_geometry;	// World geometry submission time
+	double		t_studio_setup;		// Studio model setup time
+	double		t_studio_lighting;	// Studio lighting time
+	double		t_studio_transforms;	// Studio transforms time
+	double		t_studio_geometry;	// Studio geometry submission time
+	double		t_studio_pervertex_lighting;	// Per-vertex lighting (R_LightLambert) time
+	double		t_studio_quaternions;	// Quaternion calculations (R_StudioCalcRotations, R_StudioSlerpBones) time
+	double		t_studio_bones;		// Bone transforms (Matrix3x4_ConcatTransforms) time
+#endif
 } ref_speeds_t;
 
 extern ref_speeds_t		r_stats;

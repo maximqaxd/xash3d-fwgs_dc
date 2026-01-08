@@ -856,6 +856,9 @@ Sample lightmap data at a vertex position from surf->samples
 */
 static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 {
+#if REF_PVR_PROFILE
+	PVR_Prof_Start();
+#endif
 	float r = 0.0f, g = 0.0f, b = 0.0f;
 	
 	// Sample static lightmap if available (like Q2 example, but using Xash3D lightstyle scaling)
@@ -918,6 +921,10 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 	int ig = (int)g; if( ig > 255 ) ig = 255; if( ig < 0 ) ig = 0;
 	int ib = (int)b; if( ib > 255 ) ib = 255; if( ib < 0 ) ib = 0;
 	
+#if REF_PVR_PROFILE
+	r_stats.t_world_lighting += PVR_Prof_End();
+#endif
+	
 	return 0xFF000000 | (ir << 16) | (ig << 8) | ib;
 }
 
@@ -938,6 +945,9 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 	// Load matrix once
 	__attribute__((aligned(8))) float aligned_matrix[16];
 	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
+#if REF_PVR_PROFILE
+	PVR_Prof_Start();
+#endif
 	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
 	
 	// Transform all vertices
@@ -972,8 +982,19 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			vismask_all |= (1 << i);
 	}
 	
+#if REF_PVR_PROFILE
+	r_stats.t_world_transforms += PVR_Prof_End();
+	PVR_Prof_Start(); // Start geometry profiling
+#endif
+	
 	// Early out if entire poly is behind near plane
-	if( vismask_all == 0 ) return;
+	if( vismask_all == 0 )
+	{
+#if REF_PVR_PROFILE
+		PVR_Prof_End(); // Cancel geometry profiling if nothing to submit
+#endif
+		return;
+	}
 	
 	// Check if all visible (common case)
 	unsigned all_visible_mask = (1 << numverts) - 1;
@@ -1038,6 +1059,10 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			);
 		}
 	}
+	
+#if REF_PVR_PROFILE
+	r_stats.t_world_geometry += PVR_Prof_End();
+#endif
 }
 
 /*
@@ -1775,6 +1800,9 @@ static void R_DrawTextureChains( void )
 
 		// Initialize DR state once per texture (Quake2 pattern: init once, submit header once, all polys share it, finish once)
 		pvr_dr_state_t dr_state;
+#if REF_PVR_PROFILE
+		PVR_Prof_Start();
+#endif
 		pvr_dr_init( &dr_state );
 
 		// Real HW safety: never submit a poly header unless we are sure we will emit at least one vertex afterward.
@@ -1848,6 +1876,9 @@ static void R_DrawTextureChains( void )
 		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
 		pvr_poly_compile( hdr, &cxt );
 		pvr_dr_commit( hdr );
+#if REF_PVR_PROFILE
+		r_stats.t_world_setup += PVR_Prof_End();
+#endif
 		
 		// Now render all surfaces with this texture (they share the header and DR state we just created)
 		for( ; s != NULL; s = s->texturechain )
@@ -2242,6 +2273,26 @@ void R_DrawBrushModel( cl_entity_t *e )
 
 =============================================================
 */
+
+// Fast plane distance using SH4Zam for non-axial planes.
+// Mirrors the Quake2-style optimization: axial planes avoid a full dot product.
+SHZ_FORCE_INLINE float R_PlaneDiff_SHZ( const vec3_t org, const mplane_t *p )
+{
+	switch( p->type )
+	{
+	case PLANE_X: return org[0] - p->dist;
+	case PLANE_Y: return org[1] - p->dist;
+	case PLANE_Z: return org[2] - p->dist;
+	default:
+	{
+		// Use SH4 FIPR-based dot for best throughput.
+		const shz_vec3_t v = shz_vec3_init( org[0], org[1], org[2] );
+		const shz_vec3_t n = shz_vec3_init( p->normal[0], p->normal[1], p->normal[2] );
+		return shz_vec3_dot( v, n ) - p->dist;
+	}
+	}
+}
+
 /*
 ================
 R_RecursiveWorldNode
@@ -2258,17 +2309,18 @@ static void R_RecursiveWorldNode( mnode_t *node, uint clipflags )
 	int numsurfaces, firstsurface;
 
 loc0:
-	if( node->contents == CONTENTS_SOLID )
+	if( SHZ_UNLIKELY( node->contents == CONTENTS_SOLID ))
 		return; // hit a solid leaf
 
-	if( node->visframe != tr.visframecount )
+	if( SHZ_UNLIKELY( node->visframe != tr.visframecount ))
 		return;
 
-	if( clipflags && !r_nocull.value )
+	if( SHZ_UNLIKELY( clipflags && !r_nocull.value ))
 	{
+		const mplane_t *frustum = RI.frustum.planes;
 		for( i = 0; i < 6; i++ )
 		{
-			const mplane_t	*p = &RI.frustum.planes[i];
+			const mplane_t *p = &frustum[i];
 
 			if( !FBitSet( clipflags, BIT( i )))
 				continue;
@@ -2289,8 +2341,10 @@ loc0:
 
 		if( c )
 		{
+			SHZ_PREFETCH( mark );
 			do
 			{
+				SHZ_PREFETCH( mark + 1 );
 				(*mark)->visframe = tr.framecount;
 				mark++;
 			} while( --c );
@@ -2307,19 +2361,23 @@ loc0:
 	// node is just a decision point, so go down the apropriate sides
 
 	// find which side of the node we are on
-	dot = PlaneDiff( tr.modelorg, node->plane );
+	dot = R_PlaneDiff_SHZ( tr.modelorg, node->plane );
 	side = (dot >= 0.0f) ? 0 : 1;
 
 	// recurse down the children, front side first
 	node_children( children, node, WORLDMODEL );
+	SHZ_PREFETCH( children[!side] );
 	R_RecursiveWorldNode( children[side], clipflags );
 
 	firstsurface = node_firstsurface( node, WORLDMODEL );
 	numsurfaces = node_numsurfaces( node, WORLDMODEL );
 
 	// draw stuff
-	for( c = numsurfaces, surf = WORLDMODEL->surfaces + firstsurface; c; c--, surf++ )
+	surf = WORLDMODEL->surfaces + firstsurface;
+	if( numsurfaces ) SHZ_PREFETCH( surf );
+	for( c = numsurfaces; c; c--, surf++ )
 	{
+		SHZ_PREFETCH( surf + 1 );
 		if( R_CullSurface( surf, &RI.frustum, clipflags ))
 			continue;
 
@@ -2517,12 +2575,18 @@ void R_DrawWorld( void )
 	R_ClearSkyBox ();
 
 	start = gEngfuncs.pfnTime();
+#if REF_PVR_PROFILE
+	PVR_Prof_Start();
+#endif
 	if( RI.drawOrtho )
 		R_DrawWorldTopView( WORLDMODEL->nodes, RI.frustum.clipFlags );
 	else R_RecursiveWorldNode( WORLDMODEL->nodes, RI.frustum.clipFlags );
+#if REF_PVR_PROFILE
+	r_stats.t_world_node = PVR_Prof_End();
+#else
 	end = gEngfuncs.pfnTime();
-
 	r_stats.t_world_node = end - start;
+#endif
 
 	start = gEngfuncs.pfnTime();
 
