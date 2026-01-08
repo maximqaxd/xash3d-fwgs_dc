@@ -2119,7 +2119,8 @@ static void R_StudioDrawNormalMesh( short *ptricmds, vec3_t *pstudionorms, float
 		for( int j = 0; j < vertCount; ++j )
 		{
 			tv[j] = shz_xmtrx_transform_vec4( shz_vec3_vec4( pv[j], 1.0f ));
-			if( tv[j].z < -tv[j].w )
+			// sh4zam perspective: near plane is (w >= z). Also guard against near-zero/negative w.
+			if( tv[j].w <= 0.0001f || tv[j].w < tv[j].z )
 				all_visible = false;
 			inv_w[j] = shz_invf_fsrra( tv[j].w );
 			sx[j] = tv[j].x * inv_w[j];
@@ -2288,7 +2289,7 @@ static void R_StudioDrawFloatMesh( short *ptricmds, vec3_t *pstudionorms )
 		for( int j = 0; j < vertCount; ++j )
 		{
 			tv[j] = shz_xmtrx_transform_vec4( shz_vec3_vec4( pv[j], 1.0f ));
-			if( tv[j].z < -tv[j].w )
+			if( tv[j].w <= 0.0001f || tv[j].w < tv[j].z )
 				all_visible = false;
 			inv_w[j] = shz_invf_fsrra( tv[j].w );
 			sx[j] = tv[j].x * inv_w[j];
@@ -2469,7 +2470,7 @@ static void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, float
 		for( int j = 0; j < vertCount; ++j )
 		{
 			tv[j] = shz_xmtrx_transform_vec4( shz_vec3_vec4( pv[j], 1.0f ));
-			if( tv[j].z < -tv[j].w )
+			if( tv[j].w <= 0.0001f || tv[j].w < tv[j].z )
 				all_visible = false;
 			inv_w[j] = shz_invf_fsrra( tv[j].w );
 			sx[j] = tv[j].x * inv_w[j];

@@ -803,7 +803,8 @@ static qboolean R_SpriteQuadAnyVisible( mspriteframe_t *frame, vec3_t org, vec3_
 	for( int i = 0; i < 4; i++ )
 	{
 		shz_vec4_t tp = shz_xmtrx_transform_vec4( shz_vec3_vec4( shz_vec3_init( points[i][0], points[i][1], points[i][2] ), 1.0f ));
-		if( tp.z >= -tp.w )
+		// sh4zam perspective: near plane is (w >= z)
+		if( tp.w >= tp.z )
 			vismask |= (1U << i);
 	}
 

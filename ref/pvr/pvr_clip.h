@@ -6,7 +6,9 @@
 #include <dc/pvr.h>
 #include <sh4zam/shz_sh4zam.h>
 
-// Clip a single triangle against the near plane (z >= -w) in clip space and submit it.
+// Clip a single triangle against the near plane in clip space and submit it.
+// NOTE: Our projection (sh4zam shz_xmtrx_apply_perspective) produces clip.z = near_z and clip.w = -z_eye,
+// so the correct near-plane test is (w >= z), NOT the OpenGL-style (z >= -w).
 // - Inputs are clip-space positions (after MVP), with U/V and packed ARGB per vertex.
 // - Output is submitted as a triangle strip: either 3 verts (1 tri) or 4 verts (2 tris).
 void PVR_ClipAndSubmitTriangle(
