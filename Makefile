@@ -95,12 +95,12 @@ $(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
 	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
 	$(KOS_BASE)/utils/scramble/scramble $(TARGET).BIN 1ST_READ.BIN
 	-rm -f build/1ST_READ.BIN
-	cp 1ST_READ.BIN build
+	cp 1ST_READ.BIN ../xash3d-hl_repack 
 
 1ST_READ_DS.BIN: $(TARGET) IP.BIN
 	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
-	-rm -f build/1ST_READ.BIN
-	cp 1ST_READ.BIN build
+	-rm -f ../xash3d-hl_repack/1ST_READ.BIN
+	cp 1ST_READ.BIN ../xash3d-hl_repack 
 
 IP.BIN: ip.txt
 	-rm -f build/IP.BIN
@@ -112,13 +112,13 @@ repack: clean-tools tools
 	@$(MAKE) -f scripts/dreamcast/gearbox/repack_valve.mk all
 
 # Step 4: Create images
+ds_iso: engine 1ST_READ_DS.BIN 
+	@echo "Creating Dreamshell ISO image..."
+	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso ../xash3d-hl_repack 
 cdi: engine  
 	@echo "Creating CDI image..."
 	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
 
-ds_iso: engine 1ST_READ_DS.BIN 
-	@echo "Creating Dreamshell ISO image..."
-	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso ../xash3d-hl_repack 
 	
 emu: cdi
 	@echo "Running flycast"
