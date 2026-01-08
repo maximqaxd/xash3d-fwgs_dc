@@ -175,7 +175,7 @@ char info[MAX_PRINT_MSG];
 
 // stacktrace from DCA3 port
 __attribute__((noinline)) void stacktrace() {
-	uint32 sp=0, pr=0;
+	uint32_t sp=0, pr=0;
 	__asm__ __volatile__(
 		"mov	r15,%0\n"
 		"sts	pr,%1\n"
