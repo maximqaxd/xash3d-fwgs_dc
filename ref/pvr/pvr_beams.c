@@ -311,17 +311,13 @@ static void R_DrawSegs( vec3_t source, vec3_t delta, float width, float scale, f
 			// draw regular segment
 			VectorMA( curSeg.pos, ( curSeg.width * 0.5f ), vAveNormal, vPoint1 );
 			VectorMA( curSeg.pos, (-curSeg.width * 0.5f ), vAveNormal, vPoint2 );
-#if 0
-			pglTexCoord2f( 0.0f, curSeg.texcoord );
+			TriTexCoord2f( 0.0f, curSeg.texcoord );
 			TriBrightness( brightness );
-			pglNormal3fv( vAveNormal );
-			pglVertex3fv( vPoint1 );
+			TriVertex3fv( vPoint1 );
 
-			pglTexCoord2f( 1.0f, curSeg.texcoord );
+			TriTexCoord2f( 1.0f, curSeg.texcoord );
 			TriBrightness( brightness );
-			pglNormal3fv( vAveNormal );
-			pglVertex3fv( vPoint2 );
-#endif // PVR beams TODO
+			TriVertex3fv( vPoint2 );
 		}
 
 		curSeg = nextSeg;
@@ -346,18 +342,14 @@ static void R_DrawSegs( vec3_t source, vec3_t delta, float width, float scale, f
 			// draw the last segment
 			VectorMA( curSeg.pos, ( curSeg.width * 0.5f ), vLastNormal, vPoint1 );
 			VectorMA( curSeg.pos, (-curSeg.width * 0.5f ), vLastNormal, vPoint2 );
-#if 0
 			// specify the points.
-			pglTexCoord2f( 0.0f, curSeg.texcoord );
+			TriTexCoord2f( 0.0f, curSeg.texcoord );
 			TriBrightness( brightness );
-			pglNormal3fv( vLastNormal );
-			pglVertex3fv( vPoint1 );
+			TriVertex3fv( vPoint1 );
 
-			pglTexCoord2f( 1.0f, curSeg.texcoord );
+			TriTexCoord2f( 1.0f, curSeg.texcoord );
 			TriBrightness( brightness );
-			pglNormal3fv( vLastNormal );
-			pglVertex3fv( vPoint2 );
-#endif // PVR beams TODO
+			TriVertex3fv( vPoint2 );
 		}
 
 		vLast += vStep; // Advance texture scroll (v axis only)
@@ -423,7 +415,6 @@ static void R_DrawTorus( vec3_t source, vec3_t delta, float width, float scale, 
 				VectorMA( point, factor, RI.vright, point );
 			}
 		}
-#if 0
 		// Transform point into screen space
 		TriWorldToScreen( point, screen );
 
@@ -448,7 +439,6 @@ static void R_DrawTorus( vec3_t source, vec3_t delta, float width, float scale, 
 			TriTexCoord2f( 0, vLast );
 			TriVertex3fv( last1 );
 		}
-#endif // PVR beams TODO
 		VectorCopy( screen, screenLast );
 		noiseIndex += noiseStep;
 	}
@@ -486,7 +476,6 @@ static void R_DrawDisk( vec3_t source, vec3_t delta, float width, float scale, f
 
 	// clamp the beam width
 	w = fmod( freq, width * 0.1f ) * delta[2];
-#if 0
 	// NOTE: we must force the degenerate triangles to be on the edge
 	for( i = 0; i < segments; i++ )
 	{
@@ -509,7 +498,6 @@ static void R_DrawDisk( vec3_t source, vec3_t delta, float width, float scale, f
 		TriVertex3fv( point );
 		vLast += vStep;	// advance texture scroll (v axis only)
 	}
-#endif // PVR beams TODO
 }
 
 /*
@@ -541,7 +529,6 @@ static void R_DrawCylinder( vec3_t source, vec3_t delta, float width, float scal
 	// Scroll speed 3.5 -- initial texture position, scrolls 3.5/sec (1.0 is entire texture)
 	vLast = fmod( freq * speed, 1 );
 	scale = scale * length;
-#if 0
 	for ( i = 0; i < segments; i++ )
 	{
 		float	s, c;
@@ -567,7 +554,6 @@ static void R_DrawCylinder( vec3_t source, vec3_t delta, float width, float scal
 
 		vLast += vStep;	// Advance texture scroll (v axis only)
 	}
-#endif // PVR beams TODO
 }
 
 /*
@@ -621,7 +607,6 @@ static void R_DrawBeamFollow( BEAM *pbeam, float frametime )
 
 	// nothing to draw
 	if( !particles ) return;
-#if 0
 	if( !pnew && div != 0 )
 	{
 		VectorCopy( pbeam->source, delta );
@@ -718,7 +703,6 @@ static void R_DrawBeamFollow( BEAM *pbeam, float frametime )
 		VectorMA( particles->org, frametime, particles->vel, particles->org );
 		particles = particles->next;
 	}
-#endif // PVR beams TODO
 }
 
 /*
@@ -803,7 +787,6 @@ static void R_DrawRing( vec3_t source, vec3_t delta, float width, float amplitud
 		factor = rgNoise[(noiseIndex >> 16) & (NOISE_DIVISIONS - 1)] * scale;
 		factor *= cos( fraction * M_PI_F * 24 + freq );
 		VectorMA( point, factor, RI.vright, point );
-#if 0
 		// Transform point into screen space
 		TriWorldToScreen( point, screen );
 
@@ -830,7 +813,6 @@ static void R_DrawRing( vec3_t source, vec3_t delta, float width, float amplitud
 			TriTexCoord2f( 0.0f, vLast );
 			TriVertex3fv( last1 );
 		}
-#endif // PVR beams TODO
 		VectorCopy( screen, screenLast );
 		noiseIndex += noiseStep;
 		j--;
@@ -1052,7 +1034,6 @@ static void R_BeamDraw( BEAM *pbeam, float frametime )
 			pbeam->brightness *= flFade;
 		}
 	}
-#if 0
 	R_TriRenderMode( FBitSet( pbeam->flags, FBEAM_SOLID ) ? kRenderNormal : kRenderTransAdd );
 
 	if( !TriSpriteTexture( model, (int)(pbeam->frame + pbeam->frameRate * gp_cl->time) % pbeam->frameCount ))
@@ -1080,19 +1061,16 @@ static void R_BeamDraw( BEAM *pbeam, float frametime )
 	switch( pbeam->type )
 	{
 	case TE_BEAMTORUS:
-		GL_Cull( GL_NONE );
 		TriBegin( TRI_TRIANGLE_STRIP );
 		R_DrawTorus( pbeam->source, pbeam->delta, pbeam->width, pbeam->amplitude, pbeam->freq, pbeam->speed, pbeam->segments );
 		TriEnd();
 		break;
 	case TE_BEAMDISK:
-		GL_Cull( GL_NONE );
 		TriBegin( TRI_TRIANGLE_STRIP );
 		R_DrawDisk( pbeam->source, pbeam->delta, pbeam->width, pbeam->amplitude, pbeam->freq, pbeam->speed, pbeam->segments );
 		TriEnd();
 		break;
 	case TE_BEAMCYLINDER:
-		GL_Cull( GL_NONE );
 		TriBegin( TRI_TRIANGLE_STRIP );
 		R_DrawCylinder( pbeam->source, pbeam->delta, pbeam->width, pbeam->amplitude, pbeam->freq, pbeam->speed, pbeam->segments );
 		TriEnd();
@@ -1109,15 +1087,12 @@ static void R_BeamDraw( BEAM *pbeam, float frametime )
 		TriEnd();
 		break;
 	case TE_BEAMRING:
-		GL_Cull( GL_NONE );
 		TriBegin( TRI_TRIANGLE_STRIP );
 		R_DrawRing( pbeam->source, pbeam->delta, pbeam->width, pbeam->amplitude, pbeam->freq, pbeam->speed, pbeam->segments );
 		TriEnd();
 		break;
 	}
 
-	GL_Cull( GL_FRONT );
-#endif // PVR beams TODO
 	r_stats.c_view_beams_count++;
 }
 
