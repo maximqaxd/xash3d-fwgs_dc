@@ -111,6 +111,24 @@ void GL_BackendEndFrame( void )
 		Q_snprintf( r_speeds_msg, sizeof( r_speeds_msg ), "%3i tempents\n%3i viewbeams\n%3i particles",
 			r_stats.c_active_tents_count, r_stats.c_view_beams_count, r_stats.c_particle_count );
 		break;
+#if REF_PVR_PROFILE
+	case 6:
+		Q_snprintf( r_speeds_msg, sizeof( r_speeds_msg ),
+			"World Profile (ms):\nNode: %.3f\nSetup: %.3f\nLighting: %.3f\nTransforms: %.3f\nGeometry: %.3f\nTotal: %.3f",
+			r_stats.t_world_node, r_stats.t_world_setup, r_stats.t_world_lighting, r_stats.t_world_transforms,
+			r_stats.t_world_geometry, r_stats.t_world_node + r_stats.t_world_setup + r_stats.t_world_lighting + 
+			r_stats.t_world_transforms + r_stats.t_world_geometry );
+		break;
+	case 7:
+		Q_snprintf( r_speeds_msg, sizeof( r_speeds_msg ),
+			"Studio Profile (ms):\nSetup: %.3f\nLighting: %.3f\nPerVertex: %.3f\nQuaternions: %.3f\nBones: %.3f\nTransforms: %.3f\nGeometry: %.3f\nTotal: %.3f",
+			r_stats.t_studio_setup, r_stats.t_studio_lighting, r_stats.t_studio_pervertex_lighting,
+			r_stats.t_studio_quaternions, r_stats.t_studio_bones, r_stats.t_studio_transforms,
+			r_stats.t_studio_geometry, r_stats.t_studio_setup + r_stats.t_studio_lighting + 
+			r_stats.t_studio_pervertex_lighting + r_stats.t_studio_quaternions + r_stats.t_studio_bones +
+			r_stats.t_studio_transforms + r_stats.t_studio_geometry );
+		break;
+#endif
 	}
 
 	memset( &r_stats, 0, sizeof( r_stats ));
