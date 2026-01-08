@@ -131,12 +131,6 @@ static void Batch_Flush(void)
         // Force 32-bit UVs for 2D UI.
         cxt.fmt.uv = PVR_UVFMT_32BIT;
 
-        // UI textures often use sub-rect UVs in a bigger sprite sheet; avoid sampling bleeding/wrap.
-        cxt.txr.uv_flip = PVR_UVFLIP_NONE;
-        cxt.txr.uv_clamp = PVR_UVCLAMP_UV;
-        cxt.txr.mipmap = PVR_MIPMAP_DISABLE;
-        cxt.txr.mipmap_bias = PVR_MIPBIAS_NORMAL;
-
         // For 1-bit alpha (ARGB1555) textures, use alpha test to discard near-transparent pixels.
         // This handles colorkeyed sprites where some pixels are "almost" the key color but not exactly,
         // causing black borders. Alpha test threshold of 64 (out of 255) discards pixels with A < 64.
@@ -145,23 +139,18 @@ static void Batch_Flush(void)
             // Value 64 means pixels with alpha < 64 are discarded (punch-through)
             PVR_SET(0x11C, 64);
             cxt.txr.env = PVR_TXRENV_REPLACE; // No blending needed for alpha-tested cutouts
-            cxt.txr.alpha = PVR_TXRALPHA_ENABLE;
         } else if (is_smooth_alpha) {
             // Smooth alpha (ARGB4444) uses blending
             cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
-            cxt.txr.alpha = PVR_TXRALPHA_ENABLE;
         } else if (is_rgb565) {
             // RGB565: Use MODULATE for additive blending so vertex colors can brighten/modulate the texture.
             // The additive blend mode (ONE, ONE) will handle making black transparent.
             // MODULATE allows vertex color (e.g., from glState.currentColor) to affect texture brightness.
             cxt.txr.env = PVR_TXRENV_MODULATE;
-            cxt.txr.alpha = PVR_TXRALPHA_DISABLE;
         } else {
             // Other opaque textures
             cxt.txr.env = PVR_TXRENV_MODULATE;
-            cxt.txr.alpha = PVR_TXRALPHA_DISABLE;
         }
-
     } else {
         // Colored polygon (no texture)
         pvr_poly_cxt_col(&cxt, PVR_LIST_PT_POLY);

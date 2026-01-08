@@ -1343,16 +1343,15 @@ static qboolean GL_UploadTexture( gl_texture_t *tex, rgbdata_t *pic )
 		else // RGBA32
 		{
 
-   			int mipCount = GL_CalcMipmapCount(tex, (buf != NULL));
-
+   			int mipCount = 1;
 			// NOTE: only single uncompressed textures can be resamples, no mips, no layers, no sides
 			if(( tex->depth == 1 ) && (( pic->width != tex->width ) || ( pic->height != tex->height )))
 				data = GL_ResampleTexture( buf, pic->width, pic->height, tex->width, tex->height, normalMap );
 			else data = buf;
-
+#if 0
 			if( !ImageCompressed( pic->type ) && !FBitSet( tex->flags, TF_NOMIPMAP ) && FBitSet( pic->flags, IMAGE_ONEBIT_ALPHA ))
 				data = GL_ApplyFilter( data, tex->width, tex->height );
-
+#endif
 			// mips will be auto-generated if desired
 			for( j = 0; j < mipCount; j++ )
 			{
