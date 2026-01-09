@@ -68,7 +68,7 @@ tools-mdldec:
 include $(KOS_BASE)/Makefile.rules
 
 # Step 2: Build executable and create IP.BIN
-engine: clean-public $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 1ST_READ.BIN
+engine: clean-public $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 
 
 # Clean public folder object files
 clean-public:
@@ -94,11 +94,11 @@ $(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
 1ST_READ.BIN: $(TARGET) IP.BIN
 	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
 	$(KOS_BASE)/utils/scramble/scramble $(TARGET).BIN 1ST_READ.BIN
-	-rm -f build/1ST_READ.BIN
+	-rm -f ../xash3d-hl_repack/1ST_READ.BIN
 	cp 1ST_READ.BIN ../xash3d-hl_repack 
 
 1ST_READ_DS.BIN: $(TARGET) IP.BIN
-	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
+	kos-objcopy -R .stack -O binary $(TARGET) 1ST_READ.BIN
 	-rm -f ../xash3d-hl_repack/1ST_READ.BIN
 	cp 1ST_READ.BIN ../xash3d-hl_repack 
 
@@ -114,7 +114,7 @@ repack: clean-tools tools
 # Step 4: Create images
 ds_iso: engine 1ST_READ_DS.BIN 
 	@echo "Creating Dreamshell ISO image..."
-	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso ../xash3d-hl_repack 
+	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o ../xash.iso ../xash3d-hl_repack 
 cdi: engine  
 	@echo "Creating CDI image..."
 	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
