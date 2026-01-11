@@ -15,6 +15,7 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "server.h"
+#include <zlib.h>
 #include "library.h"
 #include "const.h"
 #include "render_api.h"	// decallist_t
@@ -36,6 +37,71 @@ half-life implementation of saverestore system
 #define SAVEGAME_HEADER		(('V'<<24)+('A'<<16)+('S'<<8)+'J')	// little-endian "JSAV"
 #define SAVEGAME_VERSION		0x0071				// Version 0.71 GoldSrc compatible
 #define CLIENT_SAVEGAME_VERSION	0x0067				// Version 0.67
+
+// Optional zlib-compressed payload marker (little-endian "ZSVZ")
+#define SAVEGAME_ZMAGIC		(('Z'<<24)+('V'<<16)+('S'<<8)+'Z')
+
+static qboolean SV_SaveZlibCompress( const byte *in, uint inSize, byte **out, uint *outSize )
+{
+	uLongf bound;
+	Bytef *dst;
+	int rc;
+
+	if( !in || !inSize || !out || !outSize )
+		return false;
+
+	bound = compressBound( (uLong)inSize );
+	dst = (Bytef *)Mem_Malloc( host.mempool, (size_t)bound );
+	if( !dst )
+		return false;
+
+	rc = compress2( dst, &bound, (const Bytef *)in, (uLong)inSize, Z_BEST_COMPRESSION );
+	if( rc != Z_OK )
+	{
+		Mem_Free( dst );
+		return false;
+	}
+
+	*out = (byte *)dst;
+	*outSize = (uint)bound;
+	return true;
+}
+
+static qboolean SV_SaveZlibDecompress( const byte *in, uint inSize, byte *out, uint outSize )
+{
+	uLongf destLen = (uLongf)outSize;
+	int rc;
+
+	if( !in || !inSize || !out || !outSize )
+		return false;
+
+	rc = uncompress( (Bytef *)out, &destLen, (const Bytef *)in, (uLong)inSize );
+	if( rc != Z_OK )
+		return false;
+
+	// Require exact size match to avoid partial/garbage reads.
+	return (uint)destLen == outSize;
+}
+
+static void BuildHashTableFromMemory( SAVERESTOREDATA *pSaveData )
+{
+	char *pszTokenList;
+	int i;
+
+	pszTokenList = pSaveData->pBaseData;
+
+	if( pSaveData->tokenSize > 0 )
+	{
+		for( i = 0; i < pSaveData->tokenCount; i++ )
+		{
+			pSaveData->pTokens[i] = *pszTokenList ? pszTokenList : NULL;
+			while( *pszTokenList++ ); // Find next token (after next null)
+		}
+	}
+
+	pSaveData->pBaseData = pszTokenList;
+	pSaveData->pCurrentData = pSaveData->pBaseData;
+}
 
 #if XASH_DREAMCAST
 #define SAVE_HEAPSIZE		0x040000				// reserve 400kb for now
@@ -657,6 +723,9 @@ static void DirectoryCopy( const char *pPath, dc_file_t *pFile )
 	int	i, fileSize;
 	dc_file_t	*pCopy;
 	search_t	*t;
+	byte		*inBuf = NULL;
+	byte		*outBuf = NULL;
+	uint		outSize = 0;
 
 	t = FS_Search( pPath, true, true );
 	if( !t ) return; // nothing to copy ?
@@ -670,14 +739,49 @@ static void DirectoryCopy( const char *pPath, dc_file_t *pFile )
 #else
         pCopy = FS_Open(t->filenames[i], "rb", true);
 #endif
+		if( !pCopy )
+			continue;
+
 		fileSize = FS_FileLength( pCopy );
 
 		memset( szName, 0, sizeof( szName )); // clearing the string to prevent garbage in output file
 		Q_strncpy( szName, COM_FileWithoutPath( t->filenames[i] ), sizeof( szName ));
 		FS_Write( pFile, szName, MAX_OSPATH );
-		FS_Write( pFile, &fileSize, sizeof( int ));
-		FS_FileCopy( pFile, pCopy, fileSize );
-		FS_Close( pCopy );
+
+		// Read file into memory, try to compress. If compression doesn't win, store raw.
+		inBuf = (byte *)Mem_Malloc( host.mempool, fileSize );
+		if( inBuf )
+		{
+			FS_Read( pCopy, inBuf, fileSize );
+			FS_Close( pCopy );
+
+			if( SV_SaveZlibCompress( inBuf, (uint)fileSize, &outBuf, &outSize ) && outSize < (uint)fileSize )
+			{
+				const int sizeMarker = (fileSize | 0x80000000);
+				const int compSize = (int)outSize;
+				FS_Write( pFile, &sizeMarker, sizeof( int ));
+				FS_Write( pFile, &compSize, sizeof( int ));
+				FS_Write( pFile, outBuf, outSize );
+				Mem_Free( outBuf );
+				outBuf = NULL;
+				outSize = 0;
+			}
+			else
+			{
+				FS_Write( pFile, &fileSize, sizeof( int ));
+				FS_Write( pFile, inBuf, fileSize );
+			}
+
+			Mem_Free( inBuf );
+			inBuf = NULL;
+		}
+		else
+		{
+			// Fallback: stream copy uncompressed if OOM
+			FS_Write( pFile, &fileSize, sizeof( int ));
+			FS_FileCopy( pFile, pCopy, fileSize );
+			FS_Close( pCopy );
+		}
 	}
 	Mem_Free( t );
 }
@@ -693,14 +797,14 @@ static void DirectoryExtract( dc_file_t *pFile, int fileCount )
 {
 	char	szName[MAX_OSPATH];
 	char	fileName[MAX_OSPATH];
-	int	i, fileSize;
+	int	i, sizeMarker, fileSize;
 	dc_file_t	*pCopy;
 
 	for( i = 0; i < fileCount; i++ )
 	{
 		// filename can only be as long as a map name + extension
 		FS_Read( pFile, szName, MAX_OSPATH );
-		FS_Read( pFile, &fileSize, sizeof( int ));
+		FS_Read( pFile, &sizeMarker, sizeof( int ));
 		Q_snprintf( fileName, sizeof( fileName ), "/ram/%s", szName );
 		COM_FixSlashes( fileName );
 #if XASH_DREAMCAST
@@ -708,8 +812,53 @@ static void DirectoryExtract( dc_file_t *pFile, int fileCount )
 #else
 		pCopy = FS_Open( fileName, "wb", true );
 #endif
-		FS_FileCopy( pCopy, pFile, fileSize );
-		FS_Close( pCopy );
+		if( !pCopy )
+			return;
+
+		if( sizeMarker & 0x80000000 )
+		{
+			const int rawSize = (sizeMarker & 0x7FFFFFFF);
+			int compSize = 0;
+			byte *cdata = NULL;
+			byte *raw = NULL;
+
+			FS_Read( pFile, &compSize, sizeof( int ));
+			if( compSize <= 0 || rawSize <= 0 )
+			{
+				FS_Close( pCopy );
+				return;
+			}
+
+			cdata = (byte *)Mem_Malloc( host.mempool, compSize );
+			raw = (byte *)Mem_Malloc( host.mempool, rawSize );
+			if( !cdata || !raw )
+			{
+				if( cdata ) Mem_Free( cdata );
+				if( raw ) Mem_Free( raw );
+				FS_Close( pCopy );
+				return;
+			}
+
+			FS_Read( pFile, cdata, compSize );
+			if( !SV_SaveZlibDecompress( cdata, (uint)compSize, raw, (uint)rawSize ))
+			{
+				Mem_Free( cdata );
+				Mem_Free( raw );
+				FS_Close( pCopy );
+				return;
+			}
+
+			FS_Write( pCopy, raw, rawSize );
+			Mem_Free( cdata );
+			Mem_Free( raw );
+			FS_Close( pCopy );
+		}
+		else
+		{
+			fileSize = sizeMarker;
+			FS_FileCopy( pCopy, pFile, fileSize );
+			FS_Close( pCopy );
+		}
 	}
 }
 
@@ -1716,6 +1865,7 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 #if XASH_DREAMCAST
 	uint8_t*		saveBuffer = NULL;
 	uint32_t		saveBufferSize = 0;
+	uint32_t		saveWritten = 0;
 	FILE*		iconFile = NULL;
 	uint8_t*		iconData = NULL;
 	int		iconSize = 0;
@@ -1764,100 +1914,142 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	{
 		for(int i = 0; i < t_size->numfilenames; i++)
 		{
-			// For each file, we need: MAX_OSPATH (filename) + sizeof(int) (filesize) + the actual file content
+			// Worst-case per file: name + sizeMarker + compSize + compressBound(raw)
 			char ramPath[MAX_SYSPATH];
 			Q_snprintf(ramPath, sizeof(ramPath), "/ram/%s", t_size->filenames[i]);
 			dc_file_t *pFile_size = FS_SysOpen(ramPath, "rb");
 			
 			if(pFile_size)
 			{
-				adjacencySize += MAX_OSPATH + sizeof(int) + FS_FileLength(pFile_size);
+				int rawSize = FS_FileLength( pFile_size );
+				adjacencySize += (uint32_t)( MAX_OSPATH + sizeof(int) + sizeof(int) + (uint32_t)compressBound( (uLong)rawSize ));
 				FS_Close(pFile_size);
 			}
 		}
 		Mem_Free(t_size);
 	}
 	
-	// Allocate buffer for all data
-	saveBufferSize = sizeof(int) * 3 + sizeof(int) * 2 + pSaveData->tokenSize + pSaveData->size + adjacencySize;
-	saveBuffer = Mem_Malloc(host.mempool, saveBufferSize);
-	
-	if (!saveBuffer) {
-		Con_Printf("Failed to allocate save buffer\n");
-		SaveFinish(pSaveData);
-		return false;
-	}
-	
-	uint8_t* ptr = saveBuffer;
-	
-	// Write all the data to our temporary buffer
-	version = SAVEGAME_VERSION;
-	id = SAVEGAME_HEADER;
-	
-	memcpy(ptr, &id, sizeof(id));
-	ptr += sizeof(id);
-	memcpy(ptr, &version, sizeof(version));
-	ptr += sizeof(version);
-	memcpy(ptr, &pSaveData->size, sizeof(int));
-	ptr += sizeof(int);
-	
-	// write token data
-	memcpy(ptr, &pSaveData->tokenCount, sizeof(int));
-	ptr += sizeof(int);
-	memcpy(ptr, &pSaveData->tokenSize, sizeof(int));
-	ptr += sizeof(int);
-	memcpy(ptr, pTokenData, pSaveData->tokenSize);
-	ptr += pSaveData->tokenSize;
-	
-	// write the base data
-	memcpy(ptr, pSaveData->pBaseData, pSaveData->size);
-	ptr += pSaveData->size;
-	
-	// Copy adjacency map files directly into the save buffer
-	search_t *t = FS_Search(hlPath, true, true);
-	if(t)
+	// Build uncompressed payload: [tokenData][baseData], then compress it.
 	{
-		for(int i = 0; i < t->numfilenames; i++)
+		const uint32_t rawSize = (uint32_t)pSaveData->size;
+		const uint32_t tokenSize = (uint32_t)pSaveData->tokenSize;
+		const uint32_t tokenCount = (uint32_t)pSaveData->tokenCount;
+		const uint32_t payloadSize = tokenSize + rawSize;
+		byte *payload = (byte *)Mem_Malloc( host.mempool, payloadSize );
+		byte *cdata = NULL;
+		uint csize = 0;
+
+		if( !payload )
 		{
-			// Store filename (max length is MAX_OSPATH)
-			char szName[MAX_OSPATH];
-			memset(szName, 0, sizeof(szName)); // clear string to prevent garbage
-			Q_strncpy(szName, COM_FileWithoutPath(t->filenames[i]), sizeof(szName));
-			memcpy(ptr, szName, MAX_OSPATH);
-			ptr += MAX_OSPATH;
-			
-			// Open the file and get its size
-			dc_file_t *pCopy = NULL;
-#if XASH_DREAMCAST
-			char ramPath[MAX_SYSPATH];
-			Q_snprintf(ramPath, sizeof(ramPath), "/ram/%s", t->filenames[i]);
-			pCopy = FS_SysOpen(ramPath, "rb");
-#else
-			pCopy = FS_Open(t->filenames[i], "rb", true);
-#endif
-			int fileSize = FS_FileLength(pCopy);
-			
-			// Store file size
-			memcpy(ptr, &fileSize, sizeof(int));
-			ptr += sizeof(int);
-			
-			// Store file contents
-			uint8_t *fileBuffer = Mem_Malloc(host.mempool, fileSize);
-			FS_Read(pCopy, fileBuffer, fileSize);
-			memcpy(ptr, fileBuffer, fileSize);
-			ptr += fileSize;
-			
-			// Cleanup
-			Mem_Free(fileBuffer);
-			FS_Close(pCopy);
+			Con_Printf( "Failed to allocate save payload\n" );
+			SaveFinish( pSaveData );
+			return false;
 		}
-		Mem_Free(t);
+
+		memcpy( payload, pTokenData, tokenSize );
+		memcpy( payload + tokenSize, pSaveData->pBaseData, rawSize );
+
+		if( !SV_SaveZlibCompress( payload, payloadSize, &cdata, &csize ))
+		{
+			Con_Printf( "Failed to compress save payload\n" );
+			Mem_Free( payload );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		Mem_Free( payload );
+
+		// Header: id, version, zmagic, rawSize, tokenCount, tokenSize, compSize
+		saveBufferSize = (uint32_t)( sizeof(int) * 7 + csize + adjacencySize );
+		saveBuffer = Mem_Malloc( host.mempool, saveBufferSize );
+
+		if( !saveBuffer )
+		{
+			Con_Printf( "Failed to allocate save buffer\n" );
+			Mem_Free( cdata );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		uint8_t *ptr = saveBuffer;
+
+		version = SAVEGAME_VERSION;
+		id = SAVEGAME_HEADER;
+		const int zmagic = SAVEGAME_ZMAGIC;
+		const int compSizeI = (int)csize;
+
+		memcpy( ptr, &id, sizeof( id )); ptr += sizeof( id );
+		memcpy( ptr, &version, sizeof( version )); ptr += sizeof( version );
+		memcpy( ptr, &zmagic, sizeof( zmagic )); ptr += sizeof( zmagic );
+		memcpy( ptr, &rawSize, sizeof( int )); ptr += sizeof( int );
+		memcpy( ptr, &tokenCount, sizeof( int )); ptr += sizeof( int );
+		memcpy( ptr, &tokenSize, sizeof( int )); ptr += sizeof( int );
+		memcpy( ptr, &compSizeI, sizeof( int )); ptr += sizeof( int );
+
+		memcpy( ptr, cdata, csize ); ptr += csize;
+		Mem_Free( cdata );
+
+		// Append adjacency map files (same format as DirectoryCopy, but supports per-file zlib)
+		search_t *t = FS_Search( hlPath, true, true );
+		if( t )
+		{
+			for( int i = 0; i < t->numfilenames; i++ )
+			{
+				char szName[MAX_OSPATH];
+				memset( szName, 0, sizeof( szName ));
+				Q_strncpy( szName, COM_FileWithoutPath( t->filenames[i] ), sizeof( szName ));
+				memcpy( ptr, szName, MAX_OSPATH );
+				ptr += MAX_OSPATH;
+
+				char ramPath[MAX_SYSPATH];
+				Q_snprintf( ramPath, sizeof( ramPath ), "/ram/%s", t->filenames[i] );
+				dc_file_t *pCopy = FS_SysOpen( ramPath, "rb" );
+				int fileSize = pCopy ? FS_FileLength( pCopy ) : 0;
+
+				if( pCopy && fileSize > 0 )
+				{
+					uint8_t *fileBuffer = (uint8_t *)Mem_Malloc( host.mempool, fileSize );
+					byte *cbuf = NULL;
+					uint csize = 0;
+
+					FS_Read( pCopy, fileBuffer, fileSize );
+					FS_Close( pCopy );
+
+					if( SV_SaveZlibCompress( fileBuffer, (uint)fileSize, &cbuf, &csize ) && csize < (uint)fileSize )
+					{
+						const int sizeMarker = (fileSize | 0x80000000);
+						const int compSize = (int)csize;
+						memcpy( ptr, &sizeMarker, sizeof( int )); ptr += sizeof( int );
+						memcpy( ptr, &compSize, sizeof( int )); ptr += sizeof( int );
+						memcpy( ptr, cbuf, csize ); ptr += csize;
+						Mem_Free( cbuf );
+					}
+					else
+					{
+						memcpy( ptr, &fileSize, sizeof( int )); ptr += sizeof( int );
+						memcpy( ptr, fileBuffer, fileSize ); ptr += fileSize;
+					}
+
+					Mem_Free( fileBuffer );
+				}
+				else
+				{
+					// Store empty/unreadable file as raw size=0 (legacy-compatible)
+					if( pCopy ) FS_Close( pCopy );
+					memcpy( ptr, &fileSize, sizeof( int ));
+					ptr += sizeof( int );
+				}
+			}
+			Mem_Free( t );
+		}
+
+		saveWritten = (uint32_t)( ptr - saveBuffer );
 	}
-	
+
 	// Create the VMU package
 	uint8_t *vmu_data;
 	uint8_t icon_buf[512];
-	int vmu_data_size = (ptr - saveBuffer); // Use actual written size
+	int vmu_data_size = (int)saveWritten; // Use actual written size
 	
 	vmu_pkg_t vmu_pkg;
 	memset(&vmu_pkg, 0, sizeof(vmu_pkg));
@@ -1924,15 +2116,48 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	version = SAVEGAME_VERSION;
 	id = SAVEGAME_HEADER;
 
-	FS_Write( pFile, &id, sizeof( id ));
-	FS_Write( pFile, &version, sizeof( version ));
-	FS_Write( pFile, &pSaveData->size, sizeof( int )); // does not include token table
+	// Compress header+globals ([tokenData][baseData]) but keep adjacency raw at the end
+	{
+		const uint payloadSize = (uint)(pSaveData->tokenSize + pSaveData->size);
+		byte *payload = (byte *)Mem_Malloc( host.mempool, payloadSize );
+		byte *cdata = NULL;
+		uint csize = 0;
+		const int zmagic = SAVEGAME_ZMAGIC;
+		const int rawSize = pSaveData->size;
+		const int tokenCount = pSaveData->tokenCount;
+		const int tokenSize = pSaveData->tokenSize;
 
-	// write out the tokens first so we can load them before we load the entities
-	FS_Write( pFile, &pSaveData->tokenCount, sizeof( int ));
-	FS_Write( pFile, &pSaveData->tokenSize, sizeof( int ));
-	FS_Write( pFile, pTokenData, pSaveData->tokenSize );
-	FS_Write( pFile, pSaveData->pBaseData, pSaveData->size ); // header and globals
+		if( !payload )
+		{
+			FS_Close( pFile );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		memcpy( payload, pTokenData, pSaveData->tokenSize );
+		memcpy( payload + pSaveData->tokenSize, pSaveData->pBaseData, pSaveData->size );
+
+		if( !SV_SaveZlibCompress( payload, payloadSize, &cdata, &csize ))
+		{
+			Mem_Free( payload );
+			FS_Close( pFile );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		Mem_Free( payload );
+
+		FS_Write( pFile, &id, sizeof( id ));
+		FS_Write( pFile, &version, sizeof( version ));
+		FS_Write( pFile, &zmagic, sizeof( zmagic ));
+		FS_Write( pFile, &rawSize, sizeof( int ));
+		FS_Write( pFile, &tokenCount, sizeof( int ));
+		FS_Write( pFile, &tokenSize, sizeof( int ));
+		FS_Write( pFile, &csize, sizeof( int ));
+		FS_Write( pFile, cdata, csize );
+
+		Mem_Free( cdata );
+	}
 
 	DirectoryCopy( hlPath, pFile );
 	FS_Close( pFile );
@@ -1954,6 +2179,7 @@ static int SaveReadHeader( dc_file_t *pFile, GAME_HEADER *pHeader )
 	int		tokenCount, tokenSize;
 	int		size, id, version;
 	SAVERESTOREDATA	*pSaveData;
+	int		marker;
 
 	FS_Read( pFile, &id, sizeof( id ));
 	if( id != SAVEGAME_HEADER )
@@ -1969,9 +2195,68 @@ static int SaveReadHeader( dc_file_t *pFile, GAME_HEADER *pHeader )
 		return 0;
 	}
 
-	FS_Read( pFile, &size, sizeof( int ));
-	FS_Read( pFile, &tokenCount, sizeof( int ));
-	FS_Read( pFile, &tokenSize, sizeof( int ));
+	// New format: id,version,ZSVZ,size,tokenCount,tokenSize,compSize,compData, then adjacency raw.
+	// Old format: id,version,size,tokenCount,tokenSize,tokenData,baseData, then adjacency raw.
+	FS_Read( pFile, &marker, sizeof( int ));
+	if( marker == SAVEGAME_ZMAGIC )
+	{
+		int compSize;
+		byte *cdata;
+		uint payloadSize;
+
+		FS_Read( pFile, &size, sizeof( int ));
+		FS_Read( pFile, &tokenCount, sizeof( int ));
+		FS_Read( pFile, &tokenSize, sizeof( int ));
+		FS_Read( pFile, &compSize, sizeof( int ));
+
+		payloadSize = (uint)( size + tokenSize );
+		if( compSize <= 0 || payloadSize <= 0 )
+		{
+			FS_Close( pFile );
+			return 0;
+		}
+
+		pSaveData = SaveInit( payloadSize, tokenCount );
+		pSaveData->tokenCount = tokenCount;
+		pSaveData->tokenSize = tokenSize;
+
+		cdata = (byte *)Mem_Malloc( host.mempool, compSize );
+		if( !cdata )
+		{
+			SaveFinish( pSaveData );
+			FS_Close( pFile );
+			return 0;
+		}
+
+		FS_Read( pFile, cdata, compSize );
+
+		if( !SV_SaveZlibDecompress( cdata, (uint)compSize, (byte *)pSaveData->pBaseData, payloadSize ))
+		{
+			Mem_Free( cdata );
+			SaveFinish( pSaveData );
+			FS_Close( pFile );
+			return 0;
+		}
+
+		Mem_Free( cdata );
+
+		BuildHashTableFromMemory( pSaveData );
+
+		pSaveData->fUseLandmark = false;
+		pSaveData->time = 0.0f;
+
+		svgame.dllFuncs.pfnSaveReadFields( pSaveData, "GameHeader", pHeader, gGameHeader, ARRAYSIZE( gGameHeader ));
+		svgame.dllFuncs.pfnRestoreGlobalState( pSaveData );
+		SaveFinish( pSaveData );
+		return 1;
+	}
+	else
+	{
+		// Legacy: marker is the "size"
+		size = marker;
+		FS_Read( pFile, &tokenCount, sizeof( int ));
+		FS_Read( pFile, &tokenSize, sizeof( int ));
+	}
 
 	pSaveData = SaveInit( size + tokenSize, tokenCount );
 	pSaveData->tokenCount = tokenCount;
@@ -2378,8 +2663,20 @@ qboolean SV_SaveGame( const char *pName )
 		{
 			Q_snprintf( savename, sizeof( savename ), "save%03d", n );
 
+#if XASH_DREAMCAST
+			{
+				char vmuPath[MAX_SYSPATH];
+				dc_file_t *test;
+				Q_snprintf( vmuPath, sizeof( vmuPath ), "/vmu/a1/%s.sav", savename );
+				test = FS_SysOpen( vmuPath, "rb" );
+				if( !test )
+					break;
+				FS_Close( test );
+			}
+#else
 			if( !FS_FileExists( va( DEFAULT_SAVE_DIRECTORY "%s.sav", savename ), true ))
 				break;
+#endif
 		}
 
 		if( n == 1000 )
@@ -2390,19 +2687,6 @@ qboolean SV_SaveGame( const char *pName )
 	}
 	else Q_strncpy( savename, pName, sizeof( savename ));
 
-#if XASH_DREAMCAST
-	// Check if save already exists, if so delete it first
-	char savepath[MAX_SYSPATH];
-	
-	Q_snprintf( savepath, sizeof( savepath ), DEFAULT_SAVE_DIRECTORY "%s.sav", savename );
-	Con_Printf( "Deleting existing save file %s.sav before creating new one...\n", savename );
-		// Delete the existing save
-	if( !FS_Delete( savepath ))
-	{
-		Con_Printf( S_ERROR "Failed to delete existing save %s\n", savepath );
-			// We'll try to continue anyway
-	}
-#endif
 
 #if !XASH_DEDICATED
 	// unload previous image from memory (it's will be overwritten)
@@ -2441,7 +2725,21 @@ const char *SV_GetLatestSave( void )
 	search_t		*t;
 
 #if XASH_DREAMCAST
-	if(( t = FS_Search( va( "%s*.sav", DEFAULT_SAVE_DIRECTORY ), true, true )) == NULL )
+	// Dreamcast: saves are stored on VMU, so FS_Search may not see them.
+	// Fallback to the highest existing slot saveNNN.sav on /vmu/a1.
+	for( i = 10; i >= 0; i-- )
+	{
+		char vmuPath[MAX_SYSPATH];
+		dc_file_t *test;
+		Q_snprintf( savename, sizeof( savename ), "save%03d.sav", i );
+		Q_snprintf( vmuPath, sizeof( vmuPath ), "/vmu/a1/%s", savename );
+		test = FS_SysOpen( vmuPath, "rb" );
+		if( test )
+		{
+			FS_Close( test );
+			return savename;
+		}
+	}
 	return NULL;
 #else
 	if(( t = FS_Search( "DEFAULT_SAVE_DIRECTORY" "*.sav" , true, true )) == NULL )
@@ -2481,6 +2779,7 @@ check savegame for valid
 int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 {
 	int	i, tag, size, nNumberOfFields, nFieldSize, tokenSize, tokenCount;
+	int	marker;
 	char	*pData, *pSaveData, *pFieldName, **pTokenList;
 	string	mapName, description;
 	dc_file_t	*f;
@@ -2534,10 +2833,68 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 	mapName[0] = '\0';
 	comment[0] = '\0';
 
-	FS_Read( f, &size, sizeof( int ));
-	FS_Read( f, &tokenCount, sizeof( int ));	// These two ints are the token list
-	FS_Read( f, &tokenSize, sizeof( int ));
-	size += tokenSize;
+	FS_Read( f, &marker, sizeof( int ));
+	if( marker == SAVEGAME_ZMAGIC )
+	{
+		int compSize;
+		byte *cdata;
+		uint payloadSize;
+
+		FS_Read( f, &size, sizeof( int ));
+		FS_Read( f, &tokenCount, sizeof( int ));
+		FS_Read( f, &tokenSize, sizeof( int ));
+		FS_Read( f, &compSize, sizeof( int ));
+
+		payloadSize = (uint)( size + tokenSize );
+		if( compSize <= 0 || payloadSize == 0 )
+		{
+			Q_strncpy( comment, "<corrupted>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		// sanity check.
+		if( tokenCount < 0 || tokenCount > SAVE_HASHSTRINGS || tokenSize < 0 || tokenSize > SAVE_HEAPSIZE )
+		{
+			Q_strncpy( comment, "<corrupted hashtable>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		pSaveData = (char *)Mem_Malloc( host.mempool, payloadSize );
+		cdata = (byte *)Mem_Malloc( host.mempool, compSize );
+
+		if( !pSaveData || !cdata )
+		{
+			if( pSaveData ) Mem_Free( pSaveData );
+			if( cdata ) Mem_Free( cdata );
+			Q_strncpy( comment, "<out of memory>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		FS_Read( f, cdata, compSize );
+		if( !SV_SaveZlibDecompress( cdata, (uint)compSize, (byte *)pSaveData, payloadSize ))
+		{
+			Mem_Free( cdata );
+			Mem_Free( pSaveData );
+			Q_strncpy( comment, "<corrupted>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		Mem_Free( cdata );
+		pData = pSaveData;
+		size = (int)payloadSize;
+	}
+	else
+	{
+		// Legacy: marker is "size"
+		size = marker;
+		FS_Read( f, &tokenCount, sizeof( int ));	// These two ints are the token list
+		FS_Read( f, &tokenSize, sizeof( int ));
+		size += tokenSize;
+	}
 
 	// sanity check.
 	if( tokenCount < 0 || tokenCount > SAVE_HASHSTRINGS )
@@ -2554,9 +2911,12 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 		return 0;
 	}
 
-	pSaveData = (char *)Mem_Malloc( host.mempool, size );
-	FS_Read( f, pSaveData, size );
-	pData = pSaveData;
+	if( marker != SAVEGAME_ZMAGIC )
+	{
+		pSaveData = (char *)Mem_Malloc( host.mempool, size );
+		FS_Read( f, pSaveData, size );
+		pData = pSaveData;
+	}
 
 	// allocate a table for the strings, and parse the table
 	if( tokenSize > 0 )

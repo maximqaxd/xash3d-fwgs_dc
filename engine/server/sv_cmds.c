@@ -477,8 +477,13 @@ static void SV_DeleteSave_f( void )
 	}
 
 	// delete save and saveshot
+#if XASH_DREAMCAST
+	FS_Delete( va( "/vmu/a1/%s.sav", Cmd_Argv( 1 )));
+	FS_Delete( va( "/vmu/a1/%s.bmp", Cmd_Argv( 1 )));
+#else
 	FS_Delete( va( DEFAULT_SAVE_DIRECTORY "%s.sav", Cmd_Argv( 1 )));
 	FS_Delete( va( DEFAULT_SAVE_DIRECTORY "%s.bmp", Cmd_Argv( 1 )));
+#endif
 }
 
 /*
