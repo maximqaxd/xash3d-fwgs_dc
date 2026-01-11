@@ -10,7 +10,7 @@ include engine.mk
 # Module paths and lib names
 FILESYSTEM_DIR = filesystem
 REF_DIR = ref/pvr
-MAINUI_DIR = libs/mainui_dc
+MAINUI_DIR = ../mainui_cpp
 CL_DLL_DIR = ../hlsdk-portable_dc/cl_dll
 SV_DLL_DIR = ../hlsdk-portable_dc/dlls
 UTILS_DIR = utils
@@ -35,6 +35,7 @@ LIBS = -L../hlsdk-portable_dc \
        -lref_pvr \
        -lppp \
 	   -lpthread \
+	   -lmenu \
 	   -lz \
        -lsh4zam
 
