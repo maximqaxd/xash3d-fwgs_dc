@@ -1741,13 +1741,11 @@ static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 	}
 	else GL_Bind( XASH_TEXTURE0, t->gl_texturenum );
 
-	R_RenderFullbrightForSurface( fa, t );
 	// Draw all polys in the chain (surfaces can be subdivided into multiple polys)
 	// Pass NULL for shared_dr_state so DrawGLPoly creates its own (for entity rendering outside texture chains)
 	for( glpoly2_t *p = fa->polys; p != NULL; p = p->chain )
 		DrawGLPoly( p, 0.0f, 0.0f, fa, NULL );
 	R_RenderDecalsForSurface( fa, cull_type );
-	R_RenderLightmapForSurface( fa );
 }
 
 /*
