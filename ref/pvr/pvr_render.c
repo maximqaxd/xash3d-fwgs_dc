@@ -21,6 +21,7 @@ CVAR_DEFINE_AUTO( r_lighting_ambient, "0.3", FCVAR_GLCONFIG, "map ambient lighti
 CVAR_DEFINE_AUTO( r_detailtextures, "1", FCVAR_GLCONFIG, "enable detail textures support" );
 CVAR_DEFINE_AUTO( r_novis, "0", 0, "ignore vis information (perfomance test)" );
 CVAR_DEFINE_AUTO( r_nocull, "0", 0, "ignore frustrum culling (perfomance test)" );
+CVAR_DEFINE_AUTO( r_occlusion_cull_studio, "1", 0, "occlusion cull studio models using world trace to bbox (may cause pop-in)" );
 CVAR_DEFINE_AUTO( r_lockpvs, "0", FCVAR_CHEAT, "lockpvs area at current point (pvs test)" );
 CVAR_DEFINE_AUTO( r_lockfrustum, "0", FCVAR_CHEAT, "lock frustrum area at current point (cull test)" );
 CVAR_DEFINE_AUTO( r_traceglow, "0", FCVAR_GLCONFIG, "cull flares behind models" );
@@ -234,6 +235,7 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_lighting_ambient );
 	gEngfuncs.Cvar_RegisterVariable( &r_novis );
 	gEngfuncs.Cvar_RegisterVariable( &r_nocull );
+	gEngfuncs.Cvar_RegisterVariable( &r_occlusion_cull_studio );
 	gEngfuncs.Cvar_RegisterVariable( &r_detailtextures );
 	gEngfuncs.Cvar_RegisterVariable( &r_lockpvs );
 	gEngfuncs.Cvar_RegisterVariable( &r_lockfrustum );

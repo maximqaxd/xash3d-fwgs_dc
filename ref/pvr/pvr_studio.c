@@ -2747,12 +2747,12 @@ static void R_StudioDrawPoints( void )
 	if( R_AllowFlipViewModel( RI.currententity ))
 	{
 		tr.fFlipViewModel = true;
-		//GL_Cull( GL_NONE );
+		GL_Cull( GL_NONE );
 	}
 	else
 	{
 		tr.fFlipViewModel = false;
-		//GL_Cull( GL_FRONT );
+		GL_Cull( GL_FRONT );
 	}
 
 	for( j = 0; j < m_pSubModel->nummesh; j++ )

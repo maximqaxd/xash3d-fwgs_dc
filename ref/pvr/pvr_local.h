@@ -674,6 +674,17 @@ typedef struct
 extern glconfig_t		glConfig;
 extern glstate_t		glState;
 
+#define GL_NONE					0x0
+
+// PVR renderer doesn't include OpenGL headers, but some shared logic uses GL_* cull constants.
+// Keep numeric values identical to OpenGL for compatibility with higher-level code.
+#ifndef GL_FRONT
+#define GL_FRONT 0x0404
+#endif
+#ifndef GL_BACK
+#define GL_BACK  0x0405
+#endif
+
 //
 // -----------------------------------------------------------------------------
 // sh4zam helpers for working with shz_mat4x4_t as an affine transform matrix
@@ -837,6 +848,8 @@ extern convar_t	r_studio_lambert;
 extern convar_t	r_detailtextures;
 extern convar_t	r_novis;
 extern convar_t	r_nocull;
+extern convar_t	r_pvs_cull_entities;
+extern convar_t	r_occlusion_cull_studio;
 extern convar_t	r_lockpvs;
 extern convar_t	r_lockfrustum;
 extern convar_t	r_traceglow;

@@ -141,18 +141,8 @@ GL_Cull
 */
 void GL_Cull( int cull )
 {
-#if 0
-	if( !cull )
-	{
-		pglDisable( GL_CULL_FACE );
-		glState.faceCull = 0;
-		return;
-	}
 
-	pglEnable( GL_CULL_FACE );
-	pglCullFace( cull );
-	glState.faceCull = cull;
-#endif // TODO
+	glState.faceCull = cull; // 0, GL_FRONT, GL_BACK
 }
 
 void GL_SetRenderMode( int mode )

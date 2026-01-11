@@ -411,6 +411,7 @@ void R_Set2DMode( qboolean enable )
 		glState.currentColor = 0xFFFFFFFF;
 
 		// 2D drawing in PVR path submits already in screen space; do not mutate RI matrices here.
+        GL_Cull( GL_NONE );
 
 		glState.in2DMode = true;
 		RI.currententity = NULL;
@@ -425,5 +426,8 @@ void R_Set2DMode( qboolean enable )
 		Draw_FlushBatch();
 
 		glState.in2DMode = false;
+
+        GL_Cull( GL_FRONT );
+
 	}
 }
