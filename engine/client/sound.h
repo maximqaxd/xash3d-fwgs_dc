@@ -25,7 +25,7 @@ extern poolhandle_t sndpool;
 #include <dc/sound/sound.h>
 #include <dc/sound/stream.h>
 static snd_stream_hnd_t music_stream = SND_STREAM_INVALID;
-#define MUSIC_BUFFER_SIZE 8192
+#define MUSIC_BUFFER_SIZE 16384
 static byte music_buffer[MUSIC_BUFFER_SIZE] __attribute__((aligned(32)));
 #endif
 
