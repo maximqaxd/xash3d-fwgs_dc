@@ -94,9 +94,6 @@ static const dllfunc_t cdll_new_exports[] = 	// allowed only in SDK 2.3 and high
 
 static void pfnSPR_DrawHoles( int frame, int x, int y, const wrect_t *prc );
 
-#if XASH_DREAMCAST
-static uint32_t cl_game_entities_aica_addr = NULL;
-#endif
 
 /*
 ====================
@@ -1085,33 +1082,7 @@ void CL_InitEdicts( int maxclients )
 #endif
 	cls.num_client_entities = CL_UPDATE_BACKUP * NUM_PACKET_ENTITIES;
 	cls.packet_entities = Mem_Realloc( clgame.mempool, cls.packet_entities, sizeof( entity_state_t ) * cls.num_client_entities );
-#if XASH_DREAMCAST
-		// Allocate entity list in sound RAM
-	size_t entities_size = sizeof(cl_entity_t) * clgame.maxEntities;
-	uint32_t aica_addr = snd_mem_malloc(entities_size);
-	
-	if(aica_addr)
-	{
-		// Map AICA memory to SH4 address space
-		uint32_t sh4_addr = 0x00800000 + aica_addr;
-		clgame.entities = (cl_entity_t *)sh4_addr;
-
-		cl_game_entities_aica_addr = aica_addr;
-		
-		// Zero initialize the memory (equivalent to Mem_Calloc)
-		memset(clgame.entities, 0, entities_size);
-		
-		// Flush data cache to ensure write completion
-		dcache_flush_range(clgame.entities, entities_size);
-	}
-	else
-	{
-		Con_DPrintf(S_ERROR "Failed to allocate clgame.entities in sound RAM, using main RAM\n");
-		clgame.entities = Mem_Calloc(clgame.mempool, entities_size);
-	}
-#else
 	clgame.entities = Mem_Calloc( clgame.mempool, sizeof( cl_entity_t ) * clgame.maxEntities );
-#endif
 	clgame.static_entities = NULL; // will be initialized later
 	clgame.numStatics = 0;
 
@@ -1130,25 +1101,10 @@ void CL_InitEdicts( int maxclients )
 void CL_FreeEdicts( void )
 {
 	ref.dllFuncs.R_ProcessEntData( false, NULL, 0 );
-#if XASH_DREAMCAST
-	if( clgame.entities )
-	{
-		if( cl_game_entities_aica_addr ) 
-		{
-			snd_mem_free( (void*)cl_game_entities_aica_addr );
-			cl_game_entities_aica_addr = NULL;
-		}
-		else // It was allocated with Mem_Calloc as fallback
-		{
-			Mem_Free( clgame.entities );
-		}
-		clgame.entities = NULL;
-	}
-#else
+
 	if( clgame.entities )
 		Mem_Free( clgame.entities );
 	clgame.entities = NULL;
-#endif
 
 	if( clgame.static_entities )
 		Mem_Free( clgame.static_entities );
