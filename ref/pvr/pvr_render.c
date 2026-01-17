@@ -1,4 +1,8 @@
 #include "pvr_local.h"
+#include "pvr_alloc.h"
+
+#define PVR_MEM_BUFFER_SIZE (64 * 1024)
+
 
 CVAR_DEFINE( gl_extensions, "gl_allow_extensions", "1", FCVAR_GLCONFIG|FCVAR_READ_ONLY, "allow gl_extensions" );
 CVAR_DEFINE( gl_texture_anisotropy, "gl_anisotropy", "8", FCVAR_GLCONFIG, "textures anisotropic filter" );
@@ -39,6 +43,9 @@ CVAR_DEFINE_AUTO( r_dlight_virtual_radius, "3", FCVAR_GLCONFIG, "increase dlight
 DEFINE_ENGINE_SHARED_CVAR_LIST()
 
 poolhandle_t r_temppool;
+
+// VRAM allocator base block (allocated from KOS pvr_mem)
+static void *vram_alloc_base = NULL;
 
 gl_globals_t	tr;
 glconfig_t	glConfig;
@@ -333,6 +340,34 @@ qboolean Ref_Init( void )
 		return false;
 	}
 
+	// Initialize VRAM allocator (following GLdc pattern)
+	// Reserve 64KB buffer for KOS internal use
+	size_t vram_free = pvr_mem_available();
+	size_t alloc_size = (vram_free > PVR_MEM_BUFFER_SIZE) ? (vram_free - PVR_MEM_BUFFER_SIZE) : vram_free;
+	
+	// Allocate a large block from KOS allocator for our custom allocator
+	vram_alloc_base = pvr_mem_malloc( alloc_size );
+	if( !vram_alloc_base )
+	{
+		gEngfuncs.Con_Printf( S_ERROR "Failed to allocate VRAM block for allocator (requested %zu bytes)\n", alloc_size );
+		GL_RemoveCommands();
+		gEngfuncs.R_Free_Video();
+		Mem_FreePool( &r_temppool );
+		return false;
+	}
+	
+	// Initialize our custom allocator on the allocated block
+	if( alloc_init( vram_alloc_base, alloc_size ) != 0 )
+	{
+		gEngfuncs.Con_Printf( S_ERROR "Failed to initialize VRAM allocator\n" );
+		pvr_mem_free( vram_alloc_base );
+		vram_alloc_base = NULL;
+		GL_RemoveCommands();
+		gEngfuncs.R_Free_Video();
+		Mem_FreePool( &r_temppool );
+		return false;
+	}
+
 	// see R_ProcessEntData for tr.entities initialization
 	tr.world = (struct world_static_s *)ENGINE_GET_PARM( PARM_GET_WORLD_PTR );
 	tr.movevars = (movevars_t *)ENGINE_GET_PARM( PARM_GET_MOVEVARS_PTR );
@@ -368,6 +403,15 @@ void Ref_Shutdown( void )
 
 	GL_RemoveCommands();
 	R_ShutdownImages();
+	
+	// Shutdown VRAM allocator and free the base block
+	if( vram_alloc_base )
+	{
+		alloc_shutdown( NULL );
+		pvr_mem_free( vram_alloc_base );
+		vram_alloc_base = NULL;
+	}
+	
 	Mem_FreePool( &r_temppool );
 
 	// shut down OS specific OpenGL stuff like contexts, etc.

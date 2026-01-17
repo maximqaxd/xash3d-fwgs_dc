@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #include <stdarg.h>
 #include "pvr_local.h"
 #include "crclib.h"
+#include "pvr_alloc.h"
 
 #define TEXTURES_HASH_SIZE	(MAX_TEXTURES >> 2)
 #define TEXTURE_SIZE_MIN	8
@@ -25,6 +26,28 @@ static gl_texture_t*	gl_texturesHashTable[TEXTURES_HASH_SIZE];
 static uint		gl_numTextures;
 static uint		vq_codebook_sz = 2048;
 static int		next_texture_id = 1;		// Next PVR texture ID (start at 1, 0 = unused)
+
+// Callback for defragmentation: update texture vram_ptr when blocks are moved
+static void defrag_texture_callback(void* old_ptr, void* new_ptr, void* user_data)
+{
+	(void)user_data;
+	
+	// Update all textures that point to the old address
+	for( uint i = 0; i < gl_numTextures; i++ )
+	{
+		gl_texture_t *tex = &gl_textures[i];
+		if( tex->loaded && tex->vram_ptr == old_ptr )
+		{
+			tex->vram_ptr = (pvr_ptr_t)new_ptr;
+		}
+	}
+}
+
+// Public function to run defragmentation with texture pointer updates
+void R_DefragmentVRAM( int max_iterations )
+{
+	alloc_run_defrag( NULL, defrag_texture_callback, max_iterations, NULL );
+}
 
 static byte    dottexture[8][8] =
 {
@@ -960,7 +983,7 @@ static void GL_TextureImageRAW( gl_texture_t *tex, int side, int level, int widt
 		// Allocate PVR memory if not already allocated
 		if( !tex->loaded || tex->vram_ptr == NULL )
 		{
-			tex->vram_ptr = pvr_mem_malloc( src_padded );
+			tex->vram_ptr = alloc_malloc( NULL, src_padded );
 			if( !tex->vram_ptr )
 			{
 				gEngfuncs.Con_Printf( S_ERROR "%s: failed to allocate PVR memory for %s\n", __func__, tex->name );
@@ -1235,7 +1258,7 @@ static void GL_TextureImageRAW( gl_texture_t *tex, int side, int level, int widt
 	// Allocate PVR memory if not already allocated
 	if( !tex->loaded || tex->vram_ptr == NULL )
 	{
-		tex->vram_ptr = pvr_mem_malloc( padded_size );
+		tex->vram_ptr = alloc_malloc( NULL, padded_size );
 		if( !tex->vram_ptr )
 		{
 			gEngfuncs.Con_Printf( S_ERROR "%s: failed to allocate PVR memory for %s\n", __func__, tex->name );
@@ -1281,7 +1304,7 @@ static void GL_TextureImageCompressed( gl_texture_t *tex, int side, int level, i
 	const size_t padded_size = ( size + 31 ) & ~31;
 	if( !tex->loaded || tex->vram_ptr == NULL )
 	{
-		tex->vram_ptr = pvr_mem_malloc( padded_size );
+		tex->vram_ptr = alloc_malloc( NULL, padded_size );
 		if( !tex->vram_ptr )
 		{
 			gEngfuncs.Con_Printf( S_ERROR "%s: failed to allocate PVR memory for compressed texture %s\n", __func__, tex->name );
@@ -1702,7 +1725,7 @@ static void GL_DeleteTexture( gl_texture_t *tex )
 	// Free PVR memory
 	if( tex->loaded && tex->vram_ptr != NULL )
 	{
-		pvr_mem_free( tex->vram_ptr );
+		alloc_free( NULL, tex->vram_ptr );
 		tex->vram_ptr = NULL;
 		tex->loaded = false;
 	}

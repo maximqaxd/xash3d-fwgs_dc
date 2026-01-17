@@ -27,6 +27,7 @@ GNU General Public License for more details.
 #include <arch/arch.h>
 #include <dc/sound/sound.h>
 #include <kos/dbglog.h>
+#include "../../../../ref/pvr/pvr_alloc.h"
 
 /*
  * OpenBOR - http://www.LavaLit.com
@@ -142,6 +143,25 @@ void getRamStatus(void)
 		(float)getUsedRam() / (1024*1024),      // MB
 		getUsedRam() / 1024);                    // KB
 	Con_Printf("SPU: Free largest allocatable block: %zu\n", snd_mem_available());
+	
+	// VRAM statistics from pvr_alloc
+	void *vram_pool = NULL; // alloc uses global pool, NULL is fine
+	size_t vram_free = alloc_count_free( vram_pool );
+	size_t vram_contiguous = alloc_count_continuous( vram_pool );
+	size_t vram_block_count = alloc_block_count( vram_pool );
+	size_t vram_total = vram_block_count * 2048; // Each block is 2KB
+	size_t vram_used = (vram_total > vram_free) ? (vram_total - vram_free) : 0;
+	
+	Con_Printf("VRAM - Total: %.1f MB (%zu KB), Free: %.1f MB (%zu KB), Used: %.1f MB (%zu KB)\n",
+		(float)vram_total / (1024*1024),        // MB
+		vram_total / 1024,                       // KB
+		(float)vram_free / (1024*1024),         // MB
+		vram_free / 1024,                        // KB
+		(float)vram_used / (1024*1024),         // MB
+		vram_used / 1024);                       // KB
+	Con_Printf("VRAM: Largest contiguous block: %.1f MB (%zu KB)\n",
+		(float)vram_contiguous / (1024*1024),   // MB
+		vram_contiguous / 1024);                 // KB
 } 
 
 //-----------------------------------------------------------------------------
