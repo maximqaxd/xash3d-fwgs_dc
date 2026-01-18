@@ -134,11 +134,18 @@ static void Batch_Flush(void)
         // For 1-bit alpha (ARGB1555) textures, use alpha test to discard near-transparent pixels.
         // This handles colorkeyed sprites where some pixels are "almost" the key color but not exactly,
         // causing black borders. Alpha test threshold of 64 (out of 255) discards pixels with A < 64.
+        // VGUI_SetupDrawing can override this behavior (text mode vs rect mode).
         if (is_onebit_alpha) {
-            // Set PT list alpha test threshold (register 0x11C)
-            // Value 64 means pixels with alpha < 64 are discarded (punch-through)
-            PVR_SET(0x11C, 64);
-            cxt.txr.env = PVR_TXRENV_REPLACE; // No blending needed for alpha-tested cutouts
+            if (glState.vgui_alpha_test_enabled) {
+                // Text mode: use alpha test to skip transparent pixels
+                // Set PT list alpha test threshold (register 0x11C)
+                // Value 64 means pixels with alpha < 64 are discarded (punch-through)
+                PVR_SET(0x11C, 64);
+                cxt.txr.env = PVR_TXRENV_REPLACE; // No blending needed for alpha-tested cutouts
+            } else {
+                // Rect mode: use blending instead of alpha test
+                cxt.txr.env = PVR_TXRENV_MODULATEALPHA;
+            }
         } else if (is_smooth_alpha) {
             // Smooth alpha (ARGB4444) uses blending
             cxt.txr.env = PVR_TXRENV_MODULATEALPHA;

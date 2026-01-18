@@ -472,28 +472,116 @@ static qboolean R_SetDisplayTransform( ref_screen_rotation_t rotate, int offset_
 
 static void GAME_EXPORT VGUI_UploadTextureBlock( int drawX, int drawY, const byte *rgba, int blockWidth, int blockHeight )
 {
-#if 0
-	pglTexSubImage2D( GL_TEXTURE_2D, 0, drawX, drawY, blockWidth, blockHeight, GL_RGBA, GL_UNSIGNED_BYTE, rgba );
-#endif
+	// Get the currently bound texture
+	gl_texture_t *tex = NULL;
+	if( glState.currentTexturesIndex > 0 )
+		tex = R_GetTexture( glState.currentTexturesIndex );
+
+	if( !tex || !tex->loaded || !tex->vram_ptr || !rgba || blockWidth <= 0 || blockHeight <= 0 )
+		return; // Invalid texture or parameters
+
+	// Calculate conversion size (all PVR formats are 16bpp = 2 bytes per pixel)
+	size_t block_size = blockWidth * blockHeight * 2;
+	size_t block_padded = ( block_size + 31 ) & ~31; // PVR requires 32-byte alignment
+
+	// Allocate temporary buffer for converted data
+	uint16_t *converted_data = (uint16_t *)Mem_Malloc( r_temppool, block_padded );
+	if( !converted_data )
+	{
+		gEngfuncs.Con_DPrintf( S_ERROR "%s: failed to allocate conversion buffer\n", __func__ );
+		return;
+	}
+
+	// Extract base format (bits 27-29 contain the format)
+	uint32_t base_format = tex->format & 0x38000000;
+
+	// Convert RGBA32 block to texture format
+	switch( base_format )
+	{
+	case PVR_TXRFMT_ARGB4444:
+		// Convert RGBA32 to ARGB4444
+		{
+			const byte *s = rgba;
+			uint16_t *d = converted_data;
+			int pixels = blockWidth * blockHeight;
+			int i;
+			for( i = 0; i < pixels; i++, s += 4, d++ )
+			{
+				uint16_t a = s[3] >> 4;
+				uint16_t r = s[0] >> 4;
+				uint16_t g = s[1] >> 4;
+				uint16_t b = s[2] >> 4;
+				*d = (a << 12) | (r << 8) | (g << 4) | b;
+			}
+		}
+		break;
+	case PVR_TXRFMT_ARGB1555:
+		// Convert RGBA32 to ARGB1555
+		{
+			const byte *s = rgba;
+			uint16_t *d = converted_data;
+			int pixels = blockWidth * blockHeight;
+			int i;
+			for( i = 0; i < pixels; i++, s += 4, d++ )
+			{
+				uint16_t r = (uint16_t)(s[0] >> 3);
+				uint16_t g = (uint16_t)(s[1] >> 3);
+				uint16_t b = (uint16_t)(s[2] >> 3);
+				uint16_t a = (s[3] > 127) ? 1 : 0;
+				*d = (a << 15) | (r << 10) | (g << 5) | b;
+			}
+		}
+		break;
+	default:
+		// Unsupported format for sub-image update
+		Mem_Free( converted_data );
+		return;
+	}
+
+	// Calculate destination offset in VRAM
+	// For non-twiddled textures, offset = (drawY * tex->width + drawX) * 2
+	// Note: This is a simplified version; twiddled textures require complex offset calculation
+	size_t row_pitch = tex->width * 2; // 2 bytes per pixel
+	size_t offset = (drawY * row_pitch) + (drawX * 2);
+
+	// Copy converted block to VRAM at offset
+	// Note: This assumes non-twiddled texture layout. Twiddled textures would need special handling.
+	byte *vram_dst = (byte *)tex->vram_ptr + offset;
+	byte *src = (byte *)converted_data;
+
+	// Copy row by row to handle potential alignment issues
+	int y;
+	for( y = 0; y < blockHeight; y++ )
+	{
+		memcpy( vram_dst + (y * row_pitch), src + (y * blockWidth * 2), blockWidth * 2 );
+	}
+
+	Mem_Free( converted_data );
+}
+
+static void GAME_EXPORT Color4ub( unsigned char r, unsigned char g, unsigned char b, unsigned char a )
+{
+	// Store color in ARGB format: 0xAARRGGBB for use in 2D rendering (VGUI, HUD, etc.)
+	glState.currentColor = (a << 24) | (r << 16) | (g << 8) | b;
 }
 
 static void GAME_EXPORT VGUI_SetupDrawing( qboolean rect )
 {
-#if 0
-	pglEnable( GL_BLEND );
-	pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
+	// Store VGUI drawing state in glState for use in pvr_draw.c
+	// The actual blend/alpha settings are applied in Batch_Flush() when rendering
 
 	if( rect )
 	{
-		pglDisable( GL_ALPHA_TEST );
+		// Rect mode: no alpha test (blend all pixels)
+		glState.vgui_alpha_test_enabled = false;
 	}
 	else
 	{
-		pglEnable( GL_ALPHA_TEST );
-		pglAlphaFunc( GL_GREATER, 0.0f );
-		pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+		// Text mode: alpha test enabled (skip fully transparent pixels)
+		// For ARGB1555 textures, this will enable PVR alpha test
+		// For ARGB4444, this uses blending which effectively skips transparent pixels
+		glState.vgui_alpha_test_enabled = true;
 	}
-#endif
 }
 
 static void GAME_EXPORT R_OverrideTextureSourceSize( unsigned int texnum, uint srcWidth, uint srcHeight )

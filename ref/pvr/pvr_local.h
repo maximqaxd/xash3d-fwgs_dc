@@ -87,7 +87,7 @@ extern poolhandle_t r_temppool;
 #define BLOCK_SIZE_DEFAULT	128		// for keep backward compatibility
 #define BLOCK_SIZE_MAX	128
 
-#define MAX_TEXTURES            1024	// a1ba: increased by users request
+#define MAX_TEXTURES            1500	// a1ba: increased by users request
 #define MAX_DETAIL_TEXTURES	16
 #define MAX_LIGHTMAPS	64
 #define SUBDIVIDE_SIZE	64
@@ -664,6 +664,9 @@ typedef struct
 	qboolean		in2DMode;
 	
 	uint32_t	currentColor;  // ARGB format: 0xAARRGGBB
+	
+	// VGUI drawing state
+	qboolean		vgui_alpha_test_enabled;  // Alpha test state from VGUI_SetupDrawing
 } glstate_t;
 
 typedef struct
