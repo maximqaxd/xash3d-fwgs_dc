@@ -10,7 +10,6 @@ extern table_t lib_cl_dll_exports[];
 struct {const char *name;void *func;} libs[] = {
 { "filesystem_stdio", &lib_filesystem_stdio_exports },
 { "ref_pvr", &lib_ref_pvr_exports },
-{ "server", &lib_hl_exports },
 { "client", &lib_cl_dll_exports },
 //{ "menu", &lib_menu_exports},
 /*

@@ -87,7 +87,7 @@ extern poolhandle_t r_temppool;
 #define BLOCK_SIZE_DEFAULT	128		// for keep backward compatibility
 #define BLOCK_SIZE_MAX	128
 
-#define MAX_TEXTURES            1024	// a1ba: increased by users request
+#define MAX_TEXTURES            1536	// a1ba: increased by users request
 #define MAX_DETAIL_TEXTURES	16
 #define MAX_LIGHTMAPS	64
 #define SUBDIVIDE_SIZE	64

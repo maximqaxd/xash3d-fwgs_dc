@@ -4111,11 +4111,9 @@ qboolean CL_LoadProgs( const char *name )
 	if( !R_InitRenderAPI())	// Xash3D extension
 		Con_Reportf( S_WARN "%s: couldn't get render API\n", __func__ );
 
-#if !XASH_DREAMCAST
 
 	if( !Mobile_Init() ) // Xash3D FWGS extension: mobile interface
 		Con_Reportf( S_WARN "%s: couldn't get mobility API\n", __func__ );
-#endif
 	CL_InitEdicts( cl.maxclients );		// initailize local player and world
 	CL_InitClientMove();	// initialize pm_shared
 

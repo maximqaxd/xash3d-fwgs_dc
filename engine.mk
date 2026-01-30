@@ -14,6 +14,8 @@ XASH_CLIENT_OBJS = \
 	engine/client/cl_events.o \
 	engine/client/cl_font.o \
 	engine/client/cl_frame.o \
+	engine/client/cl_mobile.o \
+	engine/client/in_touch.o \
 	engine/client/cl_game.o \
 	engine/client/cl_gameui.o \
 	engine/client/cl_main.o \
@@ -161,7 +163,7 @@ GIT_VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 GIT_COMMIT_DATE := $(shell git log -1 --format=%cd --date=short 2>/dev/null || echo "unknown")
 
-DEFINES = -DENGINE_DLL -D_KOS_ -D_SH4_ -DSTDINT_H=\"stdint.h\" -DXASH_GAMEDIR=\"valve\" -DFRAME_POINTERS=1 -DXASH_STATIC_LIBS=1 -DXASH_LOW_MEMORY=2 -DXASH_ENABLE_MAIN=1 -DXASH_REF_PVR_ENABLED=1 -DHAVE_TGMATH_H=0 -DHAVE_STRCASECMP=1 -D_snprintf=snprintf 
+DEFINES = -DENGINE_DLL -D_KOS_ -D_SH4_ -DSTDINT_H=\"stdint.h\" -DXASH_GAMEDIR=\"cstrike\" -DFRAME_POINTERS=1 -DXASH_STATIC_LIBS=1 -DXASH_LOW_MEMORY=2 -DXASH_ENABLE_MAIN=1 -DXASH_REF_PVR_ENABLED=1 -DHAVE_TGMATH_H=0 -DHAVE_STRCASECMP=1 -D_snprintf=snprintf 
 DEFINES += -DXASH_BUILD_COMMIT=\"$(GIT_VERSION)\" \
           -DXASH_BUILD_BRANCH=\"$(GIT_BRANCH)\" \
           -DXASH_BUILD_COMMIT_DATE=\"$(GIT_COMMIT_DATE)\"

@@ -92,9 +92,7 @@ GNU General Public License for more details.
 	#undef NUM_PACKET_ENTITIES
 	#undef MAX_CUSTOM_BASELINES
 	#undef NET_MAX_FRAGMENT
-	#undef CMD_BACKUP
-	#define CMD_BACKUP 16
-	#define MULTIPLAYER_BACKUP		16	
+	#define MULTIPLAYER_BACKUP		64
 	#define SINGLEPLAYER_BACKUP		4
 	#define NUM_PACKET_ENTITIES		32
 	#define MAX_CUSTOM_BASELINES    8  

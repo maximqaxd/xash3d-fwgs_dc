@@ -11,8 +11,7 @@ include engine.mk
 FILESYSTEM_DIR = filesystem
 REF_DIR = ref/pvr
 MAINUI_DIR = libs/mainui_dc
-CL_DLL_DIR = ../hlsdk-portable_dc/cl_dll
-SV_DLL_DIR = ../hlsdk-portable_dc/dlls
+CL_DLL_DIR = ../cs16-client/cl_dll
 UTILS_DIR = utils
 
 MAINUI_LIB = $(MAINUI_DIR)/libmenu.a
@@ -23,15 +22,14 @@ SV_DLL_LIB = $(SV_DLL_DIR)/libhl.a
 
 OBJS =  $(XASH_CLIENT_OBJS) $(XASH_OBJS) $(XASH_SERVER_OBJS) $(XASH_PLATFORM_OBJS)
 
-LIBS = -L../hlsdk-portable_dc \
+LIBS = -L../cs16-client/cl_dll \
        -L$(KOS_BASE)/addons/lib/$(KOS_ARCH) \
        -L$(KOS_BASE)/../kos-ports/lib \
        -L$(FILESYSTEM_DIR) \
        -L$(REF_DIR) \
        -L$(MAINUI_DIR) \
        -lfilesystem_stdio \
-       -lhl \
-	   -lcl_dll \
+	   -lcs_client \
        -lref_pvr \
        -lppp \
 	   -lpthread \
@@ -68,7 +66,7 @@ tools-mdldec:
 include $(KOS_BASE)/Makefile.rules
 
 # Step 2: Build executable and create IP.BIN
-engine: clean-public $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 1ST_READ.BIN
+engine: clean-public $(FILESYSTEM_LIB) $(REF_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 
 
 # Clean public folder object files
 clean-public:
@@ -88,7 +86,7 @@ $(SV_DLL_LIB):
 $(CL_DLL_LIB):
 	$(MAKE) -C $(CL_DLL_DIR)
 
-$(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
+$(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_LIB) $(CL_DLL_LIB)
 	kos-c++ -o $(TARGET) $(OBJS) $(LIBS) -Wl,--gc-sections -fwhole-program -Wl,--build-id=none 
 
 1ST_READ.BIN: $(TARGET) IP.BIN
@@ -98,7 +96,7 @@ $(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
 	cp 1ST_READ.BIN build
 
 1ST_READ_DS.BIN: $(TARGET) IP.BIN
-	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
+	kos-objcopy -R .stack -O binary $(TARGET) 1ST_READ.BIN
 	-rm -f build/1ST_READ.BIN
 	cp 1ST_READ.BIN build
 
@@ -114,15 +112,15 @@ repack: clean-tools tools
 # Step 4: Create images
 cdi: engine  
 	@echo "Creating CDI image..."
-	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
+	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_CS.cdi
 
 ds_iso: engine 1ST_READ_DS.BIN 
 	@echo "Creating Dreamshell ISO image..."
-	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso ../xash3d-hl_repack 
+	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash_cs.iso ../xash3d-hl_repack 
 	
 emu: cdi
 	@echo "Running flycast"
-	../flycast-x86_64.AppImage ../Xash3D_HL.cdi
+	../flycast-x86_64.AppImage ../Xash3D_CS.cdi
 # Main target that runs all steps in order
 all: engine cdi ds_iso
 
@@ -140,7 +138,6 @@ clean-engine:
 	-rm -f $(TARGET)
 	$(MAKE) -C $(FILESYSTEM_DIR) clean
 	$(MAKE) -C $(REF_DIR) clean
-	$(MAKE) -C $(SV_DLL_DIR) clean
 	$(MAKE) -C $(CL_DLL_DIR) clean
 	-rm -f $(TARGET).bin
 	-rm -f 1ST_READ.BIN

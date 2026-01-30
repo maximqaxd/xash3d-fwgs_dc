@@ -134,7 +134,7 @@ typedef struct playermove_s
 	int		watertype;
 	int		oldwaterlevel;
 
-	char		sztexturename[256];
+	char		sztexturename[64];
 	char		chtexturetype;
 
 	float		maxspeed;

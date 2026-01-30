@@ -208,9 +208,9 @@ GNU General Public License for more details.
 #define MAX_RESOURCES       (MAX_MODELS + MAX_SOUNDS + MAX_CUSTOM + MAX_EVENTS)    
 #define MAX_LIGHTSTYLES		64
 #define DC_MAX_EDICTS		512
-#define DC_MAX_TENTS 		32
-#define DC_MAX_PARTICLES 	32
-#define DC_MAX_BEAMS 		4
+#define DC_MAX_TENTS 		300
+#define DC_MAX_PARTICLES 	300
+#define DC_MAX_BEAMS 		64
 #else
 #if XASH_LOW_MEMORY == 2
 #undef MAX_VISIBLE_PACKET

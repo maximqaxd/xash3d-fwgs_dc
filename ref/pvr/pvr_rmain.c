@@ -482,7 +482,7 @@ void R_RotateForEntity( cl_entity_t *e )
 
 	shz_xmtrx_store_4x4( &RI.objectMatrix );
 
-	shz_mat4x4_init_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
+	shz_mat4x4_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
 	tr.modelviewIdentity = false;
 
 	// Update PVR transform for this entity: viewproj * object
@@ -515,7 +515,7 @@ void R_TranslateForEntity( cl_entity_t *e )
 		shz_xmtrx_apply_scale( scale, scale, scale );
 	shz_xmtrx_store_4x4( &RI.objectMatrix );
 
-	shz_mat4x4_init_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
+	shz_mat4x4_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
 	tr.modelviewIdentity = false;
 
 	// Update PVR transform for this entity: viewproj * object
@@ -573,7 +573,7 @@ void R_SetupGL( qboolean set_gl_state )
 	// Build RI matrices (now sh4zam column-major) using sh4zam only.
 	R_SetupModelviewMatrix( &RI.worldviewMatrix );
 	R_SetupProjectionMatrix( &RI.projectionMatrix );
-	shz_mat4x4_init_mult( &RI.worldviewProjectionMatrix, &RI.projectionMatrix, &RI.worldviewMatrix );
+	shz_mat4x4_mult( &RI.worldviewProjectionMatrix, &RI.projectionMatrix, &RI.worldviewMatrix );
 
 	shz_xmtrx_init_identity();
 	shz_xmtrx_apply_screen( screen_width, screen_height );
