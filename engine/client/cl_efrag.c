@@ -140,6 +140,7 @@ R_AddEfrags
 */
 void R_AddEfrags( cl_entity_t *ent )
 {
+#if !XASH_DREAMCAST
 	matrix3x4	transform;
 	vec3_t	outmins, outmaxs;
 	int	i;
@@ -163,6 +164,7 @@ void R_AddEfrags( cl_entity_t *ent )
 
 	R_SplitEntityOnNode( cl.worldmodel->nodes );
 	ent->topnode = r_pefragtopnode;
+#endif
 }
 
 /*

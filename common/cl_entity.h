@@ -57,7 +57,11 @@ typedef struct
 
 typedef struct cl_entity_s cl_entity_t;
 
-#define HISTORY_MAX		64		// Must be power of 2
+#if XASH_DREAMCAST
+#define HISTORY_MAX		16  // Must be power of 2
+#else
+#define HISTORY_MAX		64  // Must be power of 2
+#endif
 #define HISTORY_MASK	( HISTORY_MAX - 1 )
 
 #include "entity_state.h"
@@ -94,12 +98,16 @@ struct cl_entity_s
 	int		trivial_accept;
 
 	struct model_s	*model;	// cl.model_precache[ curstate.modelindes ];  all visible entities have a model
+#if !XASH_DREAMCAST
 	struct efrag_s	*efrag;	// linked list of efrags
 	struct mnode_s	*topnode;	// for bmodels, first world node that splits bmodel, or NULL if not split
-
 	float		syncbase;	// for client-side animations -- used by obsolete alias animation system, remove?
+#endif
 	int		visframe;	// last frame this entity was found in an active leaf
+
+#if !XASH_DREAMCAST
 	colorVec		cvFloorColor;
+#endif
 };
 
 #endif//CL_ENTITY_H

@@ -259,7 +259,7 @@ typedef void *(*pfnCreateInterface_t)( const char *, int * );
 // the server to all connected clients.
 // each config string can be at most CS_SIZE characters.
 #if XASH_DREAMCAST
-#define MAX_QPATH		32
+#define MAX_QPATH		40
 #else
 #if XASH_LOW_MEMORY == 0
 #define MAX_QPATH		64	// max length of a game pathname
