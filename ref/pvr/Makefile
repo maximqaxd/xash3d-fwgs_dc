@@ -4,7 +4,7 @@ INCLUDES = -I../../engine/platform/dreamcast -I../../filesystem -I../../public -
 
 KOS_CFLAGS +=  $(INCLUDES) $(DEFINES) -O3 -fomit-frame-pointer -ffunction-sections -fdata-sections -fno-strict-aliasing -mrelax -fno-asynchronous-unwind-tables -fno-stack-protector
 KOS_CPPFLAGS += $(INCLUDES) $(DEFINES) -fno-exceptions -std=gnu++20 -fpermissive -MMD -MP  $(CFLAGS)
-OBJS = pvr_backend.o pvr_beams.o pvr_context.o pvr_cull.o pvr_decals.o link_helper.o pvr_draw.o gl_frustum.o pvr_image.o pvr_render.o pvr_rlight.o pvr_rmain.o pvr_rmisc.o pvr_rpart.o pvr_rsurf.o pvr_clip.o pvr_sprite.o pvr_studio.o pvr_triapi.o pvr_warp.o
+OBJS = pvr_backend.o pvr_beams.o pvr_context.o pvr_cull.o pvr_decals.o link_helper.o pvr_draw.o gl_frustum.o pvr_image.o pvr_rmath.o pvr_render.o pvr_rlight.o pvr_rmain.o pvr_rmisc.o pvr_rpart.o pvr_rsurf.o pvr_clip.o pvr_sprite.o pvr_studio.o pvr_triapi.o pvr_warp.o
 pvr_clip.o: KOS_CFLAGS += -fno-fast-math
 
 include ../../Makefile.library
