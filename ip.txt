@@ -3,7 +3,7 @@ Area Symbols  : JUE
 Peripherals   : E000F10
 Product No    : T0000
 Version       : V1.000
-Release Date  : 20241204
+Release Date  : 20260131
 Boot Filename : 1ST_READ.BIN
 SW Maker Name : internets
-Game Title    : Xash3D DC
+Game Title    : Xash3D (Counter-Strike)

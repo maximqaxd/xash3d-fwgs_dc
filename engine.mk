@@ -168,5 +168,15 @@ DEFINES += -DXASH_BUILD_COMMIT=\"$(GIT_VERSION)\" \
           -DXASH_BUILD_BRANCH=\"$(GIT_BRANCH)\" \
           -DXASH_BUILD_COMMIT_DATE=\"$(GIT_COMMIT_DATE)\"
 		  
-FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -ffunction-sections -fdata-sections -fno-exceptions -freorder-blocks-algorithm=simple -flto=auto  -Wno-implicit-function-declaration -Wno-int-conversion
+FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -ffunction-sections -fdata-sections -fno-exceptions -Wno-implicit-function-declaration -Wno-int-conversion
 CFLAGS +=  $(INCLUDE) $(DEFINES) $(FLAGS)  
+# Critical hot path files that need -O3 optimization
+cl_frame.o: CFLAGS += -O3
+cl_pmove.o: CFLAGS += -O3
+cl_main.o: CFLAGS += -O3
+cl_parse.o: CFLAGS += -O3
+sv_frame.o: CFLAGS += -O3
+net_buffer.o: CFLAGS += -O3
+net_encode.o: CFLAGS += -O3
+xash3d_mathlib.o: CFLAGS += -O3
+matrixlib.o: CFLAGS += -O
