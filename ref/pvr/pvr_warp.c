@@ -415,10 +415,6 @@ void R_DrawSkyBox( void )
 		cxt.depth.comparison = PVR_DEPTHCMP_GEQUAL;
 		cxt.depth.write = PVR_DEPTHWRITE_DISABLE;
 
-		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
-		pvr_poly_compile( hdr, &cxt );
-		pvr_dr_commit( hdr );
-
 		// Build quad vertices + UVs
 		vec3_t p[4];
 		float uv[4][2];
@@ -427,89 +423,32 @@ void R_DrawSkyBox( void )
 		MakeSkyVecPVR( RI.skyMaxs[0][i], RI.skyMaxs[1][i], i, p[2], &uv[2][0], &uv[2][1] );
 		MakeSkyVecPVR( RI.skyMaxs[0][i], RI.skyMins[1][i], i, p[3], &uv[3][0], &uv[3][1] );
 
-		// Transform to clip space. Use computed z (1/w) so sky only fills pixels where no depth was written.
-		// This avoids any chance of sky overdrawing far world geometry due to z precision.
+		// Transform to clip space. Clip against near plane to avoid tri soup when view
+		// angle puts vertices behind the camera (projecting w<=0 to invw=0 produced degenerate tris).
 		shz_vec4_t tp[4];
-		float invw[4];
 		for( int k = 0; k < 4; k++ )
-		{
 			tp[k] = shz_xmtrx_transform_vec4( shz_vec3_vec4( shz_vec3_init( p[k][0], p[k][1], p[k][2] ), 1.0f ));
-			if( tp[k].w <= 0.0001f )
-				invw[k] = 0.0f;
-			else invw[k] = shz_invf_fsrra( tp[k].w );
-		}
 
-		// Triangle 0-1-2
-		{
-			pvr_vertex_t *vtx = pvr_dr_target( dr_state );
-			vtx->flags = PVR_CMD_VERTEX;
-			vtx->x = tp[0].x * invw[0];
-			vtx->y = tp[0].y * invw[0];
-			vtx->z = invw[0];
-			vtx->u = uv[0][0];
-			vtx->v = uv[0][1];
-			vtx->argb = 0xFFFFFFFF;
-			vtx->oargb = 0;
-			pvr_dr_commit( vtx );
+		// Skip face if entirely behind near plane (sh4zam: inside when w >= z)
+		unsigned vismask = 0;
+		for( int k = 0; k < 4; k++ )
+			if( tp[k].w >= tp[k].z )
+				vismask |= (1U << k);
+		if( vismask == 0 )
+			continue;
 
-			vtx = pvr_dr_target( dr_state );
-			vtx->flags = PVR_CMD_VERTEX;
-			vtx->x = tp[1].x * invw[1];
-			vtx->y = tp[1].y * invw[1];
-			vtx->z = invw[1];
-			vtx->u = uv[1][0];
-			vtx->v = uv[1][1];
-			vtx->argb = 0xFFFFFFFF;
-			vtx->oargb = 0;
-			pvr_dr_commit( vtx );
+		pvr_poly_hdr_t *hdr = (pvr_poly_hdr_t *)pvr_dr_target( dr_state );
+		pvr_poly_compile( hdr, &cxt );
+		pvr_dr_commit( hdr );
 
-			vtx = pvr_dr_target( dr_state );
-			vtx->flags = PVR_CMD_VERTEX_EOL;
-			vtx->x = tp[2].x * invw[2];
-			vtx->y = tp[2].y * invw[2];
-			vtx->z = invw[2];
-			vtx->u = uv[2][0];
-			vtx->v = uv[2][1];
-			vtx->argb = 0xFFFFFFFF;
-			vtx->oargb = 0;
-			pvr_dr_commit( vtx );
-		}
-
-		// Triangle 0-2-3
-		{
-			pvr_vertex_t *vtx = pvr_dr_target( dr_state );
-			vtx->flags = PVR_CMD_VERTEX;
-			vtx->x = tp[0].x * invw[0];
-			vtx->y = tp[0].y * invw[0];
-			vtx->z = invw[0];
-			vtx->u = uv[0][0];
-			vtx->v = uv[0][1];
-			vtx->argb = 0xFFFFFFFF;
-			vtx->oargb = 0;
-			pvr_dr_commit( vtx );
-
-			vtx = pvr_dr_target( dr_state );
-			vtx->flags = PVR_CMD_VERTEX;
-			vtx->x = tp[2].x * invw[2];
-			vtx->y = tp[2].y * invw[2];
-			vtx->z = invw[2];
-			vtx->u = uv[2][0];
-			vtx->v = uv[2][1];
-			vtx->argb = 0xFFFFFFFF;
-			vtx->oargb = 0;
-			pvr_dr_commit( vtx );
-
-			vtx = pvr_dr_target( dr_state );
-			vtx->flags = PVR_CMD_VERTEX_EOL;
-			vtx->x = tp[3].x * invw[3];
-			vtx->y = tp[3].y * invw[3];
-			vtx->z = invw[3];
-			vtx->u = uv[3][0];
-			vtx->v = uv[3][1];
-			vtx->argb = 0xFFFFFFFF;
-			vtx->oargb = 0;
-			pvr_dr_commit( vtx );
-		}
+		PVR_ClipAndSubmitTriangle( &dr_state,
+			tp[0], tp[1], tp[2],
+			uv[0][0], uv[0][1], uv[1][0], uv[1][1], uv[2][0], uv[2][1],
+			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF );
+		PVR_ClipAndSubmitTriangle( &dr_state,
+			tp[0], tp[2], tp[3],
+			uv[0][0], uv[0][1], uv[2][0], uv[2][1], uv[3][0], uv[3][1],
+			0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF );
 	}
 
 	pvr_dr_finish();
