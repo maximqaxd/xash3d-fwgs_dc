@@ -397,6 +397,7 @@ void R_ClearDecals( void );
 //
 // pvr_draw.c
 //
+void Draw_FlushBatch( void );
 void R_Set2DMode( qboolean enable );
 void R_UploadStretchRaw( int texture, int cols, int rows, int width, int height, const byte *data );
 
@@ -663,6 +664,7 @@ typedef struct
 	qboolean		in2DMode;
 	
 	uint32_t	currentColor;  // ARGB format: 0xAARRGGBB
+	int		renderMode2D;  // GL_SetRenderMode for 2D: kRenderNormal, kRenderTransColor, etc.
 } glstate_t;
 
 typedef struct

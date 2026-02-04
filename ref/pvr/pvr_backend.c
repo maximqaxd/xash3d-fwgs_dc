@@ -157,7 +157,9 @@ void GL_Cull( int cull )
 
 void GL_SetRenderMode( int mode )
 {
-	(void)mode;
+	// Flush pending 2D draws so they use the previous mode; set new mode for next draws. Do not close list.
+	Draw_FlushBatch();
+	glState.renderMode2D = mode;
 }
 
 /*
