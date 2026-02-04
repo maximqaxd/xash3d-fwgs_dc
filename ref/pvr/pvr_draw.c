@@ -142,8 +142,6 @@ static void Batch_Flush(void)
         {
         case kRenderNormal:
             cxt.txr.env = PVR_TXRENV_MODULATE;
-            if (is_onebit_alpha || is_smooth_alpha)
-                PVR_SET(0x11C, 1);
             break;
         case kRenderTransColor:
             /* DrawHoles / crosshair: vertex color tints; no alpha test (rely on blend for holes) */
@@ -155,8 +153,6 @@ static void Batch_Flush(void)
             break;
         case kRenderTransAlpha:
             /* 1-bit alpha sprites (no blend) */
-            if (is_onebit_alpha || is_smooth_alpha)
-                PVR_SET(0x11C, 1);
             cxt.txr.env = PVR_TXRENV_REPLACE;
             break;
         case kRenderGlow:
@@ -171,8 +167,6 @@ static void Batch_Flush(void)
                 break;
             }
             /* Fallback: normal alpha blend */
-            if (is_onebit_alpha || is_smooth_alpha)
-                PVR_SET(0x11C, 1);
             cxt.txr.env = is_rgb565 ? PVR_TXRENV_MODULATE : PVR_TXRENV_MODULATEALPHA;
             break;
         }

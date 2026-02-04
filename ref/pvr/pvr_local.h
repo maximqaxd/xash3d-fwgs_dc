@@ -665,6 +665,7 @@ typedef struct
 	
 	uint32_t	currentColor;  // ARGB format: 0xAARRGGBB
 	int		renderMode2D;  // GL_SetRenderMode for 2D: kRenderNormal, kRenderTransColor, etc.
+	qboolean vgui_alpha_test_enabled;
 } glstate_t;
 
 typedef struct
@@ -854,6 +855,11 @@ extern convar_t r_ripple_updatetime;
 extern convar_t r_ripple_spawntime;
 extern convar_t r_large_lightmaps;
 extern convar_t r_dlight_virtual_radius;
+extern convar_t r_occlusion_cull_studio;
+
+#define GL_NONE					0x0
+#define GL_FRONT				0x0404
+#define GL_BACK				0x0405
 
 //
 // engine shared convars
