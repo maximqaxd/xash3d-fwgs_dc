@@ -129,6 +129,7 @@ static void GL_SetDefaultState( void )
 
 	// Initialize color to white (default)
 	glState.currentColor = 0xFFFFFFFF;
+	glState.renderMode2D = kRenderNormal;
 
 	// init draw stack
 	tr.draw_list = &tr.draw_stack[0];

@@ -87,7 +87,7 @@ extern poolhandle_t r_temppool;
 #define BLOCK_SIZE_DEFAULT	128		// for keep backward compatibility
 #define BLOCK_SIZE_MAX	128
 
-#define MAX_TEXTURES            1500	// a1ba: increased by users request
+#define MAX_TEXTURES            1536	// a1ba: increased by users request
 #define MAX_DETAIL_TEXTURES	16
 #define MAX_LIGHTMAPS	64
 #define SUBDIVIDE_SIZE	64
@@ -397,6 +397,7 @@ void R_ClearDecals( void );
 //
 // pvr_draw.c
 //
+void Draw_FlushBatch( void );
 void R_Set2DMode( qboolean enable );
 void R_UploadStretchRaw( int texture, int cols, int rows, int width, int height, const byte *data );
 
@@ -431,7 +432,6 @@ void R_InitDlightTexture( void );
 void R_TextureList_f( void );
 void R_InitImages( void );
 void R_ShutdownImages( void );
-void R_DefragmentVRAM( int max_iterations );
 int GL_TexMemory( void );
 qboolean R_SearchForTextureReplacement( char *out, size_t size, const char *modelname, const char *fmt, ... ) FORMAT_CHECK( 4 );
 void R_TextureReplacementReport( const char *modelname, int gl_texturenum, const char *foundpath );
@@ -664,9 +664,7 @@ typedef struct
 	qboolean		in2DMode;
 	
 	uint32_t	currentColor;  // ARGB format: 0xAARRGGBB
-	
-	// VGUI drawing state
-	qboolean		vgui_alpha_test_enabled;  // Alpha test state from VGUI_SetupDrawing
+	int		renderMode2D;  // GL_SetRenderMode for 2D: kRenderNormal, kRenderTransColor, etc.
 } glstate_t;
 
 typedef struct
@@ -677,17 +675,6 @@ typedef struct
 
 extern glconfig_t		glConfig;
 extern glstate_t		glState;
-
-#define GL_NONE					0x0
-
-// PVR renderer doesn't include OpenGL headers, but some shared logic uses GL_* cull constants.
-// Keep numeric values identical to OpenGL for compatibility with higher-level code.
-#ifndef GL_FRONT
-#define GL_FRONT 0x0404
-#endif
-#ifndef GL_BACK
-#define GL_BACK  0x0405
-#endif
 
 //
 // -----------------------------------------------------------------------------
@@ -852,8 +839,6 @@ extern convar_t	r_studio_lambert;
 extern convar_t	r_detailtextures;
 extern convar_t	r_novis;
 extern convar_t	r_nocull;
-extern convar_t	r_pvs_cull_entities;
-extern convar_t	r_occlusion_cull_studio;
 extern convar_t	r_lockpvs;
 extern convar_t	r_lockfrustum;
 extern convar_t	r_traceglow;
