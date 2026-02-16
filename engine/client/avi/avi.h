@@ -34,4 +34,9 @@ movie_state_t *AVI_GetState( int num );
 qboolean AVI_Initailize( void );
 void AVI_Shutdown( void );
 
+#if XASH_DREAMCAST
+// Accessor function for MPEG player (needed for audio polling)
+void *AVI_GetMpegPlayer( movie_state_t *Avi );
+#endif
+
 #endif // AVI_H

@@ -4,7 +4,8 @@
 
 XASH_CLIENT_OBJS = \
 	engine/client/vgui/vgui_draw.o \
-	engine/client/avi/avi_stub.o \
+	engine/client/avi/mpg_dc.o \
+	engine/client/avi/mpeg.o \
 	engine/client/cl_cmds.o \
 	engine/client/cl_custom.o \
 	engine/client/cl_debug.o \

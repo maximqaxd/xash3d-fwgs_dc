@@ -27,6 +27,7 @@ debug:
 -include $(CURDIR)/scripts/dreamcast/valve/wad.mk
 -include $(CURDIR)/scripts/dreamcast/valve/models.mk
 -include $(CURDIR)/scripts/dreamcast/valve/sounds.mk
+-include $(CURDIR)/scripts/dreamcast/valve/videos.mk
 
 copy_extra:
 	@echo "Copying extra folders from $(VALVE_DIR) to $(REPACKED_DIR)/valve..."
@@ -80,8 +81,9 @@ gfx: gfx-all
 wad: wad-all
 models: models-all
 sounds: sounds-convert-mp3 sounds-convert-sounds
+videos: videos-all
 
-all: gfx wad models sounds copy_extra
+all: gfx wad models sounds videos copy_extra
 #all: copy_extra
 
 # Global clean target that calls all specific clean targets
@@ -92,4 +94,4 @@ clean:
 	@rm -f $(REPACKED_DIR)/IP.BIN
 	@rm -f $(REPACKED_DIR)/0GDTEX.PVR
 
-.PHONY: all gfx wad models sounds copy_extra clean debug
+.PHONY: all gfx wad models sounds videos copy_extra clean debug

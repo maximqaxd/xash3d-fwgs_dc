@@ -319,7 +319,11 @@ static void GAME_EXPORT UI_DrawLogo( const char *filename, float x, float y, flo
 
 		// run cinematic if not
 		Q_snprintf( path, sizeof( path ), "media/%s", filename );
+#if XASH_DREAMCAST
+		COM_DefaultExtension( path, ".mpg", sizeof( path ));
+#else
 		COM_DefaultExtension( path, ".avi", sizeof( path ));
+#endif
 		fullpath = FS_GetDiskPath( path, false );
 
 		if( FS_FileExists( path, false ) && !fullpath )

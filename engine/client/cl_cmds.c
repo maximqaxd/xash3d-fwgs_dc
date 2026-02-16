@@ -42,7 +42,11 @@ void CL_PlayVideo_f( void )
 	switch( Cmd_Argc( ))
 	{
 	case 2:	// simple user version
+#if XASH_DREAMCAST
+		Q_snprintf( path, sizeof( path ), "media/%s.mpg", Cmd_Argv( 1 ));
+#else
 		Q_snprintf( path, sizeof( path ), "media/%s.avi", Cmd_Argv( 1 ));
+#endif
 		SCR_PlayCinematic( path );
 		break;
 	case 3:	// sequenced cinematics used this
