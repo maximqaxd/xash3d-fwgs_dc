@@ -17,9 +17,10 @@ static inline unsigned PVR_NearZ_VisMaskTri( const ClipVert_t *v )
 {
 	unsigned mask = 0;
 	// sh4zam perspective: clip.z == near_z, clip.w == -z_eye -> inside when (w >= z)
-	if( v[0].pos.w >= v[0].pos.z ) mask |= 1;
-	if( v[1].pos.w >= v[1].pos.z ) mask |= 2;
-	if( v[2].pos.w >= v[2].pos.z ) mask |= 4;
+	// Use epsilon so we don't submit tris that barely cross the near plane.
+	if( v[0].pos.w >= v[0].pos.z + PVR_NEAR_CLIP_EPSILON ) mask |= 1;
+	if( v[1].pos.w >= v[1].pos.z + PVR_NEAR_CLIP_EPSILON ) mask |= 2;
+	if( v[2].pos.w >= v[2].pos.z + PVR_NEAR_CLIP_EPSILON ) mask |= 4;
 	return mask;
 }
 
@@ -32,13 +33,13 @@ static inline uint32_t PVR_LerpARGB( uint32_t c1, uint32_t c2, uint8_t ti )
 }
 
 // Clip edge from v1 to v2 against near plane in clip space.
-// For our projection, near plane is (w - z >= 0).
+// Plane (w - z - epsilon >= 0) so clipped vertices stay in front of the near band.
 static inline void PVR_NearZ_ClipEdge( const ClipVert_t *v1, const ClipVert_t *v2, ClipVert_t *out )
 {
-	const float d0 = v1->pos.w - v1->pos.z;
-	const float d1 = v2->pos.w - v2->pos.z;
+	const float d0 = v1->pos.w - v1->pos.z - PVR_NEAR_CLIP_EPSILON;
+	const float d1 = v2->pos.w - v2->pos.z - PVR_NEAR_CLIP_EPSILON;
 
-	// Intersection parameter for plane (w-z)=0 along segment v1->v2:
+	// Intersection parameter for plane (w-z-epsilon)=0 along segment v1->v2:
 	// t = d0 / (d0 - d1)
 	// d0 >= 0 is "inside", d1 < 0 is "outside" (or vice versa). This yields t in [0,1].
 	const float denom = ( d0 - d1 );

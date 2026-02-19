@@ -1214,8 +1214,8 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 		uv[i][0] = s;
 		uv[i][1] = t;
 		
-		// Track if any vertex is visible
-		if( transformed[i].z >= -transformed[i].w )
+		// Track if any vertex is in front of near plane 
+		if( transformed[i].w >= transformed[i].z + PVR_NEAR_CLIP_EPSILON )
 			vismask_all |= (1 << i);
 	}
 	
@@ -1326,8 +1326,7 @@ static qboolean DrawGLPoly_AnyVertexVisible( glpoly2_t *p )
 	{
 		shz_vec3_t pos = shz_vec3_init( v[0], v[1], v[2] );
 		shz_vec4_t tp = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
-		// sh4zam perspective: near plane is (w >= z)
-		if( tp.w >= tp.z )
+		if( tp.w >= tp.z + PVR_NEAR_CLIP_EPSILON )
 			return true;
 	}
 
