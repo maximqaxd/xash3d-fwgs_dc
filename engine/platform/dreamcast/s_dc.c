@@ -18,15 +18,16 @@ GNU General Public License for more details.
 #include "sound.h"
 #include "platform/platform.h"
 #include <dc/sound/sound.h>
+#include "AudioEngine.h"
 
 #if XASH_SOUND == SOUND_KOS
 
 
 qboolean SNDDMA_Init(void)
 {
+	if( !AudioEngine_Initialise() )
+		return false;
 
-	snd_init();
-	snd_stream_init_ex(4, music_buffer);
 	dma.format.speed    = SOUND_DMA_SPEED;
 	dma.format.channels = 2;
 	dma.format.width    = 2;

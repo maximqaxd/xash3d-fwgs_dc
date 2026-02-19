@@ -16,6 +16,10 @@ GNU General Public License for more details.
 
 #include <stddef.h>
 #include "soundlib.h"
+#if XASH_DREAMCAST
+#include "../../platform/dreamcast/AudioEngine.h"
+#include "../../platform/dreamcast/AicaInterface.h"  // For AICA_MAX_SAMPLES
+#endif
 
 static const byte *iff_data;
 static const byte *iff_dataPtr;
@@ -377,63 +381,39 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
     {
         uint32_t chunk_size = GetLittleLong();
         
-        // ADPCM block alignment
-        #define ADPCM_BLOCK_SIZE 32
-
         // Calculate total samples using correct formula
         int total_samples = (int)((float)chunk_size / (((float)(sound.width * 8) / 8) * (float)sound.channels));
         
-        // Calculate aligned size (keep original size)
-        size_t aligned_size = ALIGN(total_samples, ADPCM_BLOCK_SIZE);
         sound.samples = total_samples;
         sound.size = chunk_size;
 
-        // Try to allocate AICA memory
-        uint32_t aica_addr = snd_mem_malloc(aligned_size);
+        // Use AudioEngine for ADPCM loading (supports PAKs via memory buffers)
+        const byte *sample_data = buffer + (iff_dataPtr - buffer);
+        uint32_t sample_size = chunk_size;
         
-        if(aica_addr)
-        {
-            // Map AICA memory to SH4 address space
-            uint32_t sh4_addr = 0x00800000 + aica_addr;
-
-            void *aligned_buffer = memalign(32, aligned_size); // 32-byte alignment for safety
-            if (!aligned_buffer)
-            {
-                Con_DPrintf(S_ERROR "AICA: Failed to allocate aligned buffer for %s\n", name);
-                snd_mem_free(aica_addr);
-                return false;
-            }
-
-            // Copy ADPCM data to aligned buffer
-            const byte* src = buffer + (iff_dataPtr - buffer);
-            memcpy(aligned_buffer, src, total_samples);
-
-            // Pad with zeros if necessary
-            if (aligned_size > total_samples)
-            {
-                memset((uint8_t *)aligned_buffer + total_samples, 0, aligned_size - total_samples);
-            }
-
-            // Copy from aligned buffer to AICA memory
-            memcpy((void *)sh4_addr, aligned_buffer, aligned_size);
-
-            // Flush data cache to ensure write completion
-            dcache_flush_range((void *)sh4_addr, aligned_size);
-
-            free(aligned_buffer);
-
-            // Store AICA position and type
-            sound.aica_pos = aica_addr;
-            sound.type = WF_ADPCMDATA;
-            sound.wav = (void *)aica_addr;
-
-            return true;
-        }
-        else
-        {
-            Con_Printf("%s: dropped sound %s not enough free mem in SRAM, requested %zu bytes\n", __func__, name, sound.size);
+        // Load via AudioEngine (ADPCM is 4-bit, handled by AudioEngine)
+        int audioEngineIndex = AudioEngine_LoadFromWaveInfo(
+            sample_data,
+            sample_size,
+            sound.rate,
+            sound.channels,
+            4,  // ADPCM is 4-bit
+            name,
+            buffer,  // Full WAV file for streaming support
+            (uint32_t)filesize
+        );
+        
+        if(audioEngineIndex < 0) {
+            Con_Printf("%s: dropped sound %s - AudioEngine load failed, requested %zu bytes\n", __func__, name, sound.size);
             return false;
         }
+        
+        // Store AudioEngine index in aica_pos (repurposed for AudioEngine)
+        sound.aica_pos = (uint32_t)audioEngineIndex;
+        sound.type = WF_ADPCMDATA;
+        sound.wav = NULL;  // AudioEngine manages the buffer
+        
+        return true;
     }
     else
 #endif
@@ -459,10 +439,43 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
         sound.type = WF_PCMDATA;
         sound.samples /= sound.channels;
         sound.size = sound.samples * sound.width * sound.channels;
-        sound.wav = Mem_Malloc(host.soundpool, sound.size);
+        
 #ifdef XASH_DREAMCAST
-        sound.aica_pos = 0;  // Mark as main memory
-#endif
+        // Small sound - use memory-based loading (supports PAKs via memory buffers)
+        // Note: Large sounds (>AICA_MAX_SAMPLES) are handled in FS_LoadSound() before
+        // loading into memory, so we only get small sounds here
+        const byte *sample_data = buffer + (iff_dataPtr - buffer);
+        uint32_t sample_size = sound.size;
+        int bits_per_sample = sound.width * 8;
+        
+        // Load via AudioEngine (handles SFX automatically)
+        int audioEngineIndex = AudioEngine_LoadFromWaveInfo(
+            sample_data,
+            sample_size,
+            sound.rate,
+            sound.channels,
+            bits_per_sample,
+            name,
+            buffer,  // Full WAV file for streaming support
+            (uint32_t)filesize
+        );
+        
+        if(audioEngineIndex < 0) {
+            Con_DPrintf(S_ERROR "%s: AudioEngine_LoadFromWaveInfo failed for %s\n", __func__, name);
+            return false;
+        }
+        
+        // Store AudioEngine index in aica_pos (repurposed for AudioEngine)
+        // For SFX: index >= AUDIO_ENGINE_MAX_STREAMS
+        // For streaming: index < AUDIO_ENGINE_MAX_STREAMS
+        sound.aica_pos = (uint32_t)audioEngineIndex;
+        
+        // Don't allocate wav buffer - AudioEngine manages it
+        sound.wav = NULL;
+        
+        return true;
+#else
+        sound.wav = Mem_Malloc(host.soundpool, sound.size);
 
         memcpy(sound.wav, buffer + (iff_dataPtr - buffer), sound.size);
 
@@ -482,6 +495,7 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
         }
 
         return true;
+#endif
     }
 
     return false;

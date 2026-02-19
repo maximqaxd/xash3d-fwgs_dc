@@ -71,6 +71,7 @@ XASH_OBJS = \
 	engine/common/mod_studio.o \
 	engine/common/model.o \
 	engine/common/munge.o \
+	engine/common/masterlist.o \
 	engine/common/net_buffer.o \
 	engine/common/net_chan.o \
 	engine/common/net_encode.o \
@@ -111,6 +112,8 @@ XASH_SERVER_OBJS =	\
 XASH_PLATFORM_OBJS = \
 	engine/platform/misc/lib_static.o \
 	engine/platform/dreamcast/s_dc.o \
+	engine/platform/dreamcast/AicaInterface.o \
+	engine/platform/dreamcast/AudioEngine.o \
 	engine/platform/dreamcast/sys_dc.o \
 	engine/platform/dreamcast/vid_dc.o \
 	engine/platform/dreamcast/in_dc.o 

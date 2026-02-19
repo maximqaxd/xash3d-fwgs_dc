@@ -220,6 +220,19 @@ S_StreamSetPause
 void S_StreamSetPause( int pause )
 {
 	s_listener.stream_paused = pause;
+#if XASH_DREAMCAST
+	/* Actually stop/start the stream so music pauses during changelevel and resumes after signon. */
+	if( music_stream == SND_STREAM_INVALID || !s_bgTrack.stream )
+		return;
+	if( pause )
+		snd_stream_stop( music_stream );
+	else
+	{
+		wavdata_t *info = FS_StreamInfo( s_bgTrack.stream );
+		if( info )
+			snd_stream_start( music_stream, info->rate, info->channels - 1 );
+	}
+#endif
 }
 
 /*
@@ -270,8 +283,8 @@ void S_StreamBackgroundTrack(void)
     
     float volume = S_GetMusicVolume();
 
-    if (s_listener.paused || s_listener.stream_paused)
-        volume = 0.0f;
+	if( !s_musicvolume.value || s_listener.paused || s_listener.stream_paused )
+		return;
 
 	else if (!cl.background)
 	{

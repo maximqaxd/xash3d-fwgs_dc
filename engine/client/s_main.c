@@ -19,6 +19,9 @@ GNU General Public License for more details.
 #include "con_nprint.h"
 #include "pm_local.h"
 #include "platform/platform.h"
+#if XASH_DREAMCAST
+#include "platform/dreamcast/AudioEngine.h"
+#endif
 
 #define SND_CLIP_DISTANCE		1000.0f
 
@@ -119,11 +122,17 @@ void S_FreeChannel( channel_t *ch )
 {
 #ifdef XASH_DREAMCAST
 
-    // Don't protect static channels from being freed
-    if (ch->aica_channel < MAX_DYNAMIC_CHANNELS && 
-        Sys_DoubleTime() - ch->start_time < 0.1)  // 100ms protection for dynamic only
+    if (ch->aica_channel < MAX_DYNAMIC_CHANNELS && ch->start_time > 0 &&
+        Sys_DoubleTime() - ch->start_time < 0.2)
         return;
     
+    // Stop AudioEngine playback if channel is active
+    // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+    if( ch->active && ch->sfx && ch->sfx->cache && ch->sfx->cache->aica_pos >= 0 )
+    {
+        AudioEngine_Stop( (int)ch->sfx->cache->aica_pos );
+        aica_channels_in_use[ch->aica_channel] = false;
+    }
 
     ch->active = false;
     ch->start_time = 0;  // Reset start time when freeing
@@ -231,6 +240,42 @@ static int SND_GetChannelTimeLeft(const channel_t *ch)
     if (!ch->active || !ch->sfx || !ch->sfx->cache)
         return 0;
     
+    // For AudioEngine sounds, check actual playback state
+    if (ch->sfx->cache->aica_pos >= 0)
+    {
+        // Check if it's a stream or SFX
+        if ((uint32_t)ch->sfx->cache->aica_pos < AUDIO_ENGINE_MAX_STREAMS)
+        {
+            if (!AudioEngine_IsStreamPlaying((int)ch->sfx->cache->aica_pos))
+                return 0;  // Stream ended
+            // Stream is playing - return a large value to prevent premature freeing
+            return ch->sfx->cache->samples;
+        }
+        else
+        {
+            int aica_ch = AudioEngine_GetSfxChannel((int)ch->sfx->cache->aica_pos);
+            if (aica_ch < 0)
+                return 0;  
+            // SFX is still playing - calculate remaining time for priority/LRU only
+            uint32_t samples = ch->sfx->cache->samples;
+            double current_time = Sys_DoubleTime();
+            double elapsed = current_time - ch->start_time;
+            if (elapsed < 0.1)  // 100ms protection
+                return samples;
+            if (ch->start_time <= 0)
+                return samples;  // start_time not set yet, treat as full duration
+            uint32_t curpos = (uint32_t)(elapsed * ch->sfx->cache->rate);
+            uint32_t remaining = (curpos >= samples) ? 0 : (samples - curpos);
+
+            if (remaining == 0 && aica_ch >= 0) {
+                double expected_duration = (double)samples / (double)ch->sfx->cache->rate;
+                if (elapsed < expected_duration * 1.2)
+                    return 1;  
+            }
+            return remaining;
+        }
+    }
+    
     uint32_t samples = ch->sfx->cache->samples;
     double current_time = Sys_DoubleTime();
     
@@ -329,9 +374,23 @@ channel_t *SND_PickDynamicChannel( int entnum, int channel, sfx_t *sfx, qboolean
         if( ch->sfx && ( ch->entchannel == CHAN_STREAM ))
             continue;
 
+#ifdef XASH_DREAMCAST
+        if( ch->sfx && ch->sfx->cache && ch->sfx->cache->aica_pos >= 0 &&
+            (uint32_t)ch->sfx->cache->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+            continue;
+#endif
+
         if( channel != CHAN_AUTO && ch->entnum == entnum && ( ch->entchannel == channel || channel == -1 ))
         {
-            // always override sound from same entity
+            // Same entity + channel: don't restart the same one-shot while it's still playing
+            if( ch->sfx == sfx && ch->sfx->cache && !FBitSet( ch->sfx->cache->flags, SOUND_LOOPED ))
+            {
+                if( SND_GetChannelTimeLeft( ch ) > 0 )
+                {
+                    if( ignore ) *ignore = true;
+                    return NULL;  // same one-shot still playing, ignore duplicate StartSound
+                }
+            }
             first_to_die = ch_idx;
             break;
         }
@@ -373,17 +432,11 @@ channel_t *SND_PickDynamicChannel( int entnum, int channel, sfx_t *sfx, qboolean
         }
 
 #ifdef XASH_DREAMCAST
-        // Stop AICA playback before freeing the channel
         channel_t *ch = &channels[first_to_die];
-        if(ch->active)
+        // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+        if(ch->active && ch->sfx && ch->sfx->cache && ch->sfx->cache->aica_pos >= 0)
         {
-            AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-            cmd->cmd = AICA_CMD_CHAN;
-            cmd->timestamp = 0;
-            cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-            cmd->cmd_id = ch->aica_channel;
-            chan->cmd = AICA_CH_CMD_STOP;
-            snd_sh4_to_aica(tmp, cmd->size);
+            AudioEngine_Stop( (int)ch->sfx->cache->aica_pos );
             aica_channels_in_use[ch->aica_channel] = false;
             ch->active = false;
         }
@@ -424,6 +477,19 @@ channel_t *SND_PickStaticChannel( const vec3_t pos, sfx_t *sfx )
     {
         if( channels[i].sfx && channels[i].active )
         {
+#ifdef XASH_DREAMCAST
+            // Streams are managed by AudioEngine. While a stream is playing, don't reclaim.
+            // If the stream has ended (not playing anymore), free the channel now.
+            if( channels[i].sfx->cache && channels[i].sfx->cache->aica_pos >= 0 &&
+                (uint32_t)channels[i].sfx->cache->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+            {
+                if( AudioEngine_IsStreamPlaying((int)channels[i].sfx->cache->aica_pos) )
+                    continue;
+
+                S_FreeChannel( &channels[i] );
+                continue;
+            }
+#endif
             // Check if sound has finished playing
             if( SND_GetChannelTimeLeft( &channels[i] ) <= 0 )
             {
@@ -511,17 +577,25 @@ static int S_AlterChannel( int entnum, int channel, sfx_t *sfx, int vol, int pit
             if( ch->entnum == entnum && ch->entchannel == channel && ch->sfx && ch->isSentence )
             {
 #ifdef XASH_DREAMCAST
-                if( flags & SND_CHANGE_VOL && ch->active )
+                // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+                if( flags & SND_CHANGE_VOL && ch->active && ch->sfx && ch->sfx->cache && ch->sfx->cache->aica_pos >= 0 )
                 {
-                    // Update AICA volume
-                    AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-                    cmd->cmd = AICA_CMD_CHAN;
-                    cmd->timestamp = 0;
-                    cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-                    cmd->cmd_id = ch->aica_channel;
-                    chan->cmd = AICA_CH_CMD_UPDATE;
-                    chan->vol = vol;  // Might need scaling here
-                    snd_sh4_to_aica(tmp, cmd->size);
+                    wavdata_t *pSource = ch->sfx->cache;
+                    // For streams: only update if still playing. Don't restart ended streams.
+                    if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS && !AudioEngine_IsStreamPlaying((int)pSource->aica_pos) )
+                        goto skip_audioengine_update_sentence;
+                    qboolean use_loop = (ch->entchannel == CHAN_STATIC) ? ch->use_loop : (ch->use_loop && FBitSet( pSource->flags, SOUND_LOOPED ));
+                    uint32_t loop_offset = 0;
+                    if( use_loop && FBitSet( pSource->flags, SOUND_LOOPED ) && pSource->loopStart > 0 )
+                    {
+                        if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+                            loop_offset = (uint32_t)(pSource->loopStart * pSource->width * pSource->channels);
+                        else
+                            loop_offset = (uint32_t)(pSource->loopStart * pSource->channels);
+                    }
+                    AudioEngine_Play( (int)pSource->aica_pos, (uint8_t)vol, 128, 128, (bool)use_loop, loop_offset );
+skip_audioengine_update_sentence:
+                    ;
                 }
 #endif
                 if( flags & SND_CHANGE_PITCH )
@@ -545,17 +619,25 @@ static int S_AlterChannel( int entnum, int channel, sfx_t *sfx, int vol, int pit
         if( ch->entnum == entnum && ch->entchannel == channel && ch->sfx == sfx )
         {
 #ifdef XASH_DREAMCAST
-            if( flags & SND_CHANGE_VOL && ch->active )
+            // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+            if( flags & SND_CHANGE_VOL && ch->active && ch->sfx && ch->sfx->cache && ch->sfx->cache->aica_pos >= 0 )
             {
-                // Update AICA volume
-                AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-                cmd->cmd = AICA_CMD_CHAN;
-                cmd->timestamp = 0;
-                cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-                cmd->cmd_id = ch->aica_channel;
-                chan->cmd = AICA_CH_CMD_UPDATE;
-                chan->vol = vol;  // Might need scaling here
-                snd_sh4_to_aica(tmp, cmd->size);
+                wavdata_t *pSource = ch->sfx->cache;
+                // For streams: only update if still playing. Don't restart ended streams.
+                if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS && !AudioEngine_IsStreamPlaying((int)pSource->aica_pos) )
+                    goto skip_audioengine_update_regular;
+                qboolean use_loop = (ch->entchannel == CHAN_STATIC) ? ch->use_loop : (ch->use_loop && FBitSet( pSource->flags, SOUND_LOOPED ));
+                uint32_t loop_offset = 0;
+                if( use_loop && FBitSet( pSource->flags, SOUND_LOOPED ) && pSource->loopStart > 0 )
+                {
+                    if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+                        loop_offset = (uint32_t)(pSource->loopStart * pSource->width * pSource->channels);
+                    else
+                        loop_offset = (uint32_t)(pSource->loopStart * pSource->channels);
+                }
+                AudioEngine_Play( (int)pSource->aica_pos, (uint8_t)vol, 128, 128, (bool)use_loop, loop_offset );
+skip_audioengine_update_regular:
+                ;
             }
 #endif
             if( flags & SND_CHANGE_PITCH )
@@ -594,12 +676,11 @@ static void S_SpatializeChannel( int *left_vol, int *right_vol, int master_vol, 
 	
 
 #ifdef XASH_DREAMCAST
-    // AICA uses 0-255 for volume and pan
-    // Convert volumes to AICA format
+
  	*right_vol = bound( 0, *right_vol * 0.65f, 255 );
     *left_vol = bound( 0, *left_vol * 0.65f, 255 );
 
-     // Calculate pan based on volume difference
+     // Calculate pan based on volume difference (for single-channel panning)
     if (*right_vol == *left_vol)
         *pan = 128;  // Center
     else if (*right_vol > *left_vol)
@@ -607,9 +688,6 @@ static void S_SpatializeChannel( int *left_vol, int *right_vol, int master_vol, 
     else
         *pan = 128 - ((*left_vol - *right_vol) * 128 / 255);
 
-    // Use average of volumes instead of maximum
-    int avg_vol = (*right_vol + *left_vol) / 2;
-    *right_vol = *left_vol = avg_vol;
 #else
     *right_vol = bound( 0, *right_vol, 255 );
     *left_vol = bound( 0, *left_vol, 255 );
@@ -667,24 +745,62 @@ static void SND_Spatialize( channel_t *ch )
     }
 
 #ifdef XASH_DREAMCAST
-     // Calculate spatialization for AICA
+     // Calculate spatialization (pan is calculated by S_SpatializeChannel)
     S_SpatializeChannel( &ch->leftvol, &ch->rightvol, ch->master_vol, gain, dot, dist * ch->dist_mult, &pan );
 
-    // Only update AICA if the channel is already playing
-    if(ch->active && ch->sfx && ch->sfx->cache)
+    // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+    if(ch->active && ch->sfx && ch->sfx->cache && ch->sfx->cache->aica_pos >= 0)
     {
-        AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
+        wavdata_t *pSource = ch->sfx->cache;
+        // Use the pan value calculated by S_SpatializeChannel
+        pan = bound( 0, pan, 255 );
         
-        cmd->cmd = AICA_CMD_CHAN;
-        cmd->timestamp = 0;
-        cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-        cmd->cmd_id = ch->aica_channel;
-        
-        chan->cmd = AICA_CH_CMD_UPDATE;
-        chan->vol = ch->leftvol;
-        chan->pan = pan;
-        
-        snd_sh4_to_aica(tmp, cmd->size);
+        if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+        {
+            // Stream: update volume/pan only if it's still playing.
+            if( !AudioEngine_IsStreamPlaying( (int)pSource->aica_pos ))
+                return;
+
+            // Still playing: update volume/pan via AudioEngine_Play (it updates if already playing)
+            qboolean use_loop = (ch->entchannel == CHAN_STATIC) ? ch->use_loop : (ch->use_loop && FBitSet( pSource->flags, SOUND_LOOPED ));
+            uint32_t loop_offset = 0;
+            if( use_loop && FBitSet( pSource->flags, SOUND_LOOPED ) && pSource->loopStart > 0 )
+                loop_offset = (uint32_t)(pSource->loopStart * pSource->width * pSource->channels);
+            AudioEngine_Play(
+                (int)pSource->aica_pos,
+                (uint8_t)((ch->leftvol + ch->rightvol) / 2),
+                (uint8_t)pan,
+                (uint8_t)pan,
+                (bool)use_loop,
+                loop_offset
+            );
+        }
+        else
+        {
+            // SFX: only update if still actually playing. If one-shot finished, GetSfxChannel returns -1
+            int nStream = (int)pSource->aica_pos;
+            if( AudioEngine_GetSfxChannel( nStream ) >= 0 )
+            {
+                // Still playing: update volume/pan only (CHAN_STATIC = ambient, use channel intent for loop)
+                qboolean use_loop = (ch->entchannel == CHAN_STATIC) ? ch->use_loop : (ch->use_loop && FBitSet( pSource->flags, SOUND_LOOPED ));
+                uint32_t loop_offset = 0;
+                if( use_loop && FBitSet( pSource->flags, SOUND_LOOPED ) && pSource->loopStart > 0 )
+                    loop_offset = (uint32_t)(pSource->loopStart * pSource->channels);
+                AudioEngine_Play(
+                    nStream,
+                    (uint8_t)((ch->leftvol + ch->rightvol) / 2),
+                    (uint8_t)pan,
+                    (uint8_t)pan,
+                    (bool)use_loop,
+                    loop_offset
+                );
+            }
+            else if( ch->entchannel == CHAN_STATIC )
+            {
+                /* One-shot ambient finished: free channel so it stops after playback and slot can be reused. */
+                S_FreeChannel( ch );
+            }
+        }
     }
 
 #else
@@ -751,10 +867,13 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
         return;
     }
 #ifdef XASH_DREAMCAST
-    // Store AICA channel and state before memset
+    // Store AICA channel and state before memset; stop previous sound via AudioEngine
     int saved_aica_channel = target_chan->aica_channel;
     qboolean was_active = target_chan->active;
     qboolean was_in_use = aica_channels_in_use[saved_aica_channel];
+    int prev_audio_engine_index = 0;
+    if( was_active && target_chan->sfx && target_chan->sfx->cache )
+        prev_audio_engine_index = (int)target_chan->sfx->cache->aica_pos;
 #endif
 
     // spatialize
@@ -764,18 +883,7 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
     // Restore AICA state
     target_chan->aica_channel = saved_aica_channel;
     aica_channels_in_use[saved_aica_channel] = was_in_use;
-    
-    // If channel was active, stop it first
-    if(was_active)
-    {
-        AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-        cmd->cmd = AICA_CMD_CHAN;
-        cmd->timestamp = 0;
-        cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-        cmd->cmd_id = target_chan->aica_channel;
-        chan->cmd = AICA_CH_CMD_STOP;
-        snd_sh4_to_aica(tmp, cmd->size);
-    }
+    // Don't stop here - we'll check if it's a different sound after loading pSource
 #endif
 
     VectorCopy( pos, target_chan->origin );
@@ -827,40 +935,59 @@ void S_StartSound( const vec3_t pos, int ent, int chan, sound_t handle, float fv
         {
             if( chan != CHAN_STREAM )
             {
-                S_FreeChannel( target_chan );
-                return; // not audible at all
+                {
+                    S_FreeChannel( target_chan );
+                    return; // not audible at all
+                }
             }
         }
     }
 
 #ifdef XASH_DREAMCAST
-    // Start sound on AICA
-    if(pSource)
+    // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+    if( pSource && pSource->aica_pos >= 0 )
     {
-        qboolean should_loop = (target_chan->use_loop && FBitSet(pSource->flags, SOUND_LOOPED));
+        // Only stop previous sound if it's different from the new sound
+        // Never stop streams when starting a different sound - streams are long-running and should only stop when they end naturally
+        if( was_active && prev_audio_engine_index >= 0 && prev_audio_engine_index != (int)pSource->aica_pos )
+        {
+            // Only stop if previous sound is an SFX (not a stream)
+            // Streams should only be stopped when they end naturally or explicitly via S_StopSound
+            if( (uint32_t)prev_audio_engine_index >= AUDIO_ENGINE_MAX_STREAMS )
+            {
+                AudioEngine_Stop( prev_audio_engine_index );
+            }
+        }
         
-        AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-        
-        cmd->cmd = AICA_CMD_CHAN;
-        cmd->timestamp = 0;
-        cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-        cmd->cmd_id = target_chan->aica_channel;
-        
-        chan->cmd = AICA_CH_CMD_START;
-        chan->base = pSource->aica_pos;
-        chan->type = pSource->type;
-        chan->length = pSource->size;
-        
-        chan->loop = should_loop;
-        chan->loopstart = 0;
-        chan->loopend = pSource->size;
-        
-        chan->freq = pSource->rate;
-        chan->vol = (target_chan->leftvol + target_chan->rightvol) / 2;
-        chan->pan = 128;  // Will be updated by spatialize
-        
-        snd_sh4_to_aica(tmp, cmd->size);
-        
+        /* CHAN_STATIC (train/ambient): use channel intent so it loops. Other channels: require SOUND_LOOPED. */
+        qboolean use_loop = (chan == CHAN_STATIC) ? target_chan->use_loop : (target_chan->use_loop && FBitSet( pSource->flags, SOUND_LOOPED ));
+        uint32_t loop_offset = 0;
+        if( use_loop && FBitSet( pSource->flags, SOUND_LOOPED ) && pSource->loopStart > 0 )
+        {
+            if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+                loop_offset = (uint32_t)(pSource->loopStart * pSource->width * pSource->channels); /* bytes for streams */
+            else
+                loop_offset = (uint32_t)(pSource->loopStart * pSource->channels); /* 16-bit sample count for SFX */
+        }
+        // Calculate pan value from leftvol/rightvol (0=left, 128=center, 255=right)
+        // AudioEngine expects pan values, not volume values
+        int pan = 128; // Center
+        if( target_chan->rightvol != target_chan->leftvol )
+        {
+            if( target_chan->rightvol > target_chan->leftvol )
+                pan = 128 + ((target_chan->rightvol - target_chan->leftvol) * 127 / 255);
+            else
+                pan = 128 - ((target_chan->leftvol - target_chan->rightvol) * 128 / 255);
+        }
+        pan = bound( 0, pan, 255 );
+        AudioEngine_Play(
+            (int)pSource->aica_pos,
+            (uint8_t)((target_chan->leftvol + target_chan->rightvol) / 2),
+            (uint8_t)pan,
+            (uint8_t)pan,
+            (bool)use_loop,
+            loop_offset
+        );
         aica_channels_in_use[target_chan->aica_channel] = true;
         target_chan->active = true;
         target_chan->start_time = Sys_DoubleTime();
@@ -906,29 +1033,23 @@ void S_RestoreSound(const vec3_t pos, int ent, int chan, sound_t handle, float f
     }
 
 #ifdef XASH_DREAMCAST
-    // Store AICA channel state before memset
+    // Store AICA channel state before memset; stop previous sound via AudioEngine
     int saved_aica_channel = target_chan->aica_channel;
     qboolean was_active = target_chan->active;
-    
-    // Stop previous sound if active
-    if(was_active)
-    {
-        AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-        cmd->cmd = AICA_CMD_CHAN;
-        cmd->timestamp = 0;
-        cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-        cmd->cmd_id = saved_aica_channel;
-        chan->cmd = AICA_CH_CMD_STOP;
-        snd_sh4_to_aica(tmp, cmd->size);
-    }
+    qboolean was_in_use = aica_channels_in_use[saved_aica_channel];
+    int prev_audio_engine_index = 0;
+    if( was_active && target_chan->sfx && target_chan->sfx->cache )
+        prev_audio_engine_index = (int)target_chan->sfx->cache->aica_pos;
 #endif
 
     // spatialize
     memset(target_chan, 0, sizeof(*target_chan));
 
 #ifdef XASH_DREAMCAST
-    // Restore AICA channel
+    // Restore AICA channel state
     target_chan->aica_channel = saved_aica_channel;
+    aica_channels_in_use[saved_aica_channel] = was_in_use;
+    // Don't stop here - we'll check if it's a different sound after loading pSource
 #endif
 
     VectorCopy(pos, target_chan->origin);
@@ -995,34 +1116,46 @@ void S_RestoreSound(const vec3_t pos, int ent, int chan, sound_t handle, float f
     target_chan->pMixer.forcedEndSample = end;
 
 #ifdef XASH_DREAMCAST
-    // Start sound on AICA
-    if(pSource)
+    // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+    if( pSource && pSource->aica_pos >= 0 )
     {
-        qboolean should_loop = (target_chan->use_loop && FBitSet(pSource->flags, SOUND_LOOPED));
+        if( was_active && prev_audio_engine_index >= 0 && prev_audio_engine_index != (int)pSource->aica_pos )
+        {
+            // Streams should only be stopped when they end naturally or explicitly via S_StopSound
+            if( (uint32_t)prev_audio_engine_index >= AUDIO_ENGINE_MAX_STREAMS )
+            {
+                AudioEngine_Stop( prev_audio_engine_index );
+            }
+        }
         
-
-        AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-        
-        cmd->cmd = AICA_CMD_CHAN;
-        cmd->timestamp = 0;
-        cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-        cmd->cmd_id = target_chan->aica_channel;
-        
-        chan->cmd = AICA_CH_CMD_START;
-        chan->base = pSource->aica_pos;
-        chan->type = pSource->type;
-        chan->length = pSource->size;
-        
-        chan->loop = should_loop;
-        chan->loopstart = 0;
-        chan->loopend = pSource->size;
-        
-        chan->freq = pSource->rate;
-        chan->vol = (target_chan->leftvol + target_chan->rightvol) / 2;
-        chan->pan = 128;  // Will be updated by spatialize
-        
-        snd_sh4_to_aica(tmp, cmd->size);
-        
+        /* CHAN_STATIC (train/ambient): use channel intent so it loops. Other channels: require SOUND_LOOPED. */
+        qboolean use_loop = (chan == CHAN_STATIC) ? target_chan->use_loop : (target_chan->use_loop && FBitSet( pSource->flags, SOUND_LOOPED ));
+        uint32_t loop_offset = 0;
+        if( use_loop && FBitSet( pSource->flags, SOUND_LOOPED ) && pSource->loopStart > 0 )
+        {
+            if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+                loop_offset = (uint32_t)(pSource->loopStart * pSource->width * pSource->channels); /* bytes for streams */
+            else
+                loop_offset = (uint32_t)(pSource->loopStart * pSource->channels); /* 16-bit sample count for SFX */
+        }
+        // Calculate pan value from leftvol/rightvol (0=left, 128=center, 255=right)
+        int pan = 128; // Center
+        if( target_chan->rightvol != target_chan->leftvol )
+        {
+            if( target_chan->rightvol > target_chan->leftvol )
+                pan = 128 + ((target_chan->rightvol - target_chan->leftvol) * 127 / 255);
+            else
+                pan = 128 - ((target_chan->leftvol - target_chan->rightvol) * 128 / 255);
+        }
+        pan = bound( 0, pan, 255 );
+        AudioEngine_Play(
+            (int)pSource->aica_pos,
+            (uint8_t)((target_chan->leftvol + target_chan->rightvol) / 2),
+            (uint8_t)pan,
+            (uint8_t)pan,
+            (bool)use_loop,
+            loop_offset
+        );
         aica_channels_in_use[target_chan->aica_channel] = true;
         target_chan->active = true;
         target_chan->start_time = Sys_DoubleTime();
@@ -1074,21 +1207,13 @@ void S_AmbientSound(const vec3_t pos, int ent, sound_t handle, float fvol, float
     if(!ch) return;
 
 #ifdef XASH_DREAMCAST
-    // Store AICA channel state
+    // Store AICA channel state; we'll check if we need to stop after loading pSource
     int saved_aica_channel = ch->aica_channel;
     qboolean was_active = ch->active;
-    
-    // Stop previous sound if active
-    if(was_active)
-    {
-        AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-        cmd->cmd = AICA_CMD_CHAN;
-        cmd->timestamp = 0;
-        cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-        cmd->cmd_id = ch->aica_channel;
-        chan->cmd = AICA_CH_CMD_STOP;
-        snd_sh4_to_aica(tmp, cmd->size);
-    }
+    int prev_audio_engine_index = 0;
+    if( was_active && ch->sfx && ch->sfx->cache )
+        prev_audio_engine_index = (int)ch->sfx->cache->aica_pos;
+    // Don't stop here - we'll check if it's a different sound after loading pSource
 #endif
 
     VectorCopy(pos, ch->origin);
@@ -1140,34 +1265,51 @@ void S_AmbientSound(const vec3_t pos, int ent, sound_t handle, float fvol, float
     SND_Spatialize(ch);
 
 #ifdef XASH_DREAMCAST
-    // Start sound on AICA
-    if(pSource)
+    // Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+    if( pSource && pSource->aica_pos >= 0 )
     {
-        qboolean should_loop = (ch->use_loop && FBitSet(pSource->flags, SOUND_LOOPED));
+        // This prevents stopping/restarting the same sound every frame
+        // Never stop streams when starting a different sound - streams are long-running and should only stop when they end naturally
+        if( was_active && prev_audio_engine_index >= 0 && prev_audio_engine_index != (int)pSource->aica_pos )
+        {
+            // Only stop if previous sound is an SFX (not a stream)
+            // Streams should only be stopped when they end naturally or explicitly via S_StopSound
+            if( (uint32_t)prev_audio_engine_index >= AUDIO_ENGINE_MAX_STREAMS )
+            {
+                AudioEngine_Stop( prev_audio_engine_index );
+            }
+        }
         
-
-        AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
-        
-        cmd->cmd = AICA_CMD_CHAN;
-        cmd->timestamp = 0;
-        cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
-        cmd->cmd_id = ch->aica_channel;
-        
-        chan->cmd = AICA_CH_CMD_START;
-        chan->base = pSource->aica_pos;
-        chan->type = pSource->type;
-        chan->length = pSource->size;
-        
-        chan->loop = should_loop;
-        chan->loopstart = 0;
-        chan->loopend = pSource->size;
-        
-        chan->freq = pSource->rate;
-        chan->vol = (ch->leftvol + ch->rightvol) / 2;
-        chan->pan = 128;  // Will be updated by spatialize
-        
-        snd_sh4_to_aica(tmp, cmd->size);
-        
+        /* Ambients: use channel intent so train/waterfall etc. loop when server doesn't set SND_STOP_LOOPING.
+         * One-shot ambients (e.g. door) need the game to pass SND_STOP_LOOPING. */
+        qboolean use_loop = ch->use_loop;
+        uint32_t loop_offset = 0;
+        if( use_loop && FBitSet( pSource->flags, SOUND_LOOPED ) && pSource->loopStart > 0 )
+        {
+            if( (uint32_t)pSource->aica_pos < AUDIO_ENGINE_MAX_STREAMS )
+                loop_offset = (uint32_t)(pSource->loopStart * pSource->width * pSource->channels); /* bytes for streams */
+            else
+                loop_offset = (uint32_t)(pSource->loopStart * pSource->channels); /* 16-bit sample count for SFX */
+        }
+        // Calculate pan value from leftvol/rightvol (0=left, 128=center, 255=right)
+        // AudioEngine expects pan values, not volume values
+        int pan = 128; // Center
+        if( ch->rightvol != ch->leftvol )
+        {
+            if( ch->rightvol > ch->leftvol )
+                pan = 128 + ((ch->rightvol - ch->leftvol) * 127 / 255);
+            else
+                pan = 128 - ((ch->leftvol - ch->rightvol) * 128 / 255);
+        }
+        pan = bound( 0, pan, 255 );
+        AudioEngine_Play(
+            (int)pSource->aica_pos,
+            (uint8_t)((ch->leftvol + ch->rightvol) / 2),
+            (uint8_t)pan,
+            (uint8_t)pan,
+            (bool)use_loop,
+            loop_offset
+        );
         aica_channels_in_use[ch->aica_channel] = true;
         ch->active = true;
         ch->start_time = Sys_DoubleTime();

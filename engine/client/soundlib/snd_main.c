@@ -14,6 +14,10 @@ GNU General Public License for more details.
 */
 
 #include "soundlib.h"
+#if XASH_DREAMCAST
+#include "../../platform/dreamcast/AudioEngine.h"
+#include "../../platform/dreamcast/AicaInterface.h"  // For AICA_MAX_SAMPLES
+#endif
 
 static void Sound_Reset( void )
 {
@@ -92,6 +96,64 @@ wavdata_t *FS_LoadSound( const char *filename, const byte *buffer, size_t size )
 			Q_snprintf( path, sizeof( path ),
 				format->formatstring, loadname, "", format->ext );
 
+#if XASH_DREAMCAST
+			// For WAV files, check if we need streaming BEFORE loading into memory
+			if( !Q_stricmp( format->ext, "wav" ))
+			{
+				dc_file_t *vfs_file = FS_Open( path, "rb", false );
+				if( vfs_file )
+				{
+					// Parse WAV header to check sample count
+					struct WavHeader hdr;
+					if( AudioEngine_ParseWaveHeader_VFS( vfs_file, &hdr ))
+					{
+						// Calculate total samples
+						int total_samples = (int)((float)hdr.chunkHeader.size / (((float)(hdr.fmtHeader.bitsPerSample) / 8) * (float)hdr.fmtHeader.numChannels));
+						
+						// If samples exceed AICA_MAX_SAMPLES, use VFS streaming
+						if( total_samples > AICA_MAX_SAMPLES )
+						{
+							// Use AudioEngine_LoadFromVFS for file-based streaming
+							// Note: AudioEngine will keep the VFS file handle open for streaming
+							int audioEngineIndex = AudioEngine_LoadFromVFS( vfs_file, path, 0 );
+							if( audioEngineIndex >= 0 )
+							{
+								// Populate sound structure for SoundPack()
+								Sound_Reset();
+								sound.rate = hdr.fmtHeader.sampleRate;
+								sound.channels = hdr.fmtHeader.numChannels;
+								sound.width = hdr.fmtHeader.bitsPerSample / 8;
+								sound.samples = total_samples / sound.channels;
+								sound.size = hdr.chunkHeader.size;
+								sound.type = WF_PCMDATA;
+								sound.loopstart = 0;
+								sound.flags = 0;
+								sound.wav = NULL;
+								sound.aica_pos = (uint32_t)audioEngineIndex;
+								
+								// Don't close vfs_file - AudioEngine needs it for streaming
+								return SoundPack();
+							}
+							// If AudioEngine_LoadFromVFS failed, close the file and fall through to normal loading
+							FS_Close( vfs_file );
+							vfs_file = NULL;
+						}
+						else
+						{
+							// Small sound - close VFS handle and load into memory normally
+							FS_Close( vfs_file );
+							vfs_file = NULL;
+						}
+					}
+					else
+					{
+						// Failed to parse header - close and fall through to normal loading
+						FS_Close( vfs_file );
+						vfs_file = NULL;
+					}
+				}
+			}
+#endif
 			f = FS_LoadFile( path, &filesize, false );
 			if( f && filesize > 0 )
 			{
