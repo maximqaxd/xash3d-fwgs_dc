@@ -760,7 +760,8 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 	const int size = smax * tmax;
 
 	if( gl_overbright.value )
-	 	lightscale = ( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256 ) + 0.5;
+		lightscale = 256;
+	else lightscale = ( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256 ) + 0.5;
 
 	memset( r_blocklights, 0, sizeof( uint ) * size * 3 );
 
@@ -859,9 +860,9 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 #if REF_PVR_PROFILE
 	PVR_Prof_Start();
 #endif
-	float r = 0.0f, g = 0.0f, b = 0.0f;
+	int ir, ig, ib;
 	
-	// Sample static lightmap if available (like Q2 example, but using Xash3D lightstyle scaling)
+	// Sample static lightmap if available 
 	if( surf && surf->samples && WORLDMODEL && WORLDMODEL->lightdata )
 	{
 		const mextrasurf_t *info = surf->info;
@@ -890,36 +891,272 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 		// Base pointer to first style samples
 		const color24 *lightmap = &surf->samples[it * smax + is];
 		
-		// Accumulate all styles (like R_BuildLightMap in gl_rsurf.c)
+		uint r_accum = 0, g_accum = 0, b_accum = 0;
 		for( int maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++ )
 		{
 			const color24 *lm = lightmap + maps * size;
 			// tr.lightstylevalue is 16.16 fixed point (256 = 1.0)
-			const float scale = (float)tr.lightstylevalue[surf->styles[maps]] / 256.0f;
+			const uint scale = tr.lightstylevalue[surf->styles[maps]];
 			
-			r += lm->r * scale;
-			g += lm->g * scale;
-			b += lm->b * scale;
+			r_accum += lm->r * scale;
+			g_accum += lm->g * scale;
+			b_accum += lm->b * scale;
 		}
 		
 		// If no styles, treat as fullbright
-		if( r == 0.0f && g == 0.0f && b == 0.0f )
+		if( r_accum == 0 && g_accum == 0 && b_accum == 0 )
 		{
-			r = g = b = 255.0f;
+			r_accum = 255 * 256;
+			g_accum = 255 * 256;
+			b_accum = 255 * 256;
 		}
+		
+		// Apply lightscale (gamma compensation) and convert to 10-bit range
+		// This matches GL renderer: val = bl[i] * lightscale >> 14
+		int lightscale;
+		if( gl_overbright.value )
+			lightscale = 256; // Simple case for overbright
+		else
+			lightscale = (int)( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256.0f + 0.5f );
+		
+		uint r_val = ( r_accum * lightscale ) >> 14;
+		uint g_val = ( g_accum * lightscale ) >> 14;
+		uint b_val = ( b_accum * lightscale ) >> 14;
+		
+		// Clamp to 10-bit range (0-1023)
+		if( r_val > 1023 ) r_val = 1023;
+		if( g_val > 1023 ) g_val = 1023;
+		if( b_val > 1023 ) b_val = 1023;
+		
+		// Add dynamic lights before applying gamma
+		// Dynamic lights are additive and sampled per-vertex using 2D lightmap-space distance (like GL renderer)
+		if( surf && surf->dlightbits && r_dynamic->value && surf->dlightframe == tr.framecount )
+		{
+			const mextrasurf_t *info = surf->info;
+			const int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
+			int sample_frac = 1;
+			mtexinfo_t *tex = surf->texinfo;
+			
+			// Get sample fraction for world luxels (like GL renderer)
+			if( FBitSet( tex->flags, TEX_WORLD_LUXELS ))
+			{
+				if( surf->texinfo->faceinfo )
+					sample_frac = surf->texinfo->faceinfo->texture_step;
+				else if( FBitSet( surf->texinfo->flags, TEX_EXTRA_LIGHTMAP ))
+					sample_frac = LM_SAMPLE_EXTRASIZE;
+				else
+					sample_frac = LM_SAMPLE_SIZE;
+			}
+			
+			vec3_t vert_world;
+			vec3_t origin_l, impact;
+			float dist_plane, rad, minlight, add;
+			
+			// Transform vertex to world space if needed
+			if( !tr.modelviewIdentity )
+			{
+				PVR_Mat4x4_TransformVec3( &RI.objectMatrix, vert, vert_world );
+			}
+			else
+			{
+				VectorCopy( vert, vert_world );
+			}
+			
+			// Calculate vertex position in lightmap space (we already have this from static lighting)
+			float vert_s = DotProduct( vert_world, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
+			float vert_t = DotProduct( vert_world, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
+			
+			// Sample all dynamic lights affecting this surface
+			for( int lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
+			{
+				if( !FBitSet( surf->dlightbits, BIT( lnum )))
+					continue; // not lit by this light
+				
+				const dlight_t *dl = &tr.dlights[lnum];
+				
+				// Check if light is still alive
+				if( dl->die < gp_cl->time || !dl->radius )
+					continue;
+				
+				// Transform light origin to local bmodel space (like GL renderer)
+				if( !tr.modelviewIdentity )
+					PVR_Mat4x4_VectorITransform( &RI.objectMatrix, dl->origin, origin_l );
+				else
+					VectorCopy( dl->origin, origin_l );
+				
+				// Project light onto surface plane and calculate effective radius
+				rad = dl->radius;
+				dist_plane = PlaneDiff( origin_l, surf->plane );
+				rad -= fabs( dist_plane );
+				
+				// rad is now the highest intensity on the plane
+				minlight = dl->minlight;
+				if( rad < minlight )
+					continue;
+				
+				minlight = rad - minlight;
+				
+				// Calculate impact point on surface plane
+				if( surf->plane->type < 3 )
+				{
+					VectorCopy( origin_l, impact );
+					impact[surf->plane->type] -= dist_plane;
+				}
+				else
+				{
+					VectorMA( origin_l, -dist_plane, surf->plane->normal, impact );
+				}
+				
+				// Calculate light position in lightmap space
+				float light_s = DotProduct( impact, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
+				float light_t = DotProduct( impact, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
+				
+				// Calculate 2D distance in lightmap space (like GL renderer)
+				float sd = (light_s - vert_s) * sample_frac;
+				float td = (light_t - vert_t) * sample_frac;
+				
+				if( sd < 0 ) sd = -sd;
+				if( td < 0 ) td = -td;
+				
+				// Use same distance calculation as GL renderer
+				float dist_2d;
+				if( sd > td )
+					dist_2d = sd + (td * 0.5f);
+				else
+					dist_2d = td + (sd * 0.5f);
+				
+				// Check if within effective radius
+				if( dist_2d >= minlight )
+					continue;
+				
+				// Attenuation: (rad - dist_2d) matching GL renderer
+				add = rad - dist_2d;
+				
+				if( add < 0 )
+					continue;
+				
+				// Scale by 256 to match fixed-point format (same as static lights)
+				uint add_scaled = (uint)( add * 256.0f );
+				
+				// Add light contribution matching GL renderer: ((rad - dist) * 256) * color / 256
+				r_accum += ( dl->color.r * add_scaled ) / 256;
+				g_accum += ( dl->color.g * add_scaled ) / 256;
+				b_accum += ( dl->color.b * add_scaled ) / 256;
+			}
+			
+			// Clamp accumulated values to prevent overflow (max light value is ~255 * radius)
+			// For radius 80, max would be ~255 * 80 = 20400, which fits in uint
+			// But we want to prevent excessive brightness, so clamp to reasonable max
+			const uint max_light_accum = 255 * 256; // Max static light value
+			if( r_accum > max_light_accum ) r_accum = max_light_accum;
+			if( g_accum > max_light_accum ) g_accum = max_light_accum;
+			if( b_accum > max_light_accum ) b_accum = max_light_accum;
+			
+			// Recalculate values after adding dynamic lights
+			r_val = ( r_accum * lightscale ) >> 14;
+			g_val = ( g_accum * lightscale ) >> 14;
+			b_val = ( b_accum * lightscale ) >> 14;
+			
+			// Clamp to 10-bit range (0-1023)
+			if( r_val > 1023 ) r_val = 1023;
+			if( g_val > 1023 ) g_val = 1023;
+			if( b_val > 1023 ) b_val = 1023;
+		}
+		
+		// Apply gamma correction and convert to 8-bit: LightToTexGamma(val) >> 2
+		ir = LightToTexGamma( r_val ) >> 2;
+		ig = LightToTexGamma( g_val ) >> 2;
+		ib = LightToTexGamma( b_val ) >> 2;
 	}
 	else
 	{
-		// No lightmap - fullbright
-		r = g = b = 255.0f;
+		// No lightmap - check for dynamic lights only
+		uint r_dyn = 0, g_dyn = 0, b_dyn = 0;
+		
+		if( surf && surf->dlightbits && r_dynamic->value && surf->dlightframe == tr.framecount )
+		{
+			vec3_t vert_world;
+			vec3_t light_vec;
+			float dist, rad, minlight, add;
+			
+			// Transform vertex to world space if needed
+			if( !tr.modelviewIdentity )
+			{
+				PVR_Mat4x4_TransformVec3( &RI.objectMatrix, vert, vert_world );
+			}
+			else
+			{
+				VectorCopy( vert, vert_world );
+			}
+			
+			// Sample all dynamic lights affecting this surface
+			for( int lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
+			{
+				if( !FBitSet( surf->dlightbits, BIT( lnum )))
+					continue;
+				
+				const dlight_t *dl = &tr.dlights[lnum];
+				
+				if( dl->die < gp_cl->time || !dl->radius )
+					continue;
+				
+				VectorSubtract( vert_world, dl->origin, light_vec );
+				dist = sqrtf( DotProduct( light_vec, light_vec ));
+				
+				rad = dl->radius;
+				minlight = dl->minlight;
+				
+				if( dist >= rad )
+					continue;
+				
+				add = rad - dist;
+				
+				if( add < minlight )
+					continue;
+				
+				uint add_scaled = (uint)( add * 256.0f );
+				
+				r_dyn += ( dl->color.r * add_scaled ) / 256;
+				g_dyn += ( dl->color.g * add_scaled ) / 256;
+				b_dyn += ( dl->color.b * add_scaled ) / 256;
+			}
+			
+			// Clamp accumulated values to prevent overflow
+			const uint max_light_accum = 255 * 256;
+			if( r_dyn > max_light_accum ) r_dyn = max_light_accum;
+			if( g_dyn > max_light_accum ) g_dyn = max_light_accum;
+			if( b_dyn > max_light_accum ) b_dyn = max_light_accum;
+			
+			// Apply lightscale and gamma to dynamic lights
+			int lightscale;
+			if( gl_overbright.value )
+				lightscale = 256;
+			else
+				lightscale = (int)( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256.0f + 0.5f );
+			
+			uint r_val = ( r_dyn * lightscale ) >> 14;
+			uint g_val = ( g_dyn * lightscale ) >> 14;
+			uint b_val = ( b_dyn * lightscale ) >> 14;
+			
+			if( r_val > 1023 ) r_val = 1023;
+			if( g_val > 1023 ) g_val = 1023;
+			if( b_val > 1023 ) b_val = 1023;
+			
+			ir = LightToTexGamma( r_val ) >> 2;
+			ig = LightToTexGamma( g_val ) >> 2;
+			ib = LightToTexGamma( b_val ) >> 2;
+			
+			// Clamp to valid range
+			if( ir > 255 ) ir = 255;
+			if( ig > 255 ) ig = 255;
+			if( ib > 255 ) ib = 255;
+		}
+		else
+		{
+			// No lightmap and no dynamic lights - fullbright
+			ir = ig = ib = 255;
+		}
 	}
-	
-	// TODO: Add dynamic lights here if needed
-	
-	// Clamp and pack to ARGB
-	int ir = (int)r; if( ir > 255 ) ir = 255; if( ir < 0 ) ir = 0;
-	int ig = (int)g; if( ig > 255 ) ig = 255; if( ig < 0 ) ig = 0;
-	int ib = (int)b; if( ib > 255 ) ib = 255; if( ib < 0 ) ib = 0;
 	
 #if REF_PVR_PROFILE
 	r_stats.t_world_lighting += PVR_Prof_End();
@@ -2795,14 +3032,10 @@ void GL_BuildLightmaps( void )
 {
 	int	i, j, nColinElim = 0;
 	model_t	*m;
-    // release old lightmaps
-    for( i = 0; i < MAX_LIGHTMAPS; i++ )
-    {
-        if( !tr.lightmapTextures[i] ) break;
-        GL_FreeTexture( tr.lightmapTextures[i] );
-    }
-
-    memset( tr.lightmapTextures, 0, sizeof( tr.lightmapTextures ));
+	
+	// PVR uses vertex lighting with gouraud shading, not lightmap textures
+	// We still need to set up light samples for vertex lighting, but don't build textures
+	
 	memset( &RI, 0, sizeof( RI ));
 
 	tr.block_size = BLOCK_SIZE_DEFAULT;
@@ -2850,7 +3083,8 @@ void GL_BuildLightmaps( void )
             m->nodes[j].visframe = 0;
     }
 
-    LM_UploadBlock( false );
+    // Don't upload lightmap block - we use vertex lighting instead
+    // LM_UploadBlock( false );
 
 	if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
 	{

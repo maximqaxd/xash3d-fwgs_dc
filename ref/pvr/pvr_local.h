@@ -79,6 +79,7 @@ static inline double PVR_Prof_End( void ) { return 0.0; }
 
 // make mod_ref.h?
 #define LM_SAMPLE_SIZE             16
+#define LM_SAMPLE_EXTRASIZE        8
 
 
 extern poolhandle_t r_temppool;

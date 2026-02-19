@@ -1022,18 +1022,15 @@ void R_RenderScene( void )
 
 void R_GammaChanged( qboolean do_reset_gamma )
 {
-	if( do_reset_gamma )
-	{
-		// paranoia cubemap rendering
-		if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
-			gEngfuncs.drawFuncs->GL_BuildLightmaps( );
-	}
-	else
-	{
-		glConfig.softwareGammaUpdate = true;
-		GL_RebuildLightmaps();
-		glConfig.softwareGammaUpdate = false;
-	}
+	// PVR uses vertex lighting with gouraud shading, not lightmap textures
+	// Gamma tables are updated by engine, we just need to mark gamma changed
+	// so vertex colors will use updated gamma tables on next render
+	glConfig.softwareGammaUpdate = true;
+	
+	// No need to rebuild lightmaps - we sample vertex lights directly
+	// Gamma correction is applied per-vertex in SampleVertexLight()
+	
+	glConfig.softwareGammaUpdate = false;
 }
 
 static void R_CheckCvars( void )
