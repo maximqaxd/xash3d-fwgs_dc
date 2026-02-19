@@ -21,6 +21,8 @@ GNU General Public License for more details.
 
 #if XASH_DREAMCAST
 #include <arch/arch.h>
+#include <arch/exec.h>
+#include <kos.h>
 #endif
 
 #if _MSC_VER
@@ -596,7 +598,52 @@ qboolean Sys_NewInstance( const char *gamedir, const char *finalmsg )
 	Host_ShutdownWithReason( finalmsg );
 	sceAppMgrLoadExec( exe, newargs, NULL );
 #elif XASH_DREAMCAST
-	Host_ShutdownWithReason( finalmsg );		
+	// Free newargs, we don't pass them to arch_exec because it's a chainload
+	for( i = 0; newargs[i] != NULL; i++ )
+		free( newargs[i] );
+
+	free( newargs );
+	static const char *roots[] = { "/cd/", "/pc/", "/sd/" };
+	char path[64];
+	file_t f = FILEHND_INVALID;
+	size_t sz = 0;
+	ssize_t rv;
+	void *image = NULL;
+	int n;
+
+	Q_snprintf( path, sizeof( path ), "%s.bin", gamedir );
+	for( n = 0; n < (int)( sizeof( roots ) / sizeof( roots[0] )); n++ )
+	{
+		char fullpath[72];
+		Q_snprintf( fullpath, sizeof( fullpath ), "%s%s", roots[n], path );
+		f = fs_open( fullpath, O_RDONLY );
+		if( f != FILEHND_INVALID )
+			break;
+	}
+	if( f != FILEHND_INVALID )
+	{
+		sz = (size_t)fs_total( f );
+		if( sz && ( image = malloc( sz )) != NULL )
+		{
+			rv = fs_read( f, image, sz );
+			fs_close( f );
+			if( rv == (ssize_t)sz )
+			{
+				// Now shutdown after loading the binary
+				Host_ShutdownWithReason( finalmsg );
+				// arch_exec never returns, so no need to free image
+				arch_exec( image, (uint32_t)sz );
+				/* never returns */
+			}
+			free( image );
+		}
+		else
+			fs_close( f );
+	}
+	
+	// If we get here, binary loading failed - shutdown anyway
+	Host_ShutdownWithReason( finalmsg );
+	return false;
 #else
 	exelen = wai_getExecutablePath( NULL, 0, NULL );
 	exe = malloc( exelen + 1 );
