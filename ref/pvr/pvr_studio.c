@@ -31,7 +31,7 @@ GNU General Public License for more details.
 #define MAX_LOCALLIGHTS	4
 
 #undef MAXSTUDIOVERTS
-#define MAXSTUDIOVERTS 1024
+#define MAXSTUDIOVERTS 2048
 
 typedef struct
 {
