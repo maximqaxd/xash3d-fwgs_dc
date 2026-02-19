@@ -2845,7 +2845,6 @@ static void Mod_LoadTexture( model_t *mod, dbspmodel_t *bmod, int textureIndex )
 		mtname[16] = '\0';
 		if( mtname[0] == '\0' )
 			Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
-		Con_Printf( "Loading texture %s\n", mtname );
 	}
 
 	texture = (texture_t *)Mem_Calloc( mod->mempool, sizeof( *texture ));
@@ -3944,75 +3943,25 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
 	else if( !bmod->isworld && loadstat.numwarnings )
 		Con_DPrintf( "Mod_Load%s: %i warning(s)\n", isworld ? "World" : "Brush", loadstat.numwarnings );
 
-	    // Profile lump sizes before loading into heap
-    Con_Printf("Profiling lump sizes for %s:\n", mod->name);
-    Con_Printf("\t^3Lump Name\tSize\n");
-    size_t total_size = 0;
-    struct lump_profile_s {
-        const char *name;
-        int lumpnum;
-    } lump_profile[] = {
-        {"Entities", LUMP_ENTITIES},
-        {"Planes", LUMP_PLANES},
-        {"Textures", LUMP_TEXTURES},
-        {"Vertexes", LUMP_VERTEXES},
-        {"Visibility", LUMP_VISIBILITY},
-        {"Nodes", LUMP_NODES},
-        {"TexInfo", LUMP_TEXINFO},
-        {"Surfaces", LUMP_FACES},
-        {"Lighting", LUMP_LIGHTING},
-        {"Clipnodes", LUMP_CLIPNODES},
-        {"Leafs", LUMP_LEAFS},
-        {"MarkSurfaces", LUMP_MARKSURFACES},
-        {"Edges", LUMP_EDGES},
-        {"SurfEdges", LUMP_SURFEDGES},
-        {"Models", LUMP_MODELS}
-    };
-
-    for (i = 0; i < ARRAYSIZE(lump_profile); i++)
-    {
-        int lumpnum = lump_profile[i].lumpnum;
-        size_t lump_size = header->lumps[lumpnum].filelen;
-        Con_Printf("\t%s\t\t%s\n", lump_profile[i].name, Q_memprint(lump_size));
-        total_size += lump_size;
-    }
-    Con_Printf("Total lump size: %s\n", Q_memprint(total_size));
 	// load into heap
 	Mod_LoadEntities( mod, bmod );
-	Con_Printf("Loaded entities\n");
 	Mod_LoadPlanes( mod, bmod );
-	Con_Printf("Loaded planes\n");
 	Mod_LoadSubmodels( mod, bmod );
-	Con_Printf("Loaded submodels\n");
 	Mod_LoadVertexes( mod, bmod );
-	Con_Printf("Loaded vertexes\n");
 	Mod_LoadEdges( mod, bmod );
-	Con_Printf("Loaded edges\n");
 	Mod_LoadSurfEdges( mod, bmod );
-	Con_Printf("Loaded surf edges\n");
 	Mod_LoadTextures( mod, bmod );
-	Con_Printf("Loaded textures\n");
 	Mod_LoadVisibility( mod, bmod );
-	Con_Printf("Loaded visibility\n");
 	Mod_LoadTexInfo( mod, bmod );
-	Con_Printf("Loaded tex info\n");
 	Mod_LoadSurfaces( mod, bmod );
-	Con_Printf("Loaded surfaces\n");
 	Mod_LoadLighting( mod, bmod );
-	Con_Printf("Loaded lighting\n");
 	Mod_LoadMarkSurfaces( mod, bmod );
-	Con_Printf("Loaded mark surfaces\n");
 	Mod_LoadLeafs( mod, bmod );
-	Con_Printf("Loaded leafs\n");
 	Mod_LoadNodes( mod, bmod );
-	Con_Printf("Loaded nodes\n");
 	Mod_LoadClipnodes( mod, bmod );
-	Con_Printf("Loaded clipnodes\n");
 	// preform some post-initalization
 	Mod_MakeHull0( mod, bmod );
-	Con_Printf("Made hull 0\n");
 	Mod_SetupSubmodels( mod, bmod );
-	Con_Printf("Setup submodels\n");
 
 	if( isworld )
 	{

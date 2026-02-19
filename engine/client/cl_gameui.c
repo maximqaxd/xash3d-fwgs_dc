@@ -481,19 +481,34 @@ draw hudsprite routine
 */
 static void PIC_DrawGeneric( float x, float y, float width, float height, const wrect_t *prc )
 {
-	float	s1, s2, t1, t2;
+	float	s1, s2, t1, t2, half = 0.0f;
 	int	w, h;
+	int	texFlags;
 
 	// assume we get sizes from image
 	R_GetTextureParms( &w, &h, gameui.ds.gl_texturenum );
 
+	// Check if texture filtering is enabled and this is a font texture (TF_FONT flag)
+	// Adjust texture coordinates to avoid edge bleeding when filtering is enabled
+	if( prc && w > 0 && h > 0 )
+	{
+		texFlags = REF_GET_PARM( PARM_TEX_FLAGS, gameui.ds.gl_texturenum );
+		// Check if this is a font texture (has TF_FONT flags) and filtering is enabled
+		if( FBitSet( texFlags, TF_FONT ) && REF_GET_PARM( PARM_TEX_FILTERING, gameui.ds.gl_texturenum ))
+		{
+			// Add half-pixel offset to avoid edge bleeding with linear filtering
+			// This matches the engine's CL_DrawCharacter behavior
+			half = 0.5f;
+		}
+	}
+
 	if( prc )
 	{
-		// calc user-defined rectangle
-		s1 = prc->left / (float)w;
-		t1 = prc->top / (float)h;
-		s2 = prc->right / (float)w;
-		t2 = prc->bottom / (float)h;
+		// calc user-defined rectangle with filtering adjustment
+		s1 = ((float)prc->left + half) / (float)w;
+		t1 = ((float)prc->top + half) / (float)h;
+		s2 = ((float)prc->right - half) / (float)w;
+		t2 = ((float)prc->bottom - half) / (float)h;
 
 		if( width == -1 && height == -1 )
 		{
@@ -536,6 +551,7 @@ pfnPIC_Load
 static HIMAGE GAME_EXPORT pfnPIC_Load( const char *szPicName, const byte *image_buf, int image_size, int flags )
 {
 	HIMAGE	tx;
+	const char *ext;
 
 	if( !COM_CheckString( szPicName ))
 	{
@@ -543,8 +559,18 @@ static HIMAGE GAME_EXPORT pfnPIC_Load( const char *szPicName, const byte *image_
 		return 0;
 	}
 
-	// add default parms to image
-	SetBits( flags, TF_IMAGE );
+	// Check if this is a font file (.fnt) - use TF_FONT flags to match engine's font loading
+	ext = COM_FileExtension( szPicName );
+	if( ext && !Q_stricmp( ext, "fnt" ))
+	{
+		// Use TF_FONT flags for .fnt files to ensure consistent filtering with engine fonts
+		SetBits( flags, TF_FONT );
+	}
+	else
+	{
+		// add default parms to image
+		SetBits( flags, TF_IMAGE );
+	}
 
 	Image_SetForceFlags( IL_LOAD_DECAL ); // allow decal images for menu
 	tx = ref.dllFuncs.GL_LoadTexture( szPicName, image_buf, image_size, flags );

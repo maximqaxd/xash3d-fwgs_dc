@@ -720,7 +720,6 @@ void SCR_LoadCreditsFont( void )
 	float scale = hud_fontscale.value;
 	uint32_t crc = 0;
 
-#if !XASH_DREAMCAST
 	// replace default gfx.wad textures by current charset's font
 	if( !CRC32_File( &crc, "gfx.wad" ) || crc == 0x49eb9f16 )
 	{
@@ -736,7 +735,6 @@ void SCR_LoadCreditsFont( void )
 
 	if( !success )
 		success = Con_LoadVariableWidthFont( "gfx/creditsfont.fnt", font, scale, &hud_fontrender, TF_FONT );
-#endif
 	if( !success )
 		success = Con_LoadFixedWidthFont( "gfx/conchars", font, scale, &hud_fontrender, TF_FONT );
 

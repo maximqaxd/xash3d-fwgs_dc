@@ -193,6 +193,9 @@ static void CL_CheckClientState( void )
 		cls.state = ca_active;
 		cls.changelevel = false;		// changelevel is done
 		cls.changedemo = false;		// changedemo is done
+#if XASH_DREAMCAST
+		S_StreamSetPause( false ); // Resume music stream after changelevel
+#endif
 		cl.first_frame = true;		// first rendering frame
 #if !XASH_DREAMCAST
 		SCR_MakeLevelShot();		// make levelshot if needs
@@ -1800,11 +1803,9 @@ CL_SendMasterServerScanRequest
 */
 static void CL_SendMasterServerScanRequest( void )
 {
-#if !XASH_DREAMCAST
 	cls.internetservers_wait = NET_SendToMasters( NS_CLIENT,
 		cls.internetservers_query_len, cls.internetservers_query );
 	cls.internetservers_pending = true;
-#endif
 }
 
 /*
@@ -2460,13 +2461,11 @@ static void CL_Reject( const char *c, const char *args, netadr_t from )
 
 static void CL_ServerList( netadr_t from, sizebuf_t *msg )
 {
-#if !XASH_DREAMCAST
 	if( !NET_IsMasterAdr( from ))
 	{
 		Con_Printf( S_WARN "unexpected server list packet from %s\n", NET_AdrToString( from ));
 		return;
 	}
-#endif
 	// check the extra header
 	if( MSG_ReadByte( msg ) == 0x7f )
 	{
@@ -3724,11 +3723,11 @@ void CL_Shutdown( void )
 	SCR_Shutdown ();
 	CL_UnloadProgs ();
 	cls.initialized = false;
-
+#if !XASH_DREAMCAST
 	// for client-side VGUI support we use other order
 	if( FI && FI->GameInfo && !FI->GameInfo->internal_vgui_support )
 		VGui_Shutdown();
-#if !XASH_DREAMCAST
+	
 	if( g_fsapi.Delete )
 		g_fsapi.Delete( "demoheader.tmp" ); // remove tmp file
 #endif

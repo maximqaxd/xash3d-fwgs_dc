@@ -376,14 +376,15 @@ static int Host_CalcSleep( void )
 	return host_sleeptime.value;
 }
 
-static void Host_NewInstance( const char *name, const char *finalmsg )
+static qboolean Host_NewInstance( const char *name, const char *finalmsg )
 {
-	if( !pChangeGame ) return;
+	if( !pChangeGame ) return false;
 
 	host.change_game = true;
 
 	if( !Sys_NewInstance( name, finalmsg ))
 		pChangeGame( name ); // call from hl.exe
+	return false;  /* true only when exec/chainload does not return */
 }
 
 /*
@@ -412,6 +413,13 @@ static void Host_ChangeGame_f( void )
 
 	if( i == FI->numgames )
 	{
+#if XASH_DREAMCAST
+		/* Try chainloading gamedir.bin even if game not in FI (e.g. cstrike) */
+		char finalmsg[MAX_VA_STRING];
+		Q_snprintf( finalmsg, sizeof( finalmsg ), "change game to '%s'", Cmd_Argv( 1 ));
+		Host_NewInstance( Cmd_Argv( 1 ), finalmsg );
+		/* If chainload succeeded we never return; if we're here, bin not found */
+#endif
 		Con_Printf( "%s not exist\n", Cmd_Argv( 1 ));
 	}
 	else if( !Q_stricmp( GI->gamefolder, Cmd_Argv( 1 )))
@@ -796,6 +804,7 @@ void Host_Frame( double time )
 	if( host.framecount == 0 )
 		Con_DPrintf( "Time to first frame: %.3f seconds\n", t1 - host.starttime );
 
+	
 	Host_InputFrame ();  // input frame
 	Host_ClientBegin (); // begin client
 	Host_GetCommands (); // dedicated in
@@ -1110,12 +1119,9 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 	Cvar_Init();
 
 	// share developer level across all dlls
-#if XASH_DREAMCAST
-	Cvar_DirectSet( &host_developer, "5" );
-#else
+
 	Q_snprintf( dev_level, sizeof( dev_level ), "%i", developer );
 	Cvar_DirectSet( &host_developer, dev_level );
-#endif
 	Cvar_RegisterVariable( &sys_ticrate );
 
 	if( Sys_GetParmFromCmdLine( "-sys_ticrate", ticrate ))
@@ -1241,9 +1247,7 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 
 	Mod_Init();
 	NET_Init();
-#if !XASH_DREAMCAST
 	NET_InitMasters();
-#endif
 	Netchan_Init();
 
 	// allow to change game from the console
