@@ -165,6 +165,15 @@ void SCR_RunCinematic( void )
 
 	if( !AVI_IsActive( cin_state ))
 	{
+#if XASH_DREAMCAST
+		// Ensure audio is stopped before moving to next movie
+		if( cin_state )
+		{
+			mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+			if( player )
+				mpeg_player_stop_audio( player );
+		}
+#endif
 		SCR_NextMovie( );
 		return;
 	}
@@ -172,10 +181,25 @@ void SCR_RunCinematic( void )
 	if( UI_IsVisible( ))
 	{
 		// these can happens when user set +menu_ option to cmdline
+#if XASH_DREAMCAST
+		// Stop MPEG audio immediately when video is skipped
+		if( cin_state && AVI_IsActive( cin_state ))
+		{
+			mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+			if( player )
+			{
+				// Stop audio stream and reset player state to prevent further decoding
+				// mpeg_player_stop_audio() will reset start_time internally
+				mpeg_player_stop_audio( player );
+			}
+		}
+#endif
 		AVI_CloseVideo( cin_state );
 		cls.state = ca_disconnected;
 		Key_SetKeyDest( key_menu );
+#if !XASH_DREAMCAST
 		S_StopStreaming();
+#endif
 		cls.movienum = -1;
 		cin_time = 0.0f;
 		cls.signon = 0;
@@ -188,12 +212,22 @@ void SCR_RunCinematic( void )
 	// stop the video after it finishes
 	if( cin_time > video_duration + 0.1f )
 	{
+#if XASH_DREAMCAST
+		// Ensure audio is stopped and video is closed before moving to next movie
+		if( cin_state && AVI_IsActive( cin_state ))
+		{
+			mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+			if( player )
+				mpeg_player_stop_audio( player );
+		}
+#endif
+		AVI_CloseVideo( cin_state );
 		SCR_NextMovie( );
 		return;
 	}
 
 #if XASH_DREAMCAST
-	if( cin_state )
+	if( cin_state && AVI_IsActive( cin_state ))
 	{
 		mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
 		if( player )
@@ -202,7 +236,9 @@ void SCR_RunCinematic( void )
 			mpeg_decode_result_t result = mpeg_decode_step( player );
 			if( result == MPEG_DECODE_EOF )
 			{
-				// Video finished
+				// Video finished - ensure proper cleanup before moving to next movie
+				mpeg_player_stop_audio( player );
+				AVI_CloseVideo( cin_state );
 				SCR_NextMovie( );
 				return;
 			}
@@ -288,6 +324,17 @@ qboolean SCR_PlayCinematic( const char *arg )
 		Con_Printf( S_ERROR "SCR_PlayCinematic: file not found: %s\n", arg );
 		return false;
 	}
+
+	// Stop any previous video before opening a new one
+#if XASH_DREAMCAST
+	if( cin_state && AVI_IsActive( cin_state ))
+	{
+		mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+		if( player )
+			mpeg_player_stop_audio( player );
+	}
+#endif
+	AVI_CloseVideo( cin_state );
 
 	AVI_OpenVideo( cin_state, fullpath, true, false );
 	if( !AVI_IsActive( cin_state ))

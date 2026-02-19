@@ -284,6 +284,8 @@ void mpeg_player_destroy(mpeg_player_t *player) {
     }
 
     if(player->snd_hnd != SND_STREAM_INVALID) {
+        // Stop the stream before destroying to prevent audio from continuing
+        snd_stream_stop(player->snd_hnd);
         snd_stream_destroy(player->snd_hnd);
         player->snd_hnd = SND_STREAM_INVALID;
     }

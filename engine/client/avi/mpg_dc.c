@@ -19,7 +19,6 @@ GNU General Public License for more details.
 #include "client.h"
 #include "avi.h"
 #include <kos.h>
-allocation
 #define MPEG_MALLOC(sz)      Mem_Malloc( cls.mempool, sz )
 #define MPEG_FREE(p)         Mem_Free( p )
 #define MPEG_REALLOC(p, sz)  Mem_Realloc( cls.mempool, p, sz )
