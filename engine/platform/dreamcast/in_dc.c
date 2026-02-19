@@ -41,7 +41,7 @@ static struct dc_keymap_s {
     int dstkey;      
 } dc_keymap[] = 
 {
-	{ CONT_START,		K_START_BUTTON },
+	{ CONT_START,		K_ESCAPE },  
 	{ CONT_B,			K_B_BUTTON },
 	{ CONT_A,			K_A_BUTTON },
 	{ CONT_DPAD_DOWN,	K_DPAD_DOWN },
