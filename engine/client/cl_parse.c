@@ -2560,7 +2560,7 @@ void CL_ParseServerMessage( sizebuf_t *msg )
 
 				cls.changelevel = true;
 				S_StopAllSounds( true );
-
+				S_StreamSetPause( true );
 				Con_Printf( "Server changing, reconnecting\n" );
 
 				if( cls.demoplayback )
