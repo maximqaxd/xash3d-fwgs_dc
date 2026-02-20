@@ -51,6 +51,19 @@ static volatile uint32_t ticks;
 
 std::mutex channel_mtx;
 std::thread snd_thread;
+
+static void AE_TraceStream(const char *evt, int nStream, const char *reason) {
+	printf("[ae] %s: stream=%d fd=%d is_vfs=%d vfs=%p mem=%d playing=%d reason=%s fname=%s\n",
+		evt,
+		nStream,
+		streams[nStream].fd,
+		streams[nStream].is_vfs ? 1 : 0,
+		streams[nStream].vfs_file,
+		streams[nStream].is_memory ? 1 : 0,
+		streams[nStream].playing ? 1 : 0,
+		reason ? reason : "-",
+		streams[nStream].fname );
+}
  
 static void StreamRead(int nStream, void* buf, uint32_t size) {
 	if(streams[nStream].is_memory) {
@@ -71,6 +84,21 @@ static void StreamRead(int nStream, void* buf, uint32_t size) {
 		// Read from KOS file handle
 		fs_read(streams[nStream].fd, buf, size);
 	}
+}
+
+/* Must be called with channel_mtx held. */
+static void AudioEngine_CloseStreamHandleLocked(int nStream, const char *reason) {
+	AE_TraceStream("close-begin", nStream, reason);
+	if(streams[nStream].is_vfs && streams[nStream].vfs_file) {
+		FS_Close((dc_file_t *)streams[nStream].vfs_file);
+		streams[nStream].vfs_file = nullptr;
+		streams[nStream].is_vfs = false;
+	}
+	if(streams[nStream].fd >= 0) {
+		fs_close(streams[nStream].fd);
+		streams[nStream].fd = -1;
+	}
+	AE_TraceStream("close-end", nStream, reason);
 }
 
 void AudioEngine_LoadFirstChunk(int nStream) {
@@ -362,9 +390,11 @@ int getSfxChannelIndex(int nStream) {
 }
 
 int AudioEngine_Stop(int nStream) {
+	std::lock_guard<std::mutex> lk(channel_mtx);
+
 	if(nStream < AUDIO_ENGINE_MAX_STREAMS) {
 		debugf("Stopping Stream: %d\n", nStream);
-		if(!streams[nStream].fd && !streams[nStream].vfs_file && !streams[nStream].is_memory) {
+		if(streams[nStream].fd < 0 && !streams[nStream].vfs_file && !streams[nStream].is_memory) {
 			return 0;
 		}
 
@@ -408,7 +438,7 @@ int AudioEngine_Stop(int nStream) {
 	return nStream;
 }
 
-int AudioEngine_Unload(int nStream) {
+static int AudioEngine_UnloadLocked(int nStream) {
 	if(nStream < AUDIO_ENGINE_MAX_STREAMS) {
 		debugf("Stopping Stream: %d\n", nStream);
 
@@ -431,15 +461,9 @@ int AudioEngine_Unload(int nStream) {
 			 streams[nStream].mem_size = 0;
 			 streams[nStream].mem_offset = 0;
 			 streams[nStream].is_memory = false;
-		 } else if(streams[nStream].is_vfs && streams[nStream].vfs_file) {
-			 // VFS file stream - close VFS handle
-			 FS_Close((dc_file_t *)streams[nStream].vfs_file);
-			 streams[nStream].vfs_file = nullptr;
-			 streams[nStream].is_vfs = false;
-		 } else if(streams[nStream].fd >= 0) {
-			 // KOS file stream - close KOS handle
-			 fs_close(streams[nStream].fd);
-			 streams[nStream].fd = -1;
+		 } else {
+			 // File stream (VFS or KOS) - close handle and reset state
+			 AudioEngine_CloseStreamHandleLocked(nStream, "Unload");
 		 }
 	}
 	else {
@@ -473,17 +497,20 @@ int AudioEngine_Unload(int nStream) {
 	return nStream;
 }
 
+int AudioEngine_Unload(int nStream) {
+	std::lock_guard<std::mutex> lk(channel_mtx);
+	return AudioEngine_UnloadLocked(nStream);
+}
+
 int AudioEngine_GetOpenStreamIndex(const char * fname, file_t fd) {
+	std::lock_guard<std::mutex> lk(channel_mtx);
+
 	// 1. Check for Duplicate File Name
 	size_t fileNameLength = std::min(strlen(fname), (size_t)128);
     for(int i = 0; i < AUDIO_ENGINE_MAX_STREAMS; i++) {
         if (strncmp(fname, streams[i].fname, fileNameLength) == 0){
 			// Close previous handle (VFS or KOS)
-			if(streams[i].is_vfs && streams[i].vfs_file) {
-				FS_Close((dc_file_t *)streams[i].vfs_file);
-			} else if(streams[i].fd >= 0) {
-				fs_close(streams[i].fd);
-			}
+			AudioEngine_CloseStreamHandleLocked(i, "GetOpenStreamIndex-duplicate");
 			debugf("AudioEngine: File Already In Stream Cache! %i, %s, %s\n", i, fname, streams[i].fname);
             return i;
         }
@@ -504,10 +531,12 @@ int AudioEngine_GetOpenStreamIndex(const char * fname, file_t fd) {
         }
     }
 
-	return AudioEngine_Unload(index);
+	return AudioEngine_UnloadLocked(index);
 }
 
 int AudioEngine_GetOpenSFXIndex(const char * fname) {
+	std::lock_guard<std::mutex> lk(channel_mtx);
+
 	uint32_t last_tick = sfx[0].last_tick;
 	// 1. Check for Duplicate File Name
 	size_t fileNameLength = std::min(strlen(fname), (size_t)128);
@@ -532,7 +561,7 @@ int AudioEngine_GetOpenSFXIndex(const char * fname) {
         }
     }
 
-	return AudioEngine_Unload(index + AUDIO_ENGINE_MAX_STREAMS);
+	return AudioEngine_UnloadLocked(index + AUDIO_ENGINE_MAX_STREAMS);
 }
 
 bool AudioEngine_ParseWaveHeader(file_t fd, WavHeader * hdr) {
@@ -648,11 +677,8 @@ int AudioEngine_Load(const char * fname, uint32_t seek_bytes_aligned)
 			}
 		}
 
-		if (streams[nStream].fd >= 0) {
-            // close prevoius handle
-			fs_close(streams[nStream].fd);
-		}
-		streams[nStream].fd = -1;
+		// close previous handle (if any) and reset handle state
+		AudioEngine_CloseStreamHandleLocked(nStream, "Load(fs)-replace");
 
 		streams[nStream].rate = hdr.fmtHeader.sampleRate;
 		streams[nStream].stereo = hdr.fmtHeader.numChannels == 2;
@@ -795,20 +821,14 @@ int AudioEngine_LoadFromVFS(void *vfs_file_ptr, const char *fname, uint32_t seek
 			}
 		}
 
-		// Close previous handles
-		if (streams[nStream].fd >= 0) {
-			fs_close(streams[nStream].fd);
-			streams[nStream].fd = -1;
-		}
-		if (streams[nStream].vfs_file) {
-			FS_Close((dc_file_t *)streams[nStream].vfs_file);
-			streams[nStream].vfs_file = nullptr;
-		}
+		// Close previous handle (if any) and reset handle state
+		AudioEngine_CloseStreamHandleLocked(nStream, "LoadFromVFS-replace");
 
 		// Set up VFS file handle
 		streams[nStream].vfs_file = vfs_file;
 		streams[nStream].is_vfs = true;
 		streams[nStream].fd = -1;
+		AE_TraceStream("vfs-owned", nStream, "LoadFromVFS");
 		streams[nStream].rate = hdr.fmtHeader.sampleRate;
 		streams[nStream].stereo = hdr.fmtHeader.numChannels == 2;
 		streams[nStream].playing = false;
@@ -980,7 +1000,7 @@ int AudioEngine_LoadFromWaveInfo(const uint8_t * sample_data, uint32_t sample_si
 		// Find an available stream slot
 		int nStream = -1;
 		for(int i = 0; i < AUDIO_ENGINE_MAX_STREAMS; i++) {
-			if(streams[i].fd == -1 && (!streams[i].is_memory || streams[i].mem_data == nullptr)) {
+			if(streams[i].fd == -1 && (!streams[i].is_vfs || !streams[i].vfs_file) && (!streams[i].is_memory || streams[i].mem_data == nullptr)) {
 				nStream = i;
 				break;
 			}
@@ -1008,8 +1028,8 @@ int AudioEngine_LoadFromWaveInfo(const uint8_t * sample_data, uint32_t sample_si
 			if(streams[nStream].is_memory) {
 				// Memory stream - just clear it
 				streams[nStream].mem_data = nullptr;
-			} else if(streams[nStream].fd >= 0) {
-				fs_close(streams[nStream].fd);
+			} else {
+				AudioEngine_CloseStreamHandleLocked(nStream, "LoadFromWaveInfo-LRU");
 			}
 		}
 
