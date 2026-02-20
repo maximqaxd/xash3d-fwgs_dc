@@ -765,23 +765,91 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 
 	memset( r_blocklights, 0, sizeof( uint ) * size * 3 );
 
-	// add all the lightmaps
-	for( map = 0; map < MAXLIGHTMAPS && surf->samples; map++ )
+	/* add all the lightmaps (BSP samples or LT2) */
+	for( map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++ )
 	{
-		const color24 *lm = &surf->samples[map * size];
-		uint scale;
-		int i;
+		const uint scale = tr.lightstylevalue[surf->styles[map]];
 
-		if( surf->styles[map] >= 255 )
-			break;
-
-		scale = tr.lightstylevalue[surf->styles[map]];
-
-		for( i = 0; i < size; i++ )
+		if( surf->samples )
 		{
-			r_blocklights[i * 3 + 0] += lm[i].r * scale;
-			r_blocklights[i * 3 + 1] += lm[i].g * scale;
-			r_blocklights[i * 3 + 2] += lm[i].b * scale;
+			const color24 *lm = &surf->samples[map * size];
+			for( int i = 0; i < size; i++ )
+			{
+				r_blocklights[i * 3 + 0] += lm[i].r * scale;
+				r_blocklights[i * 3 + 1] += lm[i].g * scale;
+				r_blocklights[i * 3 + 2] += lm[i].b * scale;
+			}
+		}
+		else if( WORLDMODEL && FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) &&
+		         WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs && info )
+		{
+			/* LT2 'a' (LERP control-point grid) evaluated on demand */
+			const int face_index = info->lt2_face_index;
+			if( face_index >= 0 && (uint32_t)face_index < WORLDMODEL->lt2_lightsurfs_count )
+			{
+				/* locate style grid by walking previous grids */
+				uint32_t pos = WORLDMODEL->lt2_lightsurfs[face_index];
+				for( int st = 0; st < map; st++ )
+				{
+					if( pos + 1u >= WORLDMODEL->lt2_payload_size ) { pos = 0; break; }
+					const byte op = WORLDMODEL->lt2_payload[pos];
+					const uint gw = ((op >> 4) & 0x0F) + 2u;
+					const uint gh = (op & 0x0F) + 2u;
+					pos += 1u + gw * gh * 3u;
+				}
+
+				if( pos + 1u < WORLDMODEL->lt2_payload_size )
+				{
+					const byte op = WORLDMODEL->lt2_payload[pos];
+					const uint gw = ((op >> 4) & 0x0F) + 2u;
+					const uint gh = (op & 0x0F) + 2u;
+					const uint need = 1u + gw * gh * 3u;
+					const byte *grid = WORLDMODEL->lt2_payload + pos + 1u;
+
+					if( pos + need <= WORLDMODEL->lt2_payload_size && gw >= 2 && gh >= 2 )
+					{
+						for( int y = 0; y < tmax; y++ )
+						{
+							const float v = (tmax == 1) ? 0.0f : ((float)y / (float)(tmax - 1)) * (float)(gh - 1);
+							int cy = (int)floorf( v );
+							if( cy < 0 ) cy = 0;
+							if( cy > (int)gh - 2 ) cy = (int)gh - 2;
+							const float fy = v - (float)cy;
+
+							for( int x = 0; x < smax; x++ )
+							{
+								const float u = (smax == 1) ? 0.0f : ((float)x / (float)(smax - 1)) * (float)(gw - 1);
+								int cx = (int)floorf( u );
+								if( cx < 0 ) cx = 0;
+								if( cx > (int)gw - 2 ) cx = (int)gw - 2;
+								const float fx = u - (float)cx;
+
+								const uint idx00 = (uint)((cy * (int)gw + cx) * 3);
+								const uint idx10 = (uint)((cy * (int)gw + (cx + 1)) * 3);
+								const uint idx01 = (uint)(((cy + 1) * (int)gw + cx) * 3);
+								const uint idx11 = (uint)(((cy + 1) * (int)gw + (cx + 1)) * 3);
+
+								const float c00r = (float)grid[idx00 + 0], c00g = (float)grid[idx00 + 1], c00b = (float)grid[idx00 + 2];
+								const float c10r = (float)grid[idx10 + 0], c10g = (float)grid[idx10 + 1], c10b = (float)grid[idx10 + 2];
+								const float c01r = (float)grid[idx01 + 0], c01g = (float)grid[idx01 + 1], c01b = (float)grid[idx01 + 2];
+								const float c11r = (float)grid[idx11 + 0], c11g = (float)grid[idx11 + 1], c11b = (float)grid[idx11 + 2];
+
+								const float top_r = c00r + (c10r - c00r) * fx;
+								const float top_g = c00g + (c10g - c00g) * fx;
+								const float top_b = c00b + (c10b - c00b) * fx;
+								const float bot_r = c01r + (c11r - c01r) * fx;
+								const float bot_g = c01g + (c11g - c01g) * fx;
+								const float bot_b = c01b + (c11b - c01b) * fx;
+
+								const int i = x + y * smax;
+								r_blocklights[i * 3 + 0] += (uint)(top_r + (bot_r - top_r) * fy) * scale;
+								r_blocklights[i * 3 + 1] += (uint)(top_g + (bot_g - top_g) * fy) * scale;
+								r_blocklights[i * 3 + 2] += (uint)(top_b + (bot_b - top_b) * fy) * scale;
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -861,9 +929,9 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 	PVR_Prof_Start();
 #endif
 	int ir, ig, ib;
-	
-	// Sample static lightmap if available 
-	if( surf && surf->samples && WORLDMODEL && WORLDMODEL->lightdata )
+
+	// Sample static lightmap if available (BSP samples or LT2)
+	if( surf && WORLDMODEL && ( ( surf->samples && WORLDMODEL->lightdata ) || FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING )))
 	{
 		const mextrasurf_t *info = surf->info;
 		const int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
@@ -878,39 +946,117 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 		// Convert to luxel coordinates
 		float ls = s / sample_size;
 		float lt = t / sample_size;
-		
-		int is = (int)ls;
-		int it = (int)lt;
-		
-		// Clamp to valid range
-		if( is < 0 ) is = 0;
-		if( is >= smax ) is = smax - 1;
-		if( it < 0 ) it = 0;
-		if( it >= tmax ) it = tmax - 1;
-		
-		// Base pointer to first style samples
-		const color24 *lightmap = &surf->samples[it * smax + is];
+
+		// Clamp to valid range (fractional luxel coordinate).
+		// Using fractional coords + bilinear sampling avoids visible "tile pops"
+		// from truncation at surface boundaries.
+		float lx = ls, ly = lt;
+		if( lx < 0.0f ) lx = 0.0f;
+		if( ly < 0.0f ) ly = 0.0f;
+		if( lx > (float)( smax - 1 )) lx = (float)( smax - 1 );
+		if( ly > (float)( tmax - 1 )) ly = (float)( tmax - 1 );
+
+		const int ix0 = (int)floorf( lx );
+		const int iy0 = (int)floorf( ly );
+		const int ix1 = ( ix0 + 1 < smax ) ? ( ix0 + 1 ) : ix0;
+		const int iy1 = ( iy0 + 1 < tmax ) ? ( iy0 + 1 ) : iy0;
+		float fx = lx - (float)ix0;
+		float fy = ly - (float)iy0;
+		if( ix1 == ix0 ) fx = 0.0f;
+		if( iy1 == iy0 ) fy = 0.0f;
 		
 		uint r_accum = 0, g_accum = 0, b_accum = 0;
+		qboolean sampled_any = false;
 		for( int maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++ )
 		{
-			const color24 *lm = lightmap + maps * size;
-			// tr.lightstylevalue is 16.16 fixed point (256 = 1.0)
 			const uint scale = tr.lightstylevalue[surf->styles[maps]];
-			
-			r_accum += lm->r * scale;
-			g_accum += lm->g * scale;
-			b_accum += lm->b * scale;
+
+			if( surf->samples && WORLDMODEL->lightdata )
+			{
+				const color24 *lm = &surf->samples[maps * size];
+				const color24 *p00 = &lm[iy0 * smax + ix0];
+				const color24 *p10 = &lm[iy0 * smax + ix1];
+				const color24 *p01 = &lm[iy1 * smax + ix0];
+				const color24 *p11 = &lm[iy1 * smax + ix1];
+
+				const float top_r = (float)p00->r + ((float)p10->r - (float)p00->r) * fx;
+				const float top_g = (float)p00->g + ((float)p10->g - (float)p00->g) * fx;
+				const float top_b = (float)p00->b + ((float)p10->b - (float)p00->b) * fx;
+				const float bot_r = (float)p01->r + ((float)p11->r - (float)p01->r) * fx;
+				const float bot_g = (float)p01->g + ((float)p11->g - (float)p01->g) * fx;
+				const float bot_b = (float)p01->b + ((float)p11->b - (float)p01->b) * fx;
+
+				r_accum += (uint)( top_r + ( bot_r - top_r ) * fy ) * scale;
+				g_accum += (uint)( top_g + ( bot_g - top_g ) * fy ) * scale;
+				b_accum += (uint)( top_b + ( bot_b - top_b ) * fy ) * scale;
+				sampled_any = true;
+			}
+			else if( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs && info )
+			{
+				const int face_index = info->lt2_face_index;
+				if( face_index >= 0 && (uint32_t)face_index < WORLDMODEL->lt2_lightsurfs_count )
+				{
+					uint32_t pos = WORLDMODEL->lt2_lightsurfs[face_index];
+					for( int st = 0; st < maps; st++ )
+					{
+						if( pos + 1u >= WORLDMODEL->lt2_payload_size ) { pos = 0; break; }
+						const byte op = WORLDMODEL->lt2_payload[pos];
+						const uint gw = ((op >> 4) & 0x0F) + 2u;
+						const uint gh = (op & 0x0F) + 2u;
+						pos += 1u + gw * gh * 3u;
+					}
+
+					if( pos + 1u < WORLDMODEL->lt2_payload_size )
+					{
+						const byte op = WORLDMODEL->lt2_payload[pos];
+						const uint gw = ((op >> 4) & 0x0F) + 2u;
+						const uint gh = (op & 0x0F) + 2u;
+						const uint need = 1u + gw * gh * 3u;
+						const byte *grid = WORLDMODEL->lt2_payload + pos + 1u;
+						if( pos + need <= WORLDMODEL->lt2_payload_size && gw >= 2 && gh >= 2 )
+						{
+							const float u = (smax == 1) ? 0.0f : (lx / (float)(smax - 1)) * (float)(gw - 1);
+							const float v = (tmax == 1) ? 0.0f : (ly / (float)(tmax - 1)) * (float)(gh - 1);
+							int cx = (int)floorf( u );
+							int cy = (int)floorf( v );
+							if( cx < 0 ) cx = 0;
+							if( cy < 0 ) cy = 0;
+							if( cx > (int)gw - 2 ) cx = (int)gw - 2;
+							if( cy > (int)gh - 2 ) cy = (int)gh - 2;
+							const float fx = u - (float)cx;
+							const float fy = v - (float)cy;
+
+							const uint idx00 = (uint)((cy * (int)gw + cx) * 3);
+							const uint idx10 = (uint)((cy * (int)gw + (cx + 1)) * 3);
+							const uint idx01 = (uint)(((cy + 1) * (int)gw + cx) * 3);
+							const uint idx11 = (uint)(((cy + 1) * (int)gw + (cx + 1)) * 3);
+
+							const float c00r = (float)grid[idx00 + 0], c00g = (float)grid[idx00 + 1], c00b = (float)grid[idx00 + 2];
+							const float c10r = (float)grid[idx10 + 0], c10g = (float)grid[idx10 + 1], c10b = (float)grid[idx10 + 2];
+							const float c01r = (float)grid[idx01 + 0], c01g = (float)grid[idx01 + 1], c01b = (float)grid[idx01 + 2];
+							const float c11r = (float)grid[idx11 + 0], c11g = (float)grid[idx11 + 1], c11b = (float)grid[idx11 + 2];
+
+							const float top_r = c00r + (c10r - c00r) * fx;
+							const float top_g = c00g + (c10g - c00g) * fx;
+							const float top_b = c00b + (c10b - c00b) * fx;
+							const float bot_r = c01r + (c11r - c01r) * fx;
+							const float bot_g = c01g + (c11g - c01g) * fx;
+							const float bot_b = c01b + (c11b - c01b) * fx;
+
+							r_accum += (uint)(top_r + (bot_r - top_r) * fy) * scale;
+							g_accum += (uint)(top_g + (bot_g - top_g) * fy) * scale;
+							b_accum += (uint)(top_b + (bot_b - top_b) * fy) * scale;
+							sampled_any = true;
+						}
+					}
+				}
+			}
 		}
-		
-		// If no styles, treat as fullbright
-		if( r_accum == 0 && g_accum == 0 && b_accum == 0 )
-		{
-			r_accum = 255 * 256;
-			g_accum = 255 * 256;
-			b_accum = 255 * 256;
-		}
-		
+		// IMPORTANT: do not treat black samples as "no lightmap".
+		// If we couldn't sample any static lighting at all, leave accum = 0 and let
+		// dynamic lights (below) or the final clamp/gamma produce the result.
+		(void)sampled_any;
+
 		// Apply lightscale (gamma compensation) and convert to 10-bit range
 		// This matches GL renderer: val = bl[i] * lightscale >> 14
 		int lightscale;
@@ -1161,7 +1307,6 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 #if REF_PVR_PROFILE
 	r_stats.t_world_lighting += PVR_Prof_End();
 #endif
-	
 	return 0xFF000000 | (ir << 16) | (ig << 8) | ib;
 }
 
@@ -1481,7 +1626,8 @@ conveyor_done:
 	// Both world surfaces and brush entities can have lightmaps (surf->samples)
 	// But exclude TransTexture entities - they should use flat shading
 	qboolean use_gouraud = false;
-	if( surf && surf->samples && WORLDMODEL && WORLDMODEL->lightdata )
+	if( surf && WORLDMODEL && ( ( surf->samples && WORLDMODEL->lightdata ) ||
+		( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs )))
 	{
 		// Don't apply Gouraud to TransTexture 
 		if( rendermode == kRenderTransTexture )
@@ -1493,7 +1639,7 @@ conveyor_done:
 			use_gouraud = true;
 		}
 	}
-	
+
 	// Entity color setup (for translucent entities)
 	uint32_t vertex_colors[64] = { 0 };
 	const uint32_t *vertex_colors_ptr = NULL;
@@ -1644,7 +1790,12 @@ static qboolean R_HasLightmap( void )
     if( r_fullbright->value )
         return false;
 
-	if( !WORLDMODEL->lightdata )
+	if( !WORLDMODEL )
+		return false;
+
+	/* LT2 keeps WORLDMODEL->lightdata NULL on purpose. */
+	if( !WORLDMODEL->lightdata &&
+	    !( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs ))
 		return false;
 
 	if( RI.currententity )
@@ -1866,7 +2017,9 @@ static qboolean R_CheckLightMap( msurface_t *fa )
 	int maps;
 
 #if 1
-	if( !WORLDMODEL->lightdata )
+	/* LT2 keeps WORLDMODEL->lightdata NULL on purpose. */
+	if( !WORLDMODEL->lightdata &&
+	    !( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs ))
 		return false;
 #else
 	// check for lightmap modification
@@ -2099,7 +2252,8 @@ static void R_DrawTextureChains( void )
 		// IMPORTANT: header is submitted ONCE per texture chain, so it MUST be Gouraud+Modulate,
 		// otherwise PVR will ignore vertex colors and you'll see fullbright world.
 		// DrawGLPoly will call DrawGLPolySurfaceGouraud for surfaces with lightmaps.
-		const qboolean use_world_vertex_light = ( !r_fullbright->value && WORLDMODEL && WORLDMODEL->lightdata );
+		const qboolean use_world_vertex_light = ( !r_fullbright->value && WORLDMODEL &&
+			( WORLDMODEL->lightdata || ( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs )));
 		if( use_world_vertex_light )
 			cxt.gen.shading = PVR_SHADE_GOURAUD;
 		cxt.txr.env = use_world_vertex_light ? PVR_TXRENV_MODULATE : PVR_TXRENV_REPLACE;
@@ -2939,7 +3093,7 @@ static void GL_CreateSurfaceLightmap( msurface_t *surf, model_t *loadmodel )
 	mextrasurf_t	*info = surf->info;
 	byte		*base;
 
-	if( !loadmodel->lightdata )
+	if( !loadmodel->lightdata && !FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ))
 		return;
 
 	if( FBitSet( surf->flags, SURF_DRAWTILED ))

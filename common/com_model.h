@@ -254,6 +254,9 @@ typedef struct mextrasurf_s
 #endif
 	mfacebevel_t	*bevel;		// for exact face traceline
 	struct mextrasurf_s	*lumachain;	// draw fullbrights
+#if XASH_DREAMCAST
+	int		lt2_face_index;	// index into worldmodel->lt2_lightsurfs for LT2 lighting
+#endif
 #if !XASH_DREAMCAST
 	struct cl_entity_s	*parent;		// upcast to owner entity
 	int		mirrortexturenum;	// gl texnum
@@ -419,6 +422,13 @@ typedef struct model_s
 //
 	cache_user_t	cache;		// only access through Mod_Extradata
 #if XASH_DREAMCAST
+	// Dreamcast: optional HLDC LT2 lighting (subformat 'a' supported)
+	byte		*lt2_payload;        // rounded-to-4 payload bytes (no header)
+	uint32_t		lt2_payload_size;   // bytes
+	uint32_t		*lt2_lightsurfs;     // offsets into lt2_payload (count = lt2_lightsurfs_count)
+	uint32_t		lt2_lightsurfs_count;
+	byte		lt2_subformat;      // e.g. 'a'
+
 	// Dreamcast: track last usage for studio LRU
 	unsigned int	dc_last_used_frame;
 #endif

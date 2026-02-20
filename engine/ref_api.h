@@ -80,7 +80,9 @@ GNU General Public License for more details.
 #define MODEL_LIQUID		BIT( 2 )	// model has only point hull
 #define MODEL_TRANSPARENT		BIT( 3 )	// have transparent surfaces
 #define MODEL_COLORED_LIGHTING	BIT( 4 )	// lightmaps stored as RGB
-
+#if XASH_DREAMCAST
+#define MODEL_LT2_LIGHTING	BIT( 5 )	// lightmaps stored as external LT2 
+#endif
 #define MODEL_WORLD			BIT( 29 )	// it's a worldmodel
 #define MODEL_CLIENT		BIT( 30 )	// client sprite
 

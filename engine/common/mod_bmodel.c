@@ -1928,6 +1928,7 @@ for embedded submodels
 static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
 {
 	qboolean	colored = false;
+	qboolean	lt2 = false;
 	qboolean	qbsp2 = false;
 	poolhandle_t mempool;
 	char	*ents;
@@ -1939,6 +1940,9 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
 	mempool = mod->mempool;
 	if( FBitSet( mod->flags, MODEL_COLORED_LIGHTING ))
 		colored = true;
+
+	if( FBitSet( mod->flags, MODEL_LT2_LIGHTING ))
+		lt2 = true;
 
 	if( FBitSet( mod->flags, MODEL_QBSP2 ))
 		qbsp2 = true;
@@ -1976,6 +1980,7 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
 
 		// this bit will be shared between all the submodels include worldmodel
 		if( colored ) SetBits( mod->flags, MODEL_COLORED_LIGHTING );
+		if( lt2 ) SetBits( mod->flags, MODEL_LT2_LIGHTING );
 		if( qbsp2 ) SetBits( mod->flags, MODEL_QBSP2 );
 
 		if( i != 0 )
@@ -3794,7 +3799,81 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 {
 	int     i;
 
-    if( !bmod->lightdatasize )
+#if XASH_DREAMCAST
+	char modelname[64], path[64];
+	dc_file_t *f;
+	fs_offset_t filesize;
+	byte hdr_magic[3];
+	byte subformat;
+	uint32_t comp_size, lightsurfs_count;
+	size_t comp_rounded;
+
+	COM_FileBase( mod->name, modelname, sizeof( modelname ));
+	Q_snprintf( path, sizeof( path ), "maps/%s.lt2", modelname );
+
+	f = FS_Open( path, "rb", false );
+	if( f )
+	{
+		filesize = FS_FileLength( f );
+
+		if( FS_Read( f, hdr_magic, sizeof( hdr_magic )) == sizeof( hdr_magic ) && !memcmp( hdr_magic, "LT2", 3 ))
+		{
+			if( FS_Read( f, &subformat, 1 ) == 1 &&
+			    FS_Read( f, &comp_size, 4 ) == 4 &&
+			    FS_Read( f, &lightsurfs_count, 4 ) == 4 )
+			{
+				comp_size = LittleLong( comp_size );
+				lightsurfs_count = LittleLong( lightsurfs_count );
+				comp_rounded = (size_t)(( comp_size + 3u ) & ~3u );
+
+				/* basic sanity */
+				if( subformat == 'a' && comp_rounded > 0 && lightsurfs_count > 0 &&
+				    12u + comp_rounded + (size_t)lightsurfs_count * 4u <= (size_t)filesize )
+				{
+					mod->lt2_payload = Mem_Malloc( mod->mempool, comp_rounded );
+					mod->lt2_payload_size = (uint32_t)comp_rounded;
+					mod->lt2_lightsurfs = Mem_Malloc( mod->mempool, (size_t)lightsurfs_count * 4u );
+					mod->lt2_lightsurfs_count = lightsurfs_count;
+					mod->lt2_subformat = subformat;
+
+					if( FS_Read( f, mod->lt2_payload, comp_rounded ) == (int)comp_rounded &&
+					    FS_Read( f, mod->lt2_lightsurfs, (size_t)lightsurfs_count * 4u ) == (int)((size_t)lightsurfs_count * 4u ))
+					{
+						/* LightSurfs offsets are little-endian */
+						for( uint32_t li = 0; li < lightsurfs_count; li++ )
+							mod->lt2_lightsurfs[li] = LittleLong( mod->lt2_lightsurfs[li] );
+
+						SetBits( mod->flags, MODEL_LT2_LIGHTING );
+						SetBits( mod->flags, MODEL_COLORED_LIGHTING );
+
+						FS_Close( f );
+
+						/* Store surface indices for renderer-side LT2 lookup. */
+						for( i = 0; i < mod->numsurfaces; i++ )
+						{
+							if( mod->surfaces[i].info )
+								mod->surfaces[i].info->lt2_face_index = i;
+							mod->surfaces[i].samples = NULL;
+						}
+
+						Con_Printf( "lighting: lt2 ('%c')\n", subformat );
+						return;
+					}
+
+					mod->lt2_payload = NULL;
+					mod->lt2_payload_size = 0;
+					mod->lt2_lightsurfs = NULL;
+					mod->lt2_lightsurfs_count = 0;
+					mod->lt2_subformat = 0;
+				}
+			}
+		}
+
+		FS_Close( f );
+	}
+#endif /* XASH_DREAMCAST */
+
+	if( !bmod->lightdatasize )
 		return;
 
     switch (bmod->lightmap_samples)
@@ -3841,6 +3920,12 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
             int offset = lightofs / bmod->lightmap_samples;
             mod->surfaces[i].samples = mod->lightdata + offset;
         }
+
+#if XASH_DREAMCAST
+		/* keep surface index available for LT2 even when using BSP lighting */
+		if( mod->surfaces[i].info )
+			mod->surfaces[i].info->lt2_face_index = i;
+#endif
     }
 }
 

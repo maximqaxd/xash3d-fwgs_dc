@@ -40,7 +40,8 @@ void CL_RunLightStyles( lightstyle_t *ls )
 	if( !WORLDMODEL )
 		return;
 
-	if( !WORLDMODEL->lightdata )
+	/* LT2 keeps WORLDMODEL->lightdata NULL on purpose. */
+	if( !WORLDMODEL->lightdata && !FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ))
 	{
 		for( i = 0; i < MAX_LIGHTSTYLES; i++ )
 			tr.lightstylevalue[i] = 256 * 256;
@@ -301,29 +302,99 @@ static qboolean R_RecursiveLightPoint( model_t *model, mnode_t *node, float p1f,
 
 		cv->r = cv->g = cv->b = cv->a = 0;
 
-		if( !surf->samples )
-			return true;
-
 		sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
 		smax = (info->lightextents[0] / sample_size) + 1;
 		tmax = (info->lightextents[1] / sample_size) + 1;
 		ds /= sample_size;
 		dt /= sample_size;
 
-		lm = surf->samples + Q_rint( dt ) * smax + Q_rint( ds );
 		g_trace_fraction = midf;
 		size = smax * tmax;
 		dm = NULL;
+
+		lm = NULL;
+		if( surf->samples )
+			lm = surf->samples + Q_rint( dt ) * smax + Q_rint( ds );
 
 		for( map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++ )
 		{
 			uint	scale = tr.lightstylevalue[surf->styles[map]];
 
-			cv->r += lm->r * scale;
-			cv->g += lm->g * scale;
-			cv->b += lm->b * scale;
+			if( lm )
+			{
+				cv->r += lm->r * scale;
+				cv->g += lm->g * scale;
+				cv->b += lm->b * scale;
 
-			lm += size; // skip to next lightmap
+				lm += size; // skip to next lightmap
+			}
+#if XASH_DREAMCAST
+			else if( FBitSet( model->flags, MODEL_LT2_LIGHTING ) && model->lt2_payload && model->lt2_lightsurfs && info )
+			{
+				/* LT2 'a' (LERP control-point grid): sample a single luxel for this style slot */
+				const int face_index = info->lt2_face_index;
+				if( face_index >= 0 && (uint32_t)face_index < model->lt2_lightsurfs_count )
+				{
+					uint32_t pos = model->lt2_lightsurfs[face_index];
+
+					/* walk previous grids to reach this style slot */
+					for( int st = 0; st < map; st++ )
+					{
+						if( pos + 1u >= model->lt2_payload_size ) { pos = 0; break; }
+						const byte op = model->lt2_payload[pos];
+						const uint gw = ((op >> 4) & 0x0F) + 2u;
+						const uint gh = (op & 0x0F) + 2u;
+						pos += 1u + gw * gh * 3u;
+					}
+
+					if( pos + 1u < model->lt2_payload_size )
+					{
+						const byte op = model->lt2_payload[pos];
+						const uint gw = ((op >> 4) & 0x0F) + 2u;
+						const uint gh = (op & 0x0F) + 2u;
+						const uint need = 1u + gw * gh * 3u;
+						const byte *grid = model->lt2_payload + pos + 1u;
+
+						if( pos + need <= model->lt2_payload_size && gw >= 2 && gh >= 2 && smax >= 1 && tmax >= 1 )
+						{
+							int lx = Q_rint( ds );
+							int ly = Q_rint( dt );
+							if( lx < 0 ) lx = 0;
+							if( ly < 0 ) ly = 0;
+							if( lx > smax - 1 ) lx = smax - 1;
+							if( ly > tmax - 1 ) ly = tmax - 1;
+
+							const float u = (smax == 1) ? 0.0f : (lx / (float)(smax - 1)) * (float)(gw - 1);
+							const float v = (tmax == 1) ? 0.0f : (ly / (float)(tmax - 1)) * (float)(gh - 1);
+							int cx = (int)floorf( u );
+							int cy = (int)floorf( v );
+							if( cx < 0 ) cx = 0;
+							if( cy < 0 ) cy = 0;
+							if( cx > (int)gw - 2 ) cx = (int)gw - 2;
+							if( cy > (int)gh - 2 ) cy = (int)gh - 2;
+							const float fx = u - (float)cx;
+							const float fy = v - (float)cy;
+
+							const byte *p00 = grid + ( (cy * gw + cx) * 3u );
+							const byte *p10 = p00 + 3u;
+							const byte *p01 = p00 + (gw * 3u);
+							const byte *p11 = p01 + 3u;
+
+							const float top_r = p00[0] + (p10[0] - p00[0]) * fx;
+							const float top_g = p00[1] + (p10[1] - p00[1]) * fx;
+							const float top_b = p00[2] + (p10[2] - p00[2]) * fx;
+							const float bot_r = p01[0] + (p11[0] - p01[0]) * fx;
+							const float bot_g = p01[1] + (p11[1] - p01[1]) * fx;
+							const float bot_b = p01[2] + (p11[2] - p01[2]) * fx;
+
+							cv->r += (uint)( top_r + ( bot_r - top_r ) * fy ) * scale;
+							cv->g += (uint)( top_g + ( bot_g - top_g ) * fy ) * scale;
+							cv->b += (uint)( top_b + ( bot_b - top_b ) * fy ) * scale;
+						}
+					}
+				}
+			}
+#endif /* XASH_DREAMCAST */
 
 			if( dm != NULL )
 			{
@@ -361,7 +432,8 @@ static colorVec R_LightVecInternal( const vec3_t start, const vec3_t end, vec3_t
 	if( lspot ) VectorClear( lspot );
 	if( lvec ) VectorClear( lvec );
 
-	if( WORLDMODEL && WORLDMODEL->lightdata )
+	if( WORLDMODEL && ( WORLDMODEL->lightdata ||
+		( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs )))
 	{
 		light.r = light.g = light.b = light.a = 0;
 		last_fraction = 1.0f;
