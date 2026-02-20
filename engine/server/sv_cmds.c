@@ -15,6 +15,10 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "server.h"
+#if XASH_DREAMCAST
+void SV_SoftReboot_Resume_f( void );
+void SV_SoftReboot_Test_f( void );
+#endif
 
 /*
 =================
@@ -1040,6 +1044,10 @@ void SV_InitOperatorCommands( void )
 	Cmd_AddCommand( "shutdownserver", SV_KillServer_f, "shutdown current server" );
 	Cmd_AddCommand( "changelevel", SV_ChangeLevel_f, "change level" );
 	Cmd_AddCommand( "changelevel2", SV_ChangeLevel2_f, "smooth change level" );
+#if XASH_DREAMCAST
+	Cmd_AddRestrictedCommand( "softreboot_resume", SV_SoftReboot_Resume_f, "resume a pending Dreamcast soft reboot" );
+	Cmd_AddRestrictedCommand( "softreboot_test", SV_SoftReboot_Test_f, "Dreamcast: reload binary via arch_exec (heap reset test)" );
+#endif
 	Cmd_AddCommand( "redirect", Rcon_Redirect_f, "force enable rcon redirection" );
 	Cmd_AddCommand( "logaddress", SV_SetLogAddress_f, "sets address and port for remote logging host" );
 	Cmd_AddCommand( "log", SV_ServerLog_f, "enables logging to file" );

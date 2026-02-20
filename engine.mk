@@ -112,6 +112,7 @@ XASH_SERVER_OBJS =	\
 XASH_PLATFORM_OBJS = \
 	engine/platform/misc/lib_static.o \
 	engine/platform/dreamcast/s_dc.o \
+	engine/platform/dreamcast/softreboot_dc.o \
 	engine/platform/dreamcast/AicaInterface.o \
 	engine/platform/dreamcast/AudioEngine.o \
 	engine/platform/dreamcast/sys_dc.o \

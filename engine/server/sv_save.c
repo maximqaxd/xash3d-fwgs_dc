@@ -15,6 +15,7 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "server.h"
+#include "crclib.h"
 #include <zlib.h>
 #include "library.h"
 #include "const.h"
@@ -24,6 +25,8 @@ GNU General Public License for more details.
 #if XASH_DREAMCAST
 #include <kos.h>
 #include <dc/vmu_pkg.h>
+#include <arch/cache.h>
+#include "platform/dreamcast/softreboot_dc.h"
 #endif
 
 /*
@@ -2459,6 +2462,493 @@ static void LoadAdjacentEnts( const char *pOldLevel, const char *pLandmarkName )
 		Host_Error( "Level transition ERROR\nCan't find connection to %s from %s\n", pOldLevel, sv.name );
 }
 
+#if XASH_DREAMCAST
+extern cvar_t dc_softreboot;
+extern cvar_t dc_softreboot_threshold_kb;
+extern cvar_t dc_softreboot_minexec_kb;
+
+static qboolean SoftReboot_LoadVfsFileToReserved( const char *path, uint32_t *out_addr, uint32_t *out_len )
+{
+	dc_file_t *f;
+	fs_offset_t size;
+	void *dst;
+
+	if( !path || !out_addr || !out_len )
+		return false;
+
+	f = FS_Open( path, "rb", true );
+	if( !f )
+		return false;
+
+	size = FS_FileLength( f );
+	if( size <= 0 )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	dst = DC_SoftReboot_ReserveAlloc( (size_t)size, 32 );
+	if( !dst )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	if( FS_Read( f, dst, (size_t)size ) != (int)size )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	FS_Close( f );
+	*out_addr = (uint32_t)(uintptr_t)dst;
+	*out_len = (uint32_t)size;
+	return true;
+}
+
+static qboolean SoftReboot_SaveVfsFileFromBlob( const char *path, uint32_t addr, uint32_t len )
+{
+	dc_file_t *f;
+	const void *src = (const void *)(uintptr_t)addr;
+
+	if( !path || !addr || !len )
+		return false;
+
+	f = FS_Open( path, "wb", true );
+	if( !f )
+		return false;
+
+	if( FS_Write( f, src, (size_t)len ) != (int)len )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	FS_Close( f );
+	return true;
+}
+
+static qboolean SoftReboot_SaveSysFileFromBlob( const char *path, uint32_t addr, uint32_t len )
+{
+	file_t f;
+	ssize_t rv;
+	const void *src = (const void *)(uintptr_t)addr;
+
+	if( !path || !addr || !len )
+		return false;
+
+	f = fs_open( path, O_WRONLY | O_CREAT | O_TRUNC );
+	if( f < 0 )
+		return false;
+
+	rv = fs_write( f, src, len );
+	fs_close( f );
+	return rv == (ssize_t)len;
+}
+
+static uint32_t SoftReboot_CalcCRC32( const void *data, uint32_t len )
+{
+	uint32_t crc;
+
+	if( !data || !len )
+		return 0;
+
+	CRC32_Init( &crc );
+	CRC32_ProcessBuffer( &crc, data, (int)len );
+	return CRC32_Final( crc );
+}
+
+#define SOFTREBOOT_GS_MAGIC 0x31534744u /* 'DGS1' */
+
+static void SoftReboot_BuildHashTableFromMem( SAVERESTOREDATA *pSaveData )
+{
+	char *pszTokenList = pSaveData->pBaseData;
+	int i;
+
+	if( pSaveData->tokenSize > 0 )
+	{
+		for( i = 0; i < pSaveData->tokenCount; i++ )
+		{
+			pSaveData->pTokens[i] = *pszTokenList ? pszTokenList : NULL;
+			while( *pszTokenList++ );
+		}
+	}
+
+	pSaveData->pBaseData = pszTokenList;
+	pSaveData->pCurrentData = pSaveData->pBaseData;
+}
+
+static qboolean SoftReboot_SaveGlobalStateToReserved( SAVERESTOREDATA *scratch, uint32_t *out_addr, uint32_t *out_len )
+{
+	char *pTokenData;
+	uint32_t dataSize, tokenSize, tokenCount;
+	uint32_t total;
+	byte *dst, *p;
+
+	if( !scratch || !out_addr || !out_len || !svgame.dllFuncs.pfnSaveGlobalState )
+		return false;
+
+	/* Reuse existing SaveGameState buffer */
+	SaveClear( scratch );
+
+	svgame.dllFuncs.pfnSaveGlobalState( scratch );
+	pTokenData = StoreHashTable( scratch );
+
+	dataSize = (uint32_t)scratch->size;
+	tokenSize = (uint32_t)scratch->tokenSize;
+	tokenCount = (uint32_t)scratch->tokenCount;
+	total = 16u + tokenSize + dataSize;
+
+	dst = (byte *)DC_SoftReboot_ReserveAlloc( total, 32 );
+	if( !dst )
+	{
+		return false;
+	}
+
+	p = dst;
+	*(uint32_t *)p = SOFTREBOOT_GS_MAGIC; p += 4u;
+	*(uint32_t *)p = dataSize; p += 4u;
+	*(uint32_t *)p = tokenCount; p += 4u;
+	*(uint32_t *)p = tokenSize; p += 4u;
+
+	if( tokenSize )
+	{
+		memcpy( p, pTokenData, tokenSize );
+		p += tokenSize;
+	}
+
+	if( dataSize )
+	{
+		memcpy( p, scratch->pBaseData, dataSize );
+		p += dataSize;
+	}
+
+	dcache_flush_range( (uintptr_t)dst, total );
+
+	*out_addr = (uint32_t)(uintptr_t)dst;
+	*out_len = total;
+	return true;
+}
+
+static qboolean SoftReboot_RestoreGlobalStateFromReserved( uint32_t addr, uint32_t len )
+{
+	const byte *p = (const byte *)(uintptr_t)addr;
+	uint32_t magic, dataSize, tokenCount, tokenSize;
+	SAVERESTOREDATA *pSaveData;
+
+	if( !addr || len < 16u || !svgame.dllFuncs.pfnRestoreGlobalState )
+		return false;
+
+	magic = *(const uint32_t *)p; p += 4u;
+	dataSize = *(const uint32_t *)p; p += 4u;
+	tokenCount = *(const uint32_t *)p; p += 4u;
+	tokenSize = *(const uint32_t *)p; p += 4u;
+
+	if( magic != SOFTREBOOT_GS_MAGIC )
+		return false;
+	if( 16u + tokenSize + dataSize > len )
+		return false;
+
+	pSaveData = SaveInit( (int)( dataSize + tokenSize ), (int)tokenCount );
+	if( !pSaveData )
+		return false;
+	pSaveData->tokenCount = (int)tokenCount;
+	pSaveData->tokenSize = (int)tokenSize;
+
+	if( tokenSize )
+		memcpy( pSaveData->pBaseData, p, tokenSize );
+	SoftReboot_BuildHashTableFromMem( pSaveData );
+	p += tokenSize;
+
+	if( dataSize )
+		memcpy( pSaveData->pBaseData, p, dataSize );
+
+	svgame.dllFuncs.pfnRestoreGlobalState( pSaveData );
+	SaveFinish( pSaveData );
+	return true;
+}
+
+static qboolean SV_SoftReboot_ChangeLevel( const char *mapname, const char *startspot, qboolean background )
+{
+	char oldlevel[MAX_QPATH];
+	char hl1_path[MAX_OSPATH];
+	char hl2_path[MAX_QPATH];
+	char hl3_path[MAX_QPATH];
+	SAVERESTOREDATA *pSaveData;
+	dc_softreboot_desc_t *d;
+	uint32_t addr, len;
+	qboolean old_changelevel;
+	size_t largest_block;
+	int largest_kb, threshold_kb, minexec_kb;
+
+	if( !dc_softreboot.value )
+		return false;
+
+	largest_block = getLargestAllocatableBlockEstimate();
+	largest_kb = (int)( largest_block / 1024u );
+	threshold_kb = Q_max( 0, (int)dc_softreboot_threshold_kb.value );
+	minexec_kb = Q_max( 0, (int)dc_softreboot_minexec_kb.value );
+
+	/* Trigger soft reboot only when memory gets low enough. */
+	if( threshold_kb > 0 && largest_kb > threshold_kb )
+		return false;
+
+	/* Don't attempt soft reboot if we are already too low to serialize safely. */
+	if( minexec_kb > 0 && largest_kb < minexec_kb )
+	{
+		Con_DPrintf( S_WARN "%s: skipped: largest block %d KB < minexec %d KB\n", __func__, largest_kb, minexec_kb );
+		return false;
+	}
+
+	if( threshold_kb > 0 )
+		Con_DPrintf( "%s:  trigger: largest block %d KB <= threshold %d KB\n", __func__, largest_kb, threshold_kb );
+
+	d = DC_SoftReboot_Desc();
+	DC_SoftReboot_Clear();
+
+	Q_strncpy( oldlevel, sv.name, sizeof( oldlevel ));
+
+	d->magic = DC_SOFTREBOOT_MAGIC;
+	d->version = (uint16_t)DC_SOFTREBOOT_VERSION;
+	d->header_size = (uint16_t)sizeof( *d );
+	d->commit = 0;
+	d->flags = 0;
+
+	Q_strncpy( d->prev_map, oldlevel, sizeof( d->prev_map ));
+	Q_strncpy( d->next_map, mapname, sizeof( d->next_map ));
+	Q_strncpy( d->startspot, startspot ? startspot : "", sizeof( d->startspot ));
+	d->background = background ? 1u : 0u;
+
+	/* Save the current level's state to temp save files (HL1/HL2/HL3). */
+	old_changelevel = svgame.globals->changelevel;
+	svgame.globals->changelevel = true;
+	pSaveData = SaveGameState( true );
+	if( !pSaveData )
+	{
+		DC_SoftReboot_Clear();
+		svgame.globals->changelevel = old_changelevel;
+		return false;
+	}
+
+	/*
+	 * Important: reserve reboot window only after SaveGameState().
+	 * SaveInit/SaveGameState needs about 300kb from heap.
+	 */
+	DC_SoftReboot_MemReserveInit();
+	DC_SoftReboot_ReserveReset();
+
+	/* Capture DLL global state (critical for global entities like tracktrain). */
+	if( SoftReboot_SaveGlobalStateToReserved( pSaveData, &addr, &len ))
+	{
+		d->gs_addr = addr;
+		d->gs_len = len;
+		d->gs_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_GS;
+	}
+
+	SaveFinish( pSaveData );
+
+	/* Capture save blobs into reserved RAM. */
+	Q_snprintf( hl1_path, sizeof( hl1_path ), "/ram/%s.HL1", oldlevel );
+	if( DC_SoftReboot_LoadFileToReserved( hl1_path, &addr, &len ))
+	{
+		d->hl1_addr = addr;
+		d->hl1_len = len;
+		d->hl1_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_HL1;
+	}
+	else
+	{
+		DC_SoftReboot_Clear();
+		DC_SoftReboot_MemReserveShutdown();
+		return false;
+	}
+
+	Q_snprintf( hl2_path, sizeof( hl2_path ), DEFAULT_SAVE_DIRECTORY "%s.HL2", oldlevel );
+	if( SoftReboot_LoadVfsFileToReserved( hl2_path, &addr, &len ))
+	{
+		d->hl2_addr = addr;
+		d->hl2_len = len;
+		d->hl2_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_HL2;
+	}
+
+	Q_snprintf( hl3_path, sizeof( hl3_path ), DEFAULT_SAVE_DIRECTORY "%s.HL3", oldlevel );
+	if( SoftReboot_LoadVfsFileToReserved( hl3_path, &addr, &len ))
+	{
+		d->hl3_addr = addr;
+		d->hl3_len = len;
+		d->hl3_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_HL3;
+	}
+
+	/* Load fresh (unscrambled) engine image and exec. */
+	if( DC_SoftReboot_LoadFileToReserved( "/cd/XASH.BIN", &addr, &len ))
+	{
+		d->image_addr = addr;
+		d->image_len = len;
+		d->image_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_IMAGE;
+
+		/* two-phase commit: mark ready only after all blobs are in place */
+		d->commit = DC_SOFTREBOOT_COMMIT;
+		dcache_flush_range( (uintptr_t)d, sizeof( *d ));
+
+		DC_SoftReboot_ExecImage( addr, len );
+		return true; /* unreachable */
+	}
+
+	DC_SoftReboot_Clear();
+	DC_SoftReboot_MemReserveShutdown();
+	svgame.globals->changelevel = old_changelevel;
+	return false;
+}
+
+void SV_SoftReboot_Resume_f( void )
+{
+	dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	char hl1_path[MAX_OSPATH];
+	char hl2_path[MAX_QPATH];
+	char hl3_path[MAX_QPATH];
+	char prev_map[MAX_QPATH];
+	char next_map[MAX_QPATH];
+	char startspot_buf[MAX_QPATH];
+	const char *startspot;
+	qboolean background;
+	uint32_t crc;
+
+	if( d->magic != DC_SOFTREBOOT_MAGIC || d->version != DC_SOFTREBOOT_VERSION || d->commit != DC_SOFTREBOOT_COMMIT )
+		return;
+
+	/* Validate blobs before touching filesystem or server state. */
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL1 ) && d->hl1_addr && d->hl1_len && d->hl1_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->hl1_addr, d->hl1_len );
+		if( crc != d->hl1_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL2 ) && d->hl2_addr && d->hl2_len && d->hl2_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->hl2_addr, d->hl2_len );
+		if( crc != d->hl2_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL3 ) && d->hl3_addr && d->hl3_len && d->hl3_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->hl3_addr, d->hl3_len );
+		if( crc != d->hl3_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_GS ) && d->gs_addr && d->gs_len && d->gs_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->gs_addr, d->gs_len );
+		if( crc != d->gs_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	Q_strncpy( prev_map, d->prev_map, sizeof( prev_map ));
+	Q_strncpy( next_map, d->next_map, sizeof( next_map ));
+	Q_strncpy( startspot_buf, d->startspot, sizeof( startspot_buf ));
+	startspot = COM_CheckString( startspot_buf ) ? startspot_buf : NULL;
+	background = d->background ? true : false;
+
+	if( !COM_CheckString( next_map ))
+	{
+		DC_SoftReboot_Clear();
+		return;
+	}
+
+	/* Rehydrate temp save files from handoff blobs. */
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL1 ) && d->hl1_addr && d->hl1_len )
+	{
+		/*
+		 * HL1/HL2/HL3 blobs we captured belong to the PREVIOUS map state
+		 * (the one we just saved before reboot). Do not fabricate next_map
+		 * save files from prev_map blobs: if next_map has no saved state yet,
+		 * LoadGameState(next_map) must fail and the engine will spawn entities
+		 * from BSP, then transfer globals/player from prev_map via LoadAdjacentEnts.
+		 */
+		Q_snprintf( hl1_path, sizeof( hl1_path ), "/ram/%s.HL1", prev_map );
+		if( !SoftReboot_SaveSysFileFromBlob( hl1_path, d->hl1_addr, d->hl1_len ))
+			Con_Printf( S_ERROR "%s: failed to rehydrate %s (%u bytes)\n", __func__, hl1_path, (uint)d->hl1_len );
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL2 ) && d->hl2_addr && d->hl2_len )
+	{
+		Q_snprintf( hl2_path, sizeof( hl2_path ), DEFAULT_SAVE_DIRECTORY "%s.HL2", prev_map );
+		if( !SoftReboot_SaveVfsFileFromBlob( hl2_path, d->hl2_addr, d->hl2_len ))
+			Con_Printf( S_ERROR "%s: failed to rehydrate %s (%u bytes)\n", __func__, hl2_path, (uint)d->hl2_len );
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL3 ) && d->hl3_addr && d->hl3_len )
+	{
+		Q_snprintf( hl3_path, sizeof( hl3_path ), DEFAULT_SAVE_DIRECTORY "%s.HL3", prev_map );
+		if( !SoftReboot_SaveVfsFileFromBlob( hl3_path, d->hl3_addr, d->hl3_len ))
+			Con_Printf( S_ERROR "%s: failed to rehydrate %s (%u bytes)\n", __func__, hl3_path, (uint)d->hl3_len );
+	}
+
+	if( !SV_InitGame( ))
+		return;
+
+	svs.initialized = true;
+	svgame.globals->changelevel = true;
+
+	/* Restore DLL global state before loading the next map. */
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_GS ) && d->gs_addr && d->gs_len )
+	{
+		if( !SoftReboot_RestoreGlobalStateFromReserved( d->gs_addr, d->gs_len ))
+			Con_Printf( S_WARN "%s: failed to restore global state blob\n", __func__ );
+	}
+
+	/* Clear descriptor early to avoid loops if anything below fails. */
+	DC_SoftReboot_Clear();
+
+	if( !SV_SpawnServer( next_map, (char *)startspot, background ))
+		return;
+
+	if( !LoadGameState( next_map, true ))
+		SV_SpawnEntities( next_map );
+
+	LoadAdjacentEnts( prev_map, startspot );
+	ClearSaveDir();
+	SV_ActivateServer( false );
+}
+
+void SV_SoftReboot_Test_f( void )
+{
+	dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	uint32_t addr = 0, len = 0;
+
+	DC_SoftReboot_MemReserveInit();
+	DC_SoftReboot_Clear();
+	DC_SoftReboot_ReserveReset();
+
+	d->magic = DC_SOFTREBOOT_MAGIC;
+	d->version = (uint16_t)DC_SOFTREBOOT_VERSION;
+	d->header_size = (uint16_t)sizeof( *d );
+	d->commit = 0;
+	d->flags = 0;
+
+	if( DC_SoftReboot_LoadFileToReserved( "/cd/XASH.BIN", &addr, &len ))
+	{
+		d->image_addr = addr;
+		d->image_len = len;
+		d->image_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_IMAGE;
+		d->commit = DC_SOFTREBOOT_COMMIT;
+		dcache_flush_range( (uintptr_t)d, sizeof( *d ));
+
+		DC_SoftReboot_ExecImage( addr, len );
+	}
+
+	DC_SoftReboot_Clear();
+	DC_SoftReboot_MemReserveShutdown();
+}
+#endif /* XASH_DREAMCAST */
+
 /*
 =============
 SV_LoadGameState
@@ -2516,6 +3006,11 @@ void SV_ChangeLevel( qboolean loadfromsavedgame, const char *mapname, const char
 
 	if( loadfromsavedgame )
 	{
+#if XASH_DREAMCAST
+		/* Optional: defragment heap by soft rebooting on changelevel. */
+		if( SV_SoftReboot_ChangeLevel( level, startspot, background ))
+			return; /* unreachable on success */
+#endif
 		// smooth transition in-progress
 		svgame.globals->changelevel = true;
 

@@ -135,6 +135,12 @@ CVAR_DEFINE_AUTO( sv_check_errors, "0", FCVAR_ARCHIVE, "check edicts for errors"
 CVAR_DEFINE_AUTO( sv_validate_changelevel, "0", 0, "test change level for level-designer errors" );
 CVAR_DEFINE( sv_hostmap, "hostmap", "", 0, "keep name of last entered map" );
 
+#if XASH_DREAMCAST
+CVAR_DEFINE_AUTO( dc_softreboot, "1", FCVAR_ARCHIVE, "soft reboot on smooth changelevel to defragment heap" );
+CVAR_DEFINE_AUTO( dc_softreboot_threshold_kb, "900", FCVAR_ARCHIVE, "run soft reboot when largest allocatable heap block is <= this threshold in KB (0 disables threshold trigger)" );
+CVAR_DEFINE_AUTO( dc_softreboot_minexec_kb, "600", FCVAR_ARCHIVE, "minimum largest allocatable heap block in KB required to attempt soft reboot (fallback to normal changelevel below this)" );
+#endif
+
 static CVAR_DEFINE_AUTO( sv_allow_joystick, "1", FCVAR_ARCHIVE, "allow connect with joystick enabled" );
 static CVAR_DEFINE_AUTO( sv_allow_mouse, "1", FCVAR_ARCHIVE, "allow connect with mouse" );
 static CVAR_DEFINE_AUTO( sv_allow_touch, "1", FCVAR_ARCHIVE, "allow connect with touch controls" );
@@ -889,6 +895,11 @@ void SV_Init( void )
 	Cvar_RegisterVariable( &rcon_enable );
 	Cvar_RegisterVariable( &sv_stepsize );
 	Cvar_RegisterVariable( &sv_newunit );
+#if XASH_DREAMCAST
+	Cvar_RegisterVariable( &dc_softreboot );
+	Cvar_RegisterVariable( &dc_softreboot_threshold_kb );
+	Cvar_RegisterVariable( &dc_softreboot_minexec_kb );
+#endif
 	Cvar_RegisterVariable( &hostname );
 	Cvar_RegisterVariable( &sv_timeout );
 	Cvar_RegisterVariable( &sv_pausable );

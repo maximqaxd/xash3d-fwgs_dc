@@ -131,8 +131,64 @@ unsigned long getUsedRam(void)
 	return (systemRam - getFreeRam());
 }
 
+static size_t getLargestAllocatableBlock( size_t max_try )
+{
+	size_t lo = 0, hi = max_try, mid;
+	void *p;
+
+	// quick reject
+	if( max_try < 1024 )
+		return 0;
+
+	// find an upper bound that succeeds
+	while( hi >= 1024 )
+	{
+		p = malloc( hi );
+		if( p )
+		{
+			free( p );
+			break;
+		}
+		hi /= 2;
+	}
+
+	if( hi < 1024 )
+		return 0;
+
+	lo = hi;
+	hi = max_try;
+
+	// binary search for maximum allocatable size
+	while( lo + 1024 < hi )
+	{
+		mid = lo + (( hi - lo ) / 2 );
+		mid &= ~(size_t)3; // keep it aligned
+
+		p = malloc( mid );
+		if( p )
+		{
+			free( p );
+			lo = mid;
+		}
+		else hi = mid;
+	}
+
+	return lo;
+}
+
+size_t getLargestAllocatableBlockEstimate( void )
+{
+	return getLargestAllocatableBlock( (size_t)getFreeRam() );
+}
+
 void getRamStatus(void)
 {
+
+	// Heap / allocator stats (dlmalloc via mallinfo)
+
+	struct mallinfo mi = mallinfo();
+	const size_t free_est = (size_t)getFreeRam();
+	const size_t largest = getLargestAllocatableBlock( free_est );
 
 	Con_Printf("stack: start:%x end:%x\n", (int)&_START, (int)&_END);
 	Con_Printf("System RAM - Total: %.1f MB (%d KB), Free: %.1f MB (%d KB), Used: %.1f MB (%d KB)\n",
@@ -142,6 +198,11 @@ void getRamStatus(void)
 		getFreeRam() / 1024,                     // KB
 		(float)getUsedRam() / (1024*1024),      // MB
 		getUsedRam() / 1024);                    // KB
+
+	Con_Printf( "heap: arena=%d uordblks=%d fordblks=%d keepcost=%d\n",
+		mi.arena, mi.uordblks, mi.fordblks, mi.keepcost );
+	Con_Printf( "heap: largest allocatable block ~ %zu KB\n", largest / 1024 );
+
 	Con_Printf("SPU: Free largest allocatable block: %zu\n", snd_mem_available());
 	
 	// VRAM statistics from pvr_alloc

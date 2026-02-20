@@ -39,6 +39,9 @@ GNU General Public License for more details.
 #include "enginefeatures.h"
 #include "render_api.h"	// decallist_t
 #include "tests.h"
+#if XASH_DREAMCAST
+#include "platform/dreamcast/softreboot_dc.h"
+#endif
 
 static pfnChangeGame	pChangeGame = NULL;
 host_parm_t		host;	// host parms
@@ -1323,6 +1326,16 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	Cmd_RemoveCommand( "setgl" );
 	Cbuf_ExecStuffCmds();	// execute stuffcmds (commandline)
 	SCR_CheckStartupVids();	// must be last
+
+#if XASH_DREAMCAST
+	/* If we rebooted via arch_exec with a pending handoff, resume it now. */
+	const dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	if( d && d->magic == DC_SOFTREBOOT_MAGIC && d->commit == DC_SOFTREBOOT_COMMIT )
+	{
+		Cbuf_AddText( "softreboot_resume\n" );
+		Cbuf_Execute();
+	}
+#endif
 
 	if( Sys_GetParmFromCmdLine( "-timedemo", demoname ))
 		Cbuf_AddTextf( "timedemo %s\n", demoname );

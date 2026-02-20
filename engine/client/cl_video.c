@@ -16,6 +16,9 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #if XASH_DREAMCAST
+#include "platform/dreamcast/softreboot_dc.h"
+#endif
+#if XASH_DREAMCAST
 #include "avi.h"
 #include "avi/mpeg.h"
 #include <dc/pvr.h>
@@ -104,7 +107,18 @@ void SCR_CheckStartupVids( void )
 	char *pfile;
 	string	token;
 	
-#if !XASH_DREAMCAST
+#if XASH_DREAMCAST
+	
+	const dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	if( d && d->magic == DC_SOFTREBOOT_MAGIC && d->commit == DC_SOFTREBOOT_COMMIT )
+	{
+		cls.movienum = -1;
+		CL_CheckStartupDemos();
+		return;
+	}
+
+#endif
+
 	if( Sys_CheckParm( "-nointro" ) || host_developer.value || cls.demonum != -1 || GameState->nextstate != STATE_RUNFRAME )
 	{
 		// don't run movies where we in developer-mode
@@ -112,7 +126,6 @@ void SCR_CheckStartupVids( void )
 		CL_CheckStartupDemos();
 		return;
 	}
-#endif
 
 	if( !FS_FileExists( DEFAULT_VIDEOLIST_PATH, false ))
 	{
