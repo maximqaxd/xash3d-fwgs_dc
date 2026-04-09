@@ -141,7 +141,7 @@ float			m_flGaitMovement;
 int			g_nTopColor, g_nBottomColor;	// remap colors
 int			g_nFaceFlags, g_nForceFaceFlags;
 
-
+static void R_StudioDrawPoints( void );
 /*
 ====================
 R_StudioInit
@@ -2062,576 +2062,428 @@ static int R_StudioMeshCompare( const void *a, const void *b )
 	return 0;
 }
 
+
+/* UV source modes for PVR_StudioDrawMesh */
+#define STUDIO_UV_NORMAL 0   /* integer pixel coords: ptricmds[2]*s, ptricmds[3]*t */
+#define STUDIO_UV_FLOAT  1   /* half-float coords:    HalfToFloat(ptricmds[2/3])   */
+#define STUDIO_UV_CHROME 2   /* chrome/env map:       g_studio.chrome[ci][]*s/t    */
+
+static shz_vec4_t  s_tv[MAXSTUDIOVERTS];       /* clip-space positions (per strip, indexed by corner) */
+static shz_vec4_t  s_clip[MAXSTUDIOVERTS];     /* clip-space positions (per vertex, pre-transformed once) */
+static qboolean    s_all_clip_visible;         /* true = no vertex clips near plane; skip per-strip scan */
+static float       s_screen[MAXSTUDIOVERTS][3];/* screen-space {sx=x/w, sy=y/w, sz=1/w} per vertex — avoids per-corner FSRRA+fmul */
+static float       s_strip_uv_s[MAXSTUDIOVERTS];
+static float       s_strip_uv_t[MAXSTUDIOVERTS];
+static uint32_t    s_strip_ac[MAXSTUDIOVERTS];
+
 /*
 ===============
-R_StudioDrawNormalMesh
+PVR_StudioDrawMesh
 
-generic path
+Unified Pass-3 mesh submission.
+
+  Preconditions:
+    - XMTRX holds MVP (caller loads it once before the mesh loop)
+    - g_studio.verts[] holds world-space skinned positions (Pass 2 output)
+    - s_argb[] holds pre-packed ARGB per normal slot (valid when argb_prepack true)
+
+  uv_mode  : STUDIO_UV_NORMAL / STUDIO_UV_FLOAT / STUDIO_UV_CHROME
+  shellscale > 0 : glow-shell pass; offsets positions along g_studio.norms[]
+                   and uses g_studio.normaltable[vi] for chrome UV index.
+
 ===============
 */
-static void R_StudioDrawNormalMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t )
+static void PVR_StudioDrawMesh( short *ptricmds, vec3_t *pstudionorms,
+	float s, float t, int uv_mode, float shellscale, qboolean argb_prepack )
 {
 	int i;
 
 	if( !g_pvr_studio_dr )
 		return;
 
-	__attribute__((aligned(8))) float aligned_matrix[16];
-	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
+	const qboolean is_shell = ( shellscale > 0.0f );
+	const uint32_t shell_argb = is_shell
+		? ( 0xFF000000u
+		  | ((uint32_t)RI.currententity->curstate.rendercolor.r << 16)
+		  | ((uint32_t)RI.currententity->curstate.rendercolor.g <<  8)
+		  |  (uint32_t)RI.currententity->curstate.rendercolor.b )
+		: 0u;
 
-	while(( i = *( ptricmds++ )))
+
+/* -----------------------------------------------------------------------
+ * PVR_StudioDrawMesh — inner gather loop macro.
+ *   UV_EXPR_S / UV_EXPR_T : expressions computing s_strip_uv_s/t[j]
+ *   COLOR_EXPR            : expression computing s_strip_ac[j]
+ *   POS_X/Y/Z             : expressions computing the world-space position
+ *   The macro advances `p` past the strip and updates `all_visible`.
+ * -----------------------------------------------------------------------*/
+#define STUDIO_GATHER_STRIP( UV_EXPR_S, UV_EXPR_T, COLOR_EXPR ) \
+	do { \
+		const short *p = ptricmds; \
+		for( int j = 0; j < cnt; j++, p += 4 ) \
+		{ \
+			const int vi = p[0]; \
+			const int ni = p[1]; \
+			(void)ni; \
+			s_strip_uv_s[j] = (UV_EXPR_S); \
+			s_strip_uv_t[j] = (UV_EXPR_T); \
+			s_strip_ac[j]   = (COLOR_EXPR); \
+			/* vertex already in clip space — just index the pre-transformed cache */ \
+			s_tv[j] = s_clip[vi]; \
+			if( s_tv[j].w <= 0.0001f || s_tv[j].w < s_tv[j].z ) \
+				all_visible = false; \
+		} \
+		ptricmds = p; \
+	} while(0)
+
+/* Shell pass needs a position rebuild (vert + norm*scale), so keep a separate macro */ 
+#define STUDIO_GATHER_STRIP_SHELL( UV_EXPR_S, UV_EXPR_T ) \
+	do { \
+		const short *p = ptricmds; \
+		for( int j = 0; j < cnt; j++, p += 4 ) \
+		{ \
+			const int vi = p[0]; \
+			s_strip_uv_s[j] = (UV_EXPR_S); \
+			s_strip_uv_t[j] = (UV_EXPR_T); \
+			s_strip_ac[j]   = shell_argb; \
+			const float vx = g_studio.verts[vi][0] + g_studio.norms[vi][0] * shellscale; \
+			const float vy = g_studio.verts[vi][1] + g_studio.norms[vi][1] * shellscale; \
+			const float vz = g_studio.verts[vi][2] + g_studio.norms[vi][2] * shellscale; \
+			s_tv[j] = shz_xmtrx_transform_vec4( shz_vec4_init( vx, vy, vz, 1.f ) ); \
+			if( s_tv[j].w <= 0.0001f || s_tv[j].w < s_tv[j].z ) \
+				all_visible = false; \
+		} \
+		ptricmds = p; \
+	} while(0)
+
+	if( uv_mode == STUDIO_UV_NORMAL && argb_prepack && !is_shell )
 	{
-		const qboolean is_fan = ( i < 0 );
-		const int vertCount = ( i < 0 ) ? -i : i;
-		if( vertCount < 3 || vertCount > MAXSTUDIOVERTS )
+		if( s_all_clip_visible )
 		{
-			ptricmds += vertCount * 4;
-			continue;
-		}
-
-		shz_vec4_t tv[MAXSTUDIOVERTS];
-		shz_vec3_t pv[MAXSTUDIOVERTS];
-		float uv[MAXSTUDIOVERTS][2];
-		uint32_t c[MAXSTUDIOVERTS];
-
-		for( int j = 0; j < vertCount; j++, ptricmds += 4 )
-		{
-			const int vtx = ptricmds[0];
-			rgba_t color;
-
-			R_StudioSetColorArray( ptricmds, pstudionorms, color );
-			c[j] = PVR_ARGB_FromRGBA( color );
-
-			uv[j][0] = ptricmds[2] * s;
-			uv[j][1] = ptricmds[3] * t;
-
-			pv[j] = shz_vec3_init( g_studio.verts[vtx][0], g_studio.verts[vtx][1], g_studio.verts[vtx][2] );
-		}
+			/* ===== SUPER HOT PATH: whole model in front of near plane =====
+			   Zero intermediate arrays. One loop: s_clip[vi] -> persp divide -> pvr_dr_commit.
+			   Eliminates ~60KB of s_tv/s_strip_uv/s_strip_ac traffic per frame.
+			   Per-strip profiling removed; pre-pass timer covers the meaningful cost. */
 #if REF_PVR_PROFILE
-		PVR_Prof_Start();
+			PVR_Prof_Start();
 #endif
-		qboolean all_visible = true;
-		float inv_w[MAXSTUDIOVERTS];
-		float sx[MAXSTUDIOVERTS];
-		float sy[MAXSTUDIOVERTS];
-		float sz[MAXSTUDIOVERTS];
-		for( int j = 0; j < vertCount; ++j )
-		{
-			tv[j] = shz_xmtrx_transform_vec4( shz_vec3_vec4( pv[j], 1.0f ));
-			// sh4zam perspective: near plane is (w >= z). Also guard against near-zero/negative w.
-			if( tv[j].w <= 0.0001f || tv[j].w < tv[j].z )
-				all_visible = false;
-			inv_w[j] = shz_invf_fsrra( tv[j].w );
-			sx[j] = tv[j].x * inv_w[j];
-			sy[j] = tv[j].y * inv_w[j];
-			sz[j] = inv_w[j]; // z = 1/w convention
-		}
-#if REF_PVR_PROFILE
-		r_stats.t_studio_transforms += PVR_Prof_End();
-		PVR_Prof_Start(); // Start geometry profiling
-#endif
-
-		if( all_visible )
-		{
-			// Fast path: no near-plane clipping needed.
-			if( is_fan )
+			while( (i = *(ptricmds++)) )
 			{
-				for( int j = 1; j < vertCount - 1; j++ )
+				const qboolean is_fan = ( i < 0 );
+				const int      cnt    = is_fan ? -i : i;
+				if( cnt < 3 || cnt > MAXSTUDIOVERTS ) { ptricmds += cnt * 4; continue; }
+
+				if( !is_fan )				/* Hardware strip: branch-free inner loop.
+				   All cnt-1 middle verts get PVR_CMD_VERTEX (no conditional).
+				   Last vert handled separately with PVR_CMD_VERTEX_EOL.
+				   UV precomputes FLOAT+FMUL before the SQ-write section so the
+				   5-cycle FMUL latency is hidden by the preceding pvr_dr_commit. */
 				{
-					pvr_vertex_t *v0 = pvr_dr_target(*g_pvr_studio_dr);
-					v0->flags = PVR_CMD_VERTEX;
-					v0->x = sx[0]; v0->y = sy[0]; v0->z = sz[0];
-					v0->u = uv[0][0]; v0->v = uv[0][1];
-					v0->argb = c[0]; v0->oargb = 0;
-					pvr_dr_commit(v0);
+					const short *p = ptricmds;
+					const int middle = cnt - 1;
+					for( int j = 0; j < middle; j++, p += 4 )
+					{
+						const float uf = (float)p[2] * s;
+						const float vf = (float)p[3] * t;
+						if( j + 1 < middle )
+							__builtin_prefetch( &s_screen[(int)p[4]][0], 0, 0 );
+						const float *sc = s_screen[(int)p[0]];
+						pvr_vertex_t *v = pvr_dr_target( *g_pvr_studio_dr );
+						v->flags = PVR_CMD_VERTEX;
+						v->x = sc[0]; v->y = sc[1]; v->z = sc[2];
+						v->u = uf; v->v = vf;
+						v->argb = s_argb[(int)p[1]]; v->oargb = 0;
+						pvr_dr_commit( v );
+					}
+					/* Last vertex: EOL flag, no conditional in above loop */
+					{
+						const float uf = (float)p[2] * s;
+						const float vf = (float)p[3] * t;
+						const float *sc = s_screen[(int)p[0]];
+						pvr_vertex_t *v = pvr_dr_target( *g_pvr_studio_dr );
+						v->flags = PVR_CMD_VERTEX_EOL;
+						v->x = sc[0]; v->y = sc[1]; v->z = sc[2];
+						v->u = uf; v->v = vf;
+						v->argb = s_argb[(int)p[1]]; v->oargb = 0;
+						pvr_dr_commit( v );
+						ptricmds = p + 4;
+					}
+				}
+				else
+				{
+					/* Fan: emit (0,j,j+1) triangles inline — use s_screen directly */
+					const short *base = ptricmds;
+					const float *sc0 = s_screen[(int)base[0]];
+					const float x0 = sc0[0], y0 = sc0[1], z0 = sc0[2];
+					const float u0 = (float)base[2] * s, v_uv0 = (float)base[3] * t;
+					const uint32_t c0 = s_argb[(int)base[1]];
 
-					pvr_vertex_t *v1 = pvr_dr_target(*g_pvr_studio_dr);
-					v1->flags = PVR_CMD_VERTEX;
-					v1->x = sx[j]; v1->y = sy[j]; v1->z = sz[j];
-					v1->u = uv[j][0]; v1->v = uv[j][1];
-					v1->argb = c[j]; v1->oargb = 0;
-					pvr_dr_commit(v1);
+					for( int j = 1; j < cnt - 1; j++ )
+					{
+						const short *pj  = base + j * 4;
+						const short *pj1 = base + (j + 1) * 4;
 
-					pvr_vertex_t *v2 = pvr_dr_target(*g_pvr_studio_dr);
-					v2->flags = PVR_CMD_VERTEX_EOL;
-					v2->x = sx[j+1]; v2->y = sy[j+1]; v2->z = sz[j+1];
-					v2->u = uv[j+1][0]; v2->v = uv[j+1][1];
-					v2->argb = c[j+1]; v2->oargb = 0;
-					pvr_dr_commit(v2);
+						pvr_vertex_t *va = pvr_dr_target( *g_pvr_studio_dr );
+						va->flags = PVR_CMD_VERTEX;
+						va->x = x0; va->y = y0; va->z = z0;
+						va->u = u0; va->v = v_uv0; va->argb = c0; va->oargb = 0;
+						pvr_dr_commit( va );
+
+						const float *scj = s_screen[(int)pj[0]];
+						pvr_vertex_t *vb = pvr_dr_target( *g_pvr_studio_dr );
+						vb->flags = PVR_CMD_VERTEX;
+						vb->x = scj[0]; vb->y = scj[1]; vb->z = scj[2];
+						vb->u = (float)pj[2] * s; vb->v = (float)pj[3] * t;
+						vb->argb = s_argb[(int)pj[1]]; vb->oargb = 0;
+						pvr_dr_commit( vb );
+
+						const float *scj1 = s_screen[(int)pj1[0]];
+						pvr_vertex_t *vc = pvr_dr_target( *g_pvr_studio_dr );
+						vc->flags = PVR_CMD_VERTEX_EOL;
+						vc->x = scj1[0]; vc->y = scj1[1]; vc->z = scj1[2];
+						vc->u = (float)pj1[2] * s; vc->v = (float)pj1[3] * t;
+						vc->argb = s_argb[(int)pj1[1]]; vc->oargb = 0;
+						pvr_dr_commit( vc );
+					}
+					ptricmds += cnt * 4;
 				}
 			}
-			else
-			{
-				for( int j = 0; j < vertCount - 2; j++ )
-				{
-					// emulate GL_TRIANGLE_STRIP winding
-					const int a = (j & 1) ? (j + 1) : j;
-					const int b = (j & 1) ? j : (j + 1);
-					const int d = j + 2;
-
-					pvr_vertex_t *v0 = pvr_dr_target(*g_pvr_studio_dr);
-					v0->flags = PVR_CMD_VERTEX;
-					v0->x = sx[a]; v0->y = sy[a]; v0->z = sz[a];
-					v0->u = uv[a][0]; v0->v = uv[a][1];
-					v0->argb = c[a]; v0->oargb = 0;
-					pvr_dr_commit(v0);
-
-					pvr_vertex_t *v1 = pvr_dr_target(*g_pvr_studio_dr);
-					v1->flags = PVR_CMD_VERTEX;
-					v1->x = sx[b]; v1->y = sy[b]; v1->z = sz[b];
-					v1->u = uv[b][0]; v1->v = uv[b][1];
-					v1->argb = c[b]; v1->oargb = 0;
-					pvr_dr_commit(v1);
-
-					pvr_vertex_t *v2 = pvr_dr_target(*g_pvr_studio_dr);
-					v2->flags = PVR_CMD_VERTEX_EOL;
-					v2->x = sx[d]; v2->y = sy[d]; v2->z = sz[d];
-					v2->u = uv[d][0]; v2->v = uv[d][1];
-					v2->argb = c[d]; v2->oargb = 0;
-					pvr_dr_commit(v2);
-				}
-			}
-		}
-		else if( is_fan )
-		{
-			for( int j = 1; j < vertCount - 1; j++ )
-			{
-				PVR_ClipAndSubmitTriangle(
-					g_pvr_studio_dr,
-					tv[0], tv[j], tv[j+1],
-					uv[0][0], uv[0][1],
-					uv[j][0], uv[j][1],
-					uv[j+1][0], uv[j+1][1],
-					c[0], c[j], c[j+1]
-				);
-			}
+#if REF_PVR_PROFILE
+			r_stats.t_studio_geometry += PVR_Prof_End();
+#endif
 		}
 		else
 		{
-			for( int j = 0; j < vertCount - 2; j++ )
+			/* ===== HOT PATH with per-strip clip scan (model partly behind near plane) ===== */
+			while( (i = *(ptricmds++)) )
 			{
-				// emulate GL_TRIANGLE_STRIP winding
-				const int a = (j & 1) ? (j + 1) : j;
-				const int b = (j & 1) ? j : (j + 1);
-				const int d = j + 2;
+				const qboolean is_fan = ( i < 0 );
+				const int      cnt    = is_fan ? -i : i;
+				if( cnt < 3 || cnt > MAXSTUDIOVERTS ) { ptricmds += cnt * 4; continue; }
 
-				PVR_ClipAndSubmitTriangle(
-					g_pvr_studio_dr,
-					tv[a], tv[b], tv[d],
-					uv[a][0], uv[a][1],
-					uv[b][0], uv[b][1],
-					uv[d][0], uv[d][1],
-					c[a], c[b], c[d]
-				);
+				/* Visibility scan: read from pre-computed s_clip[] */
+				qboolean all_visible = true;
+				{
+					const short *vp = ptricmds;
+					for( int j = 0; j < cnt; j++, vp += 4 )
+					{
+						const shz_vec4_t c = s_clip[(int)vp[0]];
+						if( c.w <= 0.0001f || c.w < c.z ) { all_visible = false; break; }
+					}
+				}
+
+				STUDIO_GATHER_STRIP( (float)p[2] * s, (float)p[3] * t, s_argb[p[1]] );
+
+				if( all_visible )
+				{
+					if( is_fan )
+					{
+						const float iw0 = shz_invf_fsrra( s_tv[0].w );
+						const float x0 = s_tv[0].x * iw0, y0 = s_tv[0].y * iw0;
+						for( int j = 1; j < cnt - 1; j++ )
+						{
+							pvr_vertex_t *va = pvr_dr_target( *g_pvr_studio_dr );
+							va->flags = PVR_CMD_VERTEX;
+							va->x = x0; va->y = y0; va->z = iw0;
+							va->u = s_strip_uv_s[0]; va->v = s_strip_uv_t[0];
+							va->argb = s_strip_ac[0]; va->oargb = 0; pvr_dr_commit( va );
+
+							const float iwj = shz_invf_fsrra( s_tv[j].w );
+							pvr_vertex_t *vb = pvr_dr_target( *g_pvr_studio_dr );
+							vb->flags = PVR_CMD_VERTEX;
+							vb->x = s_tv[j].x*iwj; vb->y = s_tv[j].y*iwj; vb->z = iwj;
+							vb->u = s_strip_uv_s[j]; vb->v = s_strip_uv_t[j];
+							vb->argb = s_strip_ac[j]; vb->oargb = 0; pvr_dr_commit( vb );
+
+							const float iwj1 = shz_invf_fsrra( s_tv[j+1].w );
+							pvr_vertex_t *vc = pvr_dr_target( *g_pvr_studio_dr );
+							vc->flags = PVR_CMD_VERTEX_EOL;
+							vc->x = s_tv[j+1].x*iwj1; vc->y = s_tv[j+1].y*iwj1; vc->z = iwj1;
+							vc->u = s_strip_uv_s[j+1]; vc->v = s_strip_uv_t[j+1];
+							vc->argb = s_strip_ac[j+1]; vc->oargb = 0; pvr_dr_commit( vc );
+						}
+					}
+					else
+					{
+						for( int j = 0; j < cnt; j++ )
+						{
+							if( j + 1 < cnt ) __builtin_prefetch( &s_tv[j+1], 0, 0 );
+							const float iw = shz_invf_fsrra( s_tv[j].w );
+							pvr_vertex_t *v = pvr_dr_target( *g_pvr_studio_dr );
+							v->flags = ( j == cnt - 1 ) ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
+							v->x = s_tv[j].x*iw; v->y = s_tv[j].y*iw; v->z = iw;
+							v->u = s_strip_uv_s[j]; v->v = s_strip_uv_t[j];
+							v->argb = s_strip_ac[j]; v->oargb = 0;
+							pvr_dr_commit( v );
+						}
+						r_stats.c_studio_strips++;
+					}
+				}
+				else if( is_fan )
+				{
+					for( int j = 1; j < cnt - 1; j++ )
+						PVR_ClipAndSubmitTriangle( g_pvr_studio_dr,
+							s_tv[0], s_tv[j], s_tv[j+1],
+							s_strip_uv_s[0], s_strip_uv_t[0],
+							s_strip_uv_s[j], s_strip_uv_t[j],
+							s_strip_uv_s[j+1], s_strip_uv_t[j+1],
+							s_strip_ac[0], s_strip_ac[j], s_strip_ac[j+1] );
+				}
+				else
+				{
+					for( int j = 0; j < cnt - 2; j++ )
+					{
+						const int a = (j & 1) ? (j+1) : j;
+						const int b = (j & 1) ? j     : (j+1);
+						const int d = j + 2;
+						PVR_ClipAndSubmitTriangle( g_pvr_studio_dr,
+							s_tv[a], s_tv[b], s_tv[d],
+							s_strip_uv_s[a], s_strip_uv_t[a],
+							s_strip_uv_s[b], s_strip_uv_t[b],
+							s_strip_uv_s[d], s_strip_uv_t[d],
+							s_strip_ac[a], s_strip_ac[b], s_strip_ac[d] );
+					}
+				}
 			}
 		}
-#if REF_PVR_PROFILE
-		r_stats.t_studio_geometry += PVR_Prof_End();
-#endif
 	}
-}
-
-/*
-===============
-R_StudioDrawNormalMesh
-
-generic path
-===============
-*/
-static void R_StudioDrawFloatMesh( short *ptricmds, vec3_t *pstudionorms )
-{
-	int i;
-
-	if( !g_pvr_studio_dr )
-		return;
-
-	__attribute__((aligned(8))) float aligned_matrix[16];
-	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
-
-	while(( i = *( ptricmds++ )))
+	else
 	{
-		const qboolean is_fan = ( i < 0 );
-		const int vertCount = ( i < 0 ) ? -i : i;
-		if( vertCount < 3 || vertCount > MAXSTUDIOVERTS )
+		/* ===== SLOW PATH: chrome/float UV or shell or no prepack ===== */
+		while( (i = *(ptricmds++)) )
 		{
-			ptricmds += vertCount * 4;
-			continue;
-		}
-
-		shz_vec4_t tv[MAXSTUDIOVERTS];
-		shz_vec3_t pv[MAXSTUDIOVERTS];
-		float uv[MAXSTUDIOVERTS][2];
-		uint32_t c[MAXSTUDIOVERTS];
-
-		for( int j = 0; j < vertCount; j++, ptricmds += 4 )
-		{
-			const int vtx = ptricmds[0];
-			rgba_t color;
-
-			R_StudioSetColorArray( ptricmds, pstudionorms, color );
-			c[j] = PVR_ARGB_FromRGBA( color );
-
-			uv[j][0] = HalfToFloat( ptricmds[2] );
-			uv[j][1] = HalfToFloat( ptricmds[3] );
-
-			pv[j] = shz_vec3_init( g_studio.verts[vtx][0], g_studio.verts[vtx][1], g_studio.verts[vtx][2] );
-		}
+			const qboolean is_fan = ( i < 0 );
+			const int      cnt    = is_fan ? -i : i;
+			if( cnt < 3 || cnt > MAXSTUDIOVERTS ) { ptricmds += cnt * 4; continue; }
+			qboolean all_visible = true;
 #if REF_PVR_PROFILE
-		PVR_Prof_Start();
+			PVR_Prof_Start();
 #endif
-		qboolean all_visible = true;
-		float inv_w[MAXSTUDIOVERTS];
-		float sx[MAXSTUDIOVERTS];
-		float sy[MAXSTUDIOVERTS];
-		float sz[MAXSTUDIOVERTS];
-		for( int j = 0; j < vertCount; ++j )
-		{
-			tv[j] = shz_xmtrx_transform_vec4( shz_vec3_vec4( pv[j], 1.0f ));
-			if( tv[j].w <= 0.0001f || tv[j].w < tv[j].z )
-				all_visible = false;
-			inv_w[j] = shz_invf_fsrra( tv[j].w );
-			sx[j] = tv[j].x * inv_w[j];
-			sy[j] = tv[j].y * inv_w[j];
-			sz[j] = inv_w[j];
-		}
-#if REF_PVR_PROFILE
-		r_stats.t_studio_transforms += PVR_Prof_End();
-		PVR_Prof_Start(); // Start geometry profiling
-#endif
-
-		if( all_visible )
-		{
-			if( is_fan )
+			if( uv_mode == STUDIO_UV_FLOAT && !is_shell )
 			{
-				for( int j = 1; j < vertCount - 1; j++ )
-				{
-					pvr_vertex_t *v0 = pvr_dr_target(*g_pvr_studio_dr);
-					v0->flags = PVR_CMD_VERTEX;
-					v0->x = sx[0]; v0->y = sy[0]; v0->z = sz[0];
-					v0->u = uv[0][0]; v0->v = uv[0][1];
-					v0->argb = c[0]; v0->oargb = 0;
-					pvr_dr_commit(v0);
-
-					pvr_vertex_t *v1 = pvr_dr_target(*g_pvr_studio_dr);
-					v1->flags = PVR_CMD_VERTEX;
-					v1->x = sx[j]; v1->y = sy[j]; v1->z = sz[j];
-					v1->u = uv[j][0]; v1->v = uv[j][1];
-					v1->argb = c[j]; v1->oargb = 0;
-					pvr_dr_commit(v1);
-
-					pvr_vertex_t *v2 = pvr_dr_target(*g_pvr_studio_dr);
-					v2->flags = PVR_CMD_VERTEX_EOL;
-					v2->x = sx[j+1]; v2->y = sy[j+1]; v2->z = sz[j+1];
-					v2->u = uv[j+1][0]; v2->v = uv[j+1][1];
-					v2->argb = c[j+1]; v2->oargb = 0;
-					pvr_dr_commit(v2);
-				}
+				STUDIO_GATHER_STRIP(
+					HalfToFloat( p[2] ),
+					HalfToFloat( p[3] ),
+					argb_prepack ? s_argb[p[1]] : (R_StudioSetColorArray( p, pstudionorms, (rgba_t){0} ), PVR_ARGB_FromRGBA( (rgba_t){0} ))
+				);
+			}
+			else if( uv_mode == STUDIO_UV_CHROME && !is_shell )
+			{
+				STUDIO_GATHER_STRIP(
+					g_studio.chrome[p[1]][0] * s,
+					g_studio.chrome[p[1]][1] * t,
+					argb_prepack ? s_argb[p[1]] : (R_StudioSetColorArray( p, pstudionorms, (rgba_t){0} ), PVR_ARGB_FromRGBA( (rgba_t){0} ))
+				);
+			}
+			else if( is_shell )
+			{
+				/* Shell: position is offset along normals, so can't use s_clip[]; must re-FTRV */
+				STUDIO_GATHER_STRIP_SHELL(
+					g_studio.chrome[g_studio.normaltable[vi]][0] * s,
+					g_studio.chrome[g_studio.normaltable[vi]][1] * t
+				);
 			}
 			else
 			{
-				for( int j = 0; j < vertCount - 2; j++ )
+				/* dynamic lighting fallback */
+				STUDIO_GATHER_STRIP(
+					(float)p[2] * s,
+					(float)p[3] * t,
+					( { rgba_t _c; R_StudioSetColorArray( p, pstudionorms, _c ); PVR_ARGB_FromRGBA( _c ); } )
+				);
+			}
+#if REF_PVR_PROFILE
+			r_stats.t_studio_transforms += PVR_Prof_End();
+			PVR_Prof_Start();
+#endif
+			/* Submit (shared logic, same for all slow paths) */
+			if( all_visible )
+			{
+				if( is_fan )
 				{
-					const int a = (j & 1) ? (j + 1) : j;
-					const int b = (j & 1) ? j : (j + 1);
+					const float iw0 = shz_invf_fsrra( s_tv[0].w );
+					const float x0  = s_tv[0].x * iw0;
+					const float y0  = s_tv[0].y * iw0;
+					for( int j = 1; j < cnt - 1; j++ )
+					{
+						pvr_vertex_t *v0 = pvr_dr_target( *g_pvr_studio_dr );
+						v0->flags = PVR_CMD_VERTEX;
+						v0->x = x0; v0->y = y0; v0->z = iw0;
+						v0->u = s_strip_uv_s[0]; v0->v = s_strip_uv_t[0];
+						v0->argb = s_strip_ac[0]; v0->oargb = 0;
+						pvr_dr_commit( v0 );
+						const float iwj = shz_invf_fsrra( s_tv[j].w );
+						pvr_vertex_t *v1 = pvr_dr_target( *g_pvr_studio_dr );
+						v1->flags = PVR_CMD_VERTEX;
+						v1->x = s_tv[j].x * iwj; v1->y = s_tv[j].y * iwj; v1->z = iwj;
+						v1->u = s_strip_uv_s[j]; v1->v = s_strip_uv_t[j];
+						v1->argb = s_strip_ac[j]; v1->oargb = 0;
+						pvr_dr_commit( v1 );
+						const float iwj1 = shz_invf_fsrra( s_tv[j+1].w );
+						pvr_vertex_t *v2 = pvr_dr_target( *g_pvr_studio_dr );
+						v2->flags = PVR_CMD_VERTEX_EOL;
+						v2->x = s_tv[j+1].x * iwj1; v2->y = s_tv[j+1].y * iwj1; v2->z = iwj1;
+						v2->u = s_strip_uv_s[j+1]; v2->v = s_strip_uv_t[j+1];
+						v2->argb = s_strip_ac[j+1]; v2->oargb = 0;
+						pvr_dr_commit( v2 );
+					}
+				}
+				else
+				{
+					for( int j = 0; j < cnt; j++ )
+					{
+						if( j + 1 < cnt ) __builtin_prefetch( &s_tv[j+1], 0, 0 );
+						const float iw = shz_invf_fsrra( s_tv[j].w );
+						pvr_vertex_t *v = pvr_dr_target( *g_pvr_studio_dr );
+						v->flags  = ( j == cnt - 1 ) ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
+						v->x = s_tv[j].x * iw; v->y = s_tv[j].y * iw; v->z = iw;
+						v->u = s_strip_uv_s[j]; v->v = s_strip_uv_t[j];
+						v->argb = s_strip_ac[j]; v->oargb = 0;
+						pvr_dr_commit( v );
+					}
+					r_stats.c_studio_strips++;
+				}
+			}
+			else if( is_fan )
+			{
+				for( int j = 1; j < cnt - 1; j++ )
+					PVR_ClipAndSubmitTriangle( g_pvr_studio_dr,
+						s_tv[0], s_tv[j], s_tv[j+1],
+						s_strip_uv_s[0], s_strip_uv_t[0],
+						s_strip_uv_s[j], s_strip_uv_t[j],
+						s_strip_uv_s[j+1], s_strip_uv_t[j+1],
+						s_strip_ac[0], s_strip_ac[j], s_strip_ac[j+1] );
+			}
+			else
+			{
+				for( int j = 0; j < cnt - 2; j++ )
+				{
+					const int a = (j & 1) ? (j+1) : j;
+					const int b = (j & 1) ? j     : (j+1);
 					const int d = j + 2;
-
-					pvr_vertex_t *v0 = pvr_dr_target(*g_pvr_studio_dr);
-					v0->flags = PVR_CMD_VERTEX;
-					v0->x = sx[a]; v0->y = sy[a]; v0->z = sz[a];
-					v0->u = uv[a][0]; v0->v = uv[a][1];
-					v0->argb = c[a]; v0->oargb = 0;
-					pvr_dr_commit(v0);
-
-					pvr_vertex_t *v1 = pvr_dr_target(*g_pvr_studio_dr);
-					v1->flags = PVR_CMD_VERTEX;
-					v1->x = sx[b]; v1->y = sy[b]; v1->z = sz[b];
-					v1->u = uv[b][0]; v1->v = uv[b][1];
-					v1->argb = c[b]; v1->oargb = 0;
-					pvr_dr_commit(v1);
-
-					pvr_vertex_t *v2 = pvr_dr_target(*g_pvr_studio_dr);
-					v2->flags = PVR_CMD_VERTEX_EOL;
-					v2->x = sx[d]; v2->y = sy[d]; v2->z = sz[d];
-					v2->u = uv[d][0]; v2->v = uv[d][1];
-					v2->argb = c[d]; v2->oargb = 0;
-					pvr_dr_commit(v2);
+					PVR_ClipAndSubmitTriangle( g_pvr_studio_dr,
+						s_tv[a], s_tv[b], s_tv[d],
+						s_strip_uv_s[a], s_strip_uv_t[a],
+						s_strip_uv_s[b], s_strip_uv_t[b],
+						s_strip_uv_s[d], s_strip_uv_t[d],
+						s_strip_ac[a], s_strip_ac[b], s_strip_ac[d] );
 				}
 			}
-		}
-		else if( is_fan )
-		{
-			for( int j = 1; j < vertCount - 1; j++ )
-			{
-				PVR_ClipAndSubmitTriangle(
-					g_pvr_studio_dr,
-					tv[0], tv[j], tv[j+1],
-					uv[0][0], uv[0][1],
-					uv[j][0], uv[j][1],
-					uv[j+1][0], uv[j+1][1],
-					c[0], c[j], c[j+1]
-				);
-			}
-		}
-		else
-		{
-			for( int j = 0; j < vertCount - 2; j++ )
-			{
-				const int a = (j & 1) ? (j + 1) : j;
-				const int b = (j & 1) ? j : (j + 1);
-				const int d = j + 2;
-
-				PVR_ClipAndSubmitTriangle(
-					g_pvr_studio_dr,
-					tv[a], tv[b], tv[d],
-					uv[a][0], uv[a][1],
-					uv[b][0], uv[b][1],
-					uv[d][0], uv[d][1],
-					c[a], c[b], c[d]
-				);
-			}
-		}
 #if REF_PVR_PROFILE
-		r_stats.t_studio_geometry += PVR_Prof_End();
+			r_stats.t_studio_geometry += PVR_Prof_End();
 #endif
+		}
 	}
-}
-
-/*
-===============
-R_StudioDrawNormalMesh
-
-generic path
-===============
-*/
-static void R_StudioDrawChromeMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t, float scale )
-{
-	int i;
-	const qboolean glowShell = (scale > 0.0f) ? true : false;
-
-	if( !g_pvr_studio_dr )
-		return;
-
-	__attribute__((aligned(8))) float aligned_matrix[16];
-	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
-	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
-
-	while(( i = *( ptricmds++ )))
-	{
-		const qboolean is_fan = ( i < 0 );
-		const int vertCount = ( i < 0 ) ? -i : i;
-		if( vertCount < 3 || vertCount > MAXSTUDIOVERTS )
-		{
-			ptricmds += vertCount * 4;
-			continue;
-		}
-
-		shz_vec4_t tv[MAXSTUDIOVERTS];
-		shz_vec3_t pv[MAXSTUDIOVERTS];
-		float uv[MAXSTUDIOVERTS][2];
-		uint32_t c[MAXSTUDIOVERTS];
-
-		for( int j = 0; j < vertCount; j++, ptricmds += 4 )
-		{
-			const int vtx = ptricmds[0];
-			int idx;
-			vec3_t vert;
-
-			if( glowShell )
-			{
-				color24 *clr = &RI.currententity->curstate.rendercolor;
-				idx = g_studio.normaltable[vtx];
-				VectorMA( g_studio.verts[vtx], scale, g_studio.norms[vtx], vert );
-				c[j] = 0xFF000000 | ((uint32_t)clr->r << 16) | ((uint32_t)clr->g << 8) | (uint32_t)clr->b;
-			}
-			else
-			{
-				rgba_t color;
-				idx = ptricmds[1];
-				R_StudioSetColorArray( ptricmds, pstudionorms, color );
-				c[j] = PVR_ARGB_FromRGBA( color );
-				VectorCopy( g_studio.verts[vtx], vert );
-			}
-
-			uv[j][0] = g_studio.chrome[idx][0] * s;
-			uv[j][1] = g_studio.chrome[idx][1] * t;
-
-			pv[j] = shz_vec3_init( vert[0], vert[1], vert[2] );
-		}
-#if REF_PVR_PROFILE
-		PVR_Prof_Start();
-#endif
-		qboolean all_visible = true;
-		float inv_w[MAXSTUDIOVERTS];
-		float sx[MAXSTUDIOVERTS];
-		float sy[MAXSTUDIOVERTS];
-		float sz[MAXSTUDIOVERTS];
-		for( int j = 0; j < vertCount; ++j )
-		{
-			tv[j] = shz_xmtrx_transform_vec4( shz_vec3_vec4( pv[j], 1.0f ));
-			if( tv[j].w <= 0.0001f || tv[j].w < tv[j].z )
-				all_visible = false;
-			inv_w[j] = shz_invf_fsrra( tv[j].w );
-			sx[j] = tv[j].x * inv_w[j];
-			sy[j] = tv[j].y * inv_w[j];
-			sz[j] = inv_w[j];
-		}
-#if REF_PVR_PROFILE
-		r_stats.t_studio_transforms += PVR_Prof_End();
-		PVR_Prof_Start(); // Start geometry profiling
-#endif
-
-		if( all_visible )
-		{
-			if( is_fan )
-			{
-				for( int j = 1; j < vertCount - 1; j++ )
-				{
-					pvr_vertex_t *v0 = pvr_dr_target(*g_pvr_studio_dr);
-					v0->flags = PVR_CMD_VERTEX;
-					v0->x = sx[0]; v0->y = sy[0]; v0->z = sz[0];
-					v0->u = uv[0][0]; v0->v = uv[0][1];
-					v0->argb = c[0]; v0->oargb = 0;
-					pvr_dr_commit(v0);
-
-					pvr_vertex_t *v1 = pvr_dr_target(*g_pvr_studio_dr);
-					v1->flags = PVR_CMD_VERTEX;
-					v1->x = sx[j]; v1->y = sy[j]; v1->z = sz[j];
-					v1->u = uv[j][0]; v1->v = uv[j][1];
-					v1->argb = c[j]; v1->oargb = 0;
-					pvr_dr_commit(v1);
-
-					pvr_vertex_t *v2 = pvr_dr_target(*g_pvr_studio_dr);
-					v2->flags = PVR_CMD_VERTEX_EOL;
-					v2->x = sx[j+1]; v2->y = sy[j+1]; v2->z = sz[j+1];
-					v2->u = uv[j+1][0]; v2->v = uv[j+1][1];
-					v2->argb = c[j+1]; v2->oargb = 0;
-					pvr_dr_commit(v2);
-				}
-			}
-			else
-			{
-				for( int j = 0; j < vertCount - 2; j++ )
-				{
-					const int a = (j & 1) ? (j + 1) : j;
-					const int b = (j & 1) ? j : (j + 1);
-					const int d = j + 2;
-
-					pvr_vertex_t *v0 = pvr_dr_target(*g_pvr_studio_dr);
-					v0->flags = PVR_CMD_VERTEX;
-					v0->x = sx[a]; v0->y = sy[a]; v0->z = sz[a];
-					v0->u = uv[a][0]; v0->v = uv[a][1];
-					v0->argb = c[a]; v0->oargb = 0;
-					pvr_dr_commit(v0);
-
-					pvr_vertex_t *v1 = pvr_dr_target(*g_pvr_studio_dr);
-					v1->flags = PVR_CMD_VERTEX;
-					v1->x = sx[b]; v1->y = sy[b]; v1->z = sz[b];
-					v1->u = uv[b][0]; v1->v = uv[b][1];
-					v1->argb = c[b]; v1->oargb = 0;
-					pvr_dr_commit(v1);
-
-					pvr_vertex_t *v2 = pvr_dr_target(*g_pvr_studio_dr);
-					v2->flags = PVR_CMD_VERTEX_EOL;
-					v2->x = sx[d]; v2->y = sy[d]; v2->z = sz[d];
-					v2->u = uv[d][0]; v2->v = uv[d][1];
-					v2->argb = c[d]; v2->oargb = 0;
-					pvr_dr_commit(v2);
-				}
-			}
-		}
-		else if( is_fan )
-		{
-			for( int j = 1; j < vertCount - 1; j++ )
-			{
-				PVR_ClipAndSubmitTriangle(
-					g_pvr_studio_dr,
-					tv[0], tv[j], tv[j+1],
-					uv[0][0], uv[0][1],
-					uv[j][0], uv[j][1],
-					uv[j+1][0], uv[j+1][1],
-					c[0], c[j], c[j+1]
-				);
-			}
-		}
-		else
-		{
-			for( int j = 0; j < vertCount - 2; j++ )
-			{
-				const int a = (j & 1) ? (j + 1) : j;
-				const int b = (j & 1) ? j : (j + 1);
-				const int d = j + 2;
-
-				PVR_ClipAndSubmitTriangle(
-					g_pvr_studio_dr,
-					tv[a], tv[b], tv[d],
-					uv[a][0], uv[a][1],
-					uv[b][0], uv[b][1],
-					uv[d][0], uv[d][1],
-					c[a], c[b], c[d]
-				);
-			}
-		}
-#if REF_PVR_PROFILE
-		r_stats.t_studio_geometry += PVR_Prof_End();
-#endif
-	}
+#undef STUDIO_GATHER_STRIP
 }
 
 
-static int R_StudioBuildIndices( qboolean tri_strip, int vertexState )
-{
+static int R_StudioBuildIndices( qboolean tri_strip, int vertexState ) { return 0; }
+static void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t ) {}
+static void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms ) {}
+static void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t, float scale ) {}
+static void R_StudioDrawArrays( uint startverts, uint startelems ) {}
 
-}
-
-/*
-===============
-R_StudioDrawNormalMesh
-
-generic path
-===============
-*/
-static void R_StudioBuildArrayNormalMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t )
-{
-
-}
-
-/*
-===============
-R_StudioDrawNormalMesh
-
-generic path
-===============
-*/
-static void R_StudioBuildArrayFloatMesh( short *ptricmds, vec3_t *pstudionorms )
-{
-
-}
-
-/*
-===============
-R_StudioDrawNormalMesh
-
-generic path
-===============
-*/
-static void R_StudioBuildArrayChromeMesh( short *ptricmds, vec3_t *pstudionorms, float s, float t, float scale )
-{
-
-}
-
-static void R_StudioDrawArrays( uint startverts, uint startelems )
-{
-
-}
-
-/*
-===============
-R_StudioDrawPoints
-
-===============
-*/
 static void R_StudioDrawPoints( void )
 {
 	int		i, j, k, m_skinnum;
@@ -2683,11 +2535,36 @@ static void R_StudioDrawPoints( void )
 	}
 	else
 	{
+		/* Pass 2 rigid skinning: bone-group FTRV.
+		   pvrstudiomdl sorts vertices in ascending bone order, so XMTRX
+		   only reloads when the bone index changes (≤ numbones loads total). */
+		int cur_bone = -1;
+#if REF_PVR_PROFILE
+		PVR_Prof_Start();
+#endif
 		for( i = 0; i < m_pSubModel->numverts; i++ )
 		{
-			Matrix3x4_VectorTransform( g_studio.bonestransform[pvertbone[i]], pstudioverts[i], g_studio.verts[i] );
-			R_LightStrength( pvertbone[i], pstudioverts[i], g_studio.lightpos[i] );
+			const int b = (int)pvertbone[i];
+			if( b != cur_bone )
+			{
+				shz_xmtrx_load_rows_3x4(
+					(const shz_vec4_t *)g_studio.bonestransform[b][0],
+					(const shz_vec4_t *)g_studio.bonestransform[b][1],
+					(const shz_vec4_t *)g_studio.bonestransform[b][2] );
+				cur_bone = b;
+			}
+			const shz_vec4_t w = shz_xmtrx_transform_vec4(
+				shz_vec4_init( pstudioverts[i][0], pstudioverts[i][1], pstudioverts[i][2], 1.f ) );
+			g_studio.verts[i][0] = w.x;
+			g_studio.verts[i][1] = w.y;
+			g_studio.verts[i][2] = w.z;
+			/* only compute elight bone-space positions when entity lights are active */
+			if( g_studio.numlocallights )
+				R_LightStrength( b, pstudioverts[i], g_studio.lightpos[i] );
 		}
+#if REF_PVR_PROFILE
+		r_stats.t_studio_skin += PVR_Prof_End();
+#endif
 	}
 
 	// generate shared normals for properly scaling glowing shell
@@ -2717,6 +2594,13 @@ static void R_StudioDrawPoints( void )
 				if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 					R_StudioSetupChrome( g_studio.chrome[k], *pnormbone, (float *)pstudionorms );
 				VectorSet( g_studio.lightvalues[k], tr.blend, tr.blend, tr.blend );
+				/* pre-pack: TransAdd color is uniform alpha, skip when elights active */
+				if( !g_studio.numlocallights )
+				{
+					const byte pa = (byte)( tr.blend * 255.f );
+					s_argb[k] = ((uint32_t)pa << 24) | ((uint32_t)pa << 16)
+					          | ((uint32_t)pa <<  8) |  (uint32_t)pa;
+				}
 			}
 		}
 		else
@@ -2730,6 +2614,14 @@ static void R_StudioDrawPoints( void )
 				if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
 					R_StudioSetupChrome( g_studio.chrome[k], *pnormbone, (float *)pstudionorms );
 				VectorScale( g_studio.lightcolor, lv_tmp, g_studio.lightvalues[k] );
+				/* pre-pack lambert result for no-elight fast path */
+				if( !g_studio.numlocallights )
+				{
+					s_argb[k] = ((uint32_t)(byte)( tr.blend * 255.f ) << 24)
+					          | ((uint32_t)Q_min((unsigned)(g_studio.lightvalues[k][0] * 255.f), 255u) << 16)
+				          | ((uint32_t)Q_min((unsigned)(g_studio.lightvalues[k][1] * 255.f), 255u) <<  8)
+				          |  (uint32_t)Q_min((unsigned)(g_studio.lightvalues[k][2] * 255.f), 255u);
+				}
 			}
 		}
 	}
@@ -2755,65 +2647,134 @@ static void R_StudioDrawPoints( void )
 		GL_Cull( GL_FRONT );
 	}
 
+	/* Pass 3a: load MVP into XMTRX and pre-transform ALL unique submodel vertices once.
+	   barney has ~430 unique verts but ~2156 strip corners — each vertex was previously
+	   FTRV'd ~5× (once per corner reference). Now it's done exactly once, sequentially,
+	   cache-friendly, and the strip loop just indexes s_clip[vi]. */
+	__attribute__((aligned(8))) float s_mvp[16];
+	memcpy( s_mvp, r_world_matrix, sizeof( s_mvp ) );
+	shz_xmtrx_load_4x4( (shz_mat4x4_t *)s_mvp );
+
+#if REF_PVR_PROFILE
+	PVR_Prof_Start();
+#endif
+	s_all_clip_visible = true;
+	for( i = 0; i < m_pSubModel->numverts; i++ )
+	{
+		if( i + 1 < m_pSubModel->numverts )
+			__builtin_prefetch( &g_studio.verts[i+1][0], 0, 0 );
+		s_clip[i] = shz_xmtrx_transform_vec4(
+			shz_vec4_init( g_studio.verts[i][0], g_studio.verts[i][1], g_studio.verts[i][2], 1.f ) );
+		if( s_clip[i].w <= 0.0001f || s_clip[i].w < s_clip[i].z )
+		{
+			s_all_clip_visible = false;
+			/* Still compute screen coords for the visible subset; clip path uses s_clip[] directly */
+			s_screen[i][0] = s_screen[i][1] = s_screen[i][2] = 0.f;
+		}
+		else
+		{
+			/* Pre-divide here so the submit loop has zero FPU latency per corner.
+			   Cost: 1 FSRRA + 2 fmul × 430 verts vs. 1 FSRRA + 2 fmul × 2156 corners. */
+			const float iw = shz_invf_fsrra( s_clip[i].w );
+			s_screen[i][0] = s_clip[i].x * iw;
+			s_screen[i][1] = s_clip[i].y * iw;
+			s_screen[i][2] = iw;
+		}
+	}
+#if REF_PVR_PROFILE
+	r_stats.t_studio_transforms += PVR_Prof_End();
+#endif
+
+	/* argb_prepack is valid only when no dynamic entity lights are active */
+	const qboolean argb_prepack = ( !g_studio.numlocallights );
+	const int rendermode = RI.currententity->curstate.rendermode;
+
+	/* DR state is shared across all meshes — only re-opened when the PVR list changes.
+	   PVR_StudioSubmitHeader is only emitted when (texnum | faceflags | list) changes.
+	   For a model with T unique textures this reduces headers from nummesh → T. */
+	pvr_dr_state_t dr_state;
+	int prev_texnum  = -1;
+	int prev_fflags  = ~0;
+	int prev_list    = -1;
+
 	for( j = 0; j < m_pSubModel->nummesh; j++ )
 	{
 		float	oldblend = tr.blend;
 		short	*ptricmds;
 		float	s, t;
-		const int rendermode = RI.currententity->curstate.rendermode;
-		int desired_list;
-		pvr_dr_state_t dr_state;
-		gl_texture_t *skin_glt;
-		int skin_w, skin_h;
+		int	desired_list;
+		int	skin_w, skin_h;
 
-		pmesh = g_studio.meshes[j].mesh;
+		pmesh    = g_studio.meshes[j].mesh;
 		ptricmds = (short *)((byte *)m_pStudioHeader + pmesh->triindex);
 
-		// Get the correct texture index for this mesh
 		const int skinref_index = pskinref[pmesh->skinref];
 		g_nFaceFlags = ptexture[skinref_index].flags | g_nForceFaceFlags;
 
-		// CRITICAL: Studio model UVs are stored as pixel coordinates relative to the MDL texture dimensions,
-		// NOT the uploaded/rounded texture size. Always use MDL dimensions for normalization.
-		// gl_round_down can make the uploaded texture smaller, but UVs are still relative to original MDL size.
-		// If we normalize by the rounded-down size, UVs will exceed 1.0 and cause wrapping/doubling.
+		/* Studio UVs are pixel-coords relative to MDL texture size (not uploaded size). */
 		skin_w = ptexture[skinref_index].width;
 		skin_h = ptexture[skinref_index].height;
 		s = 1.0f / (float)skin_w;
 		t = 1.0f / (float)skin_h;
 
-		// Determine desired list based on mesh/entity transparency.
 		if( !R_ModelOpaque( rendermode ) || FBitSet( g_nFaceFlags, STUDIO_NF_MASKED|STUDIO_NF_ADDITIVE ))
 			desired_list = PVR_LIST_TR_POLY;
 		else
 			desired_list = PVR_LIST_OP_POLY;
 
-		// Setup skin and bind texture BEFORE initializing DR state
-		R_StudioSetupSkin( m_pStudioHeader, skinref_index );
+		/* ---- reopen DR state only when the PVR list changes ---- */
+		if( desired_list != prev_list )
+		{
+			if( prev_list != -1 )
+			{
+				g_pvr_studio_dr = NULL;
+				pvr_dr_finish();
+			}
+			pvr_dr_init( &dr_state );
+			g_pvr_studio_dr = &dr_state;
+			prev_list   = desired_list;
+			prev_texnum = -1;  /* force header re-emit after list switch */
+			prev_fflags = ~0;
+		}
 
+		/* ---- emit PVR polygon header only when texture or flags change ---- */
+		const int texnum = ptexture[skinref_index].index;
+		if( texnum != prev_texnum || g_nFaceFlags != prev_fflags )
+		{
+			R_StudioSetupSkin( m_pStudioHeader, skinref_index );
 #if REF_PVR_PROFILE
-		PVR_Prof_Start();
+			PVR_Prof_Start();
 #endif
-		pvr_dr_init( &dr_state );
-		g_pvr_studio_dr = &dr_state;
-		// Pass the texture index directly to ensure correct texture is used
-		PVR_StudioSubmitHeader( &dr_state, desired_list, rendermode, g_nFaceFlags, ptexture[skinref_index].index );
+			PVR_StudioSubmitHeader( &dr_state, desired_list, rendermode, g_nFaceFlags, texnum );
 #if REF_PVR_PROFILE
-		r_stats.t_studio_setup += PVR_Prof_End();
+			r_stats.t_studio_header += PVR_Prof_End();
+			r_stats.t_studio_setup  += r_stats.t_studio_header; /* keep total accurate */
 #endif
+			r_stats.c_studio_headers++;
+			prev_texnum = texnum;
+			prev_fflags = g_nFaceFlags;
+		}
 
-		if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ))
-			R_StudioDrawChromeMesh( ptricmds, pstudionorms, s, t, shellscale );
-		else if( FBitSet( g_nFaceFlags, STUDIO_NF_UV_COORDS ))
-			R_StudioDrawFloatMesh( ptricmds, pstudionorms );
+		/* Select UV mode; FTRV does not modify XMTRX so MVP persists across meshes */
+		int uv_mode;
+		if( FBitSet( g_nFaceFlags, STUDIO_NF_CHROME ) )
+			uv_mode = STUDIO_UV_CHROME;
+		else if( FBitSet( g_nFaceFlags, STUDIO_NF_UV_COORDS ) )
+			uv_mode = STUDIO_UV_FLOAT;
 		else
-			R_StudioDrawNormalMesh( ptricmds, pstudionorms, s, t );
+			uv_mode = STUDIO_UV_NORMAL;
 
-		g_pvr_studio_dr = NULL;
-		pvr_dr_finish();
+		PVR_StudioDrawMesh( ptricmds, pstudionorms, s, t, uv_mode, shellscale, argb_prepack );
 
 		r_stats.c_studio_polys += pmesh->numtris;
 		tr.blend = oldblend;
+	}
+
+	/* Close the shared DR state opened above */
+	if( prev_list != -1 )
+	{
+		g_pvr_studio_dr = NULL;
+		pvr_dr_finish();
 	}
 }
 

@@ -38,9 +38,7 @@ GNU General Public License for more details.
 #include <sh4zam/shz_sh4zam.h>
 
 // PVR profiling support (uses SH4 performance counters)
-#ifndef REF_PVR_PROFILE
-#define REF_PVR_PROFILE 1 // Set to 1 to enable profiling
-#endif
+#define REF_PVR_PROFILE 0 // Set to 1 to enable profiling
 
 // Profiling helpers.
 #if REF_PVR_PROFILE
@@ -324,6 +322,8 @@ typedef struct
 	uint		c_particle_count;
 
 	uint		c_client_ents;	// entities that moved to client
+	uint		c_studio_headers;	// PVR polygon headers emitted (ideally 1 per unique texture)
+	uint		c_studio_strips;	// PVR strip/fan packets submitted
 	double		t_world_node;
 	double		t_world_draw;
 #if REF_PVR_PROFILE
@@ -339,6 +339,8 @@ typedef struct
 	double		t_studio_pervertex_lighting;	// Per-vertex lighting (R_LightLambert) time
 	double		t_studio_quaternions;	// Quaternion calculations (R_StudioCalcRotations, R_StudioSlerpBones) time
 	double		t_studio_bones;		// Bone transforms (Matrix3x4_ConcatTransforms) time
+	double		t_studio_skin;		// Pass 2 bone-group FTRV skinning time
+	double		t_studio_header;	// PVR_StudioSubmitHeader time (header batching overhead)
 #endif
 } ref_speeds_t;
 

@@ -121,12 +121,26 @@ void GL_BackendEndFrame( void )
 		break;
 	case 7:
 		Q_snprintf( r_speeds_msg, sizeof( r_speeds_msg ),
-			"Studio Profile (ms):\nSetup: %.3f\nLighting: %.3f\nPerVertex: %.3f\nQuaternions: %.3f\nBones: %.3f\nTransforms: %.3f\nGeometry: %.3f\nTotal: %.3f",
+			"Studio Profile (ms):\nSetup:  %.3f\nLight:  %.3f\nPVLight:%.3f\nQuat:   %.3f\nBones:  %.3f\nSkin:   %.3f\nXform:  %.3f\nGeom:   %.3f\nTotal:  %.3f",
 			r_stats.t_studio_setup, r_stats.t_studio_lighting, r_stats.t_studio_pervertex_lighting,
-			r_stats.t_studio_quaternions, r_stats.t_studio_bones, r_stats.t_studio_transforms,
-			r_stats.t_studio_geometry, r_stats.t_studio_setup + r_stats.t_studio_lighting + 
+			r_stats.t_studio_quaternions, r_stats.t_studio_bones, r_stats.t_studio_skin,
+			r_stats.t_studio_transforms, r_stats.t_studio_geometry,
+			r_stats.t_studio_setup + r_stats.t_studio_lighting +
 			r_stats.t_studio_pervertex_lighting + r_stats.t_studio_quaternions + r_stats.t_studio_bones +
-			r_stats.t_studio_transforms + r_stats.t_studio_geometry );
+			r_stats.t_studio_skin + r_stats.t_studio_transforms + r_stats.t_studio_geometry );
+		break;
+	case 8:
+		Q_snprintf( r_speeds_msg, sizeof( r_speeds_msg ),
+			"Studio 3-Pass (ms):\nSkin:  %.3f\nXform: %.3f\nGeom:  %.3f\nHdr:   %.3f  (N=%u)\nStrips:%u  Poly:%u\nTotal: %.3f",
+			r_stats.t_studio_skin,
+			r_stats.t_studio_transforms,
+			r_stats.t_studio_geometry,
+			r_stats.t_studio_header,
+			r_stats.c_studio_headers,
+			r_stats.c_studio_strips,
+			r_stats.c_studio_polys,
+			r_stats.t_studio_skin + r_stats.t_studio_transforms +
+			r_stats.t_studio_geometry + r_stats.t_studio_header );
 		break;
 #endif
 	}
