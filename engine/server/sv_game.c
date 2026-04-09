@@ -19,6 +19,7 @@ GNU General Public License for more details.
 #include "event_flags.h"
 #include "library.h"
 #include "pm_defs.h"
+#include "pm_local.h"
 #include "studio.h"
 #include "const.h"
 #include "render_api.h"	// modelstate_t
@@ -5248,14 +5249,13 @@ qboolean SV_LoadProgs( const char *name )
 	static NEW_DLL_FUNCTIONS_FN	GiveNewDllFuncs;
 	static enginefuncs_t	gpEngfuncs;
 	static globalvars_t		gpGlobals;
-	static playermove_t		gpMove;
 	edict_t			*e;
 
 	if( svgame.hInstance )
 		return true;
 
-	// fill it in
-	svgame.pmove = &gpMove;
+	// fill it in — use the single shared playermove instance 
+	svgame.pmove = &g_shared_playermove;
 	svgame.globals = &gpGlobals;
 	svgame.mempool = Mem_AllocPool( "Server Edicts Zone" );
 

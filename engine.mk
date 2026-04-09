@@ -77,6 +77,7 @@ XASH_OBJS = \
 	engine/common/net_encode.o \
 	engine/common/net_ws.o \
 	engine/common/pm_surface.o \
+	engine/common/pm_shared_move.o \
 	engine/common/pm_trace.o \
 	engine/common/soundlib/snd_utils.o \
 	engine/common/sounds.o \

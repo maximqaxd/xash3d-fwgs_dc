@@ -3986,7 +3986,6 @@ void CL_UnloadProgs( void )
 
 qboolean CL_LoadProgs( const char *name )
 {
-	static playermove_t		gpMove;
 	CL_EXPORT_FUNCS	GetClientAPI; // single export
 	qboolean valid_single_export = false;
 	qboolean missed_exports = false;
@@ -3994,8 +3993,8 @@ qboolean CL_LoadProgs( const char *name )
 
 	if( clgame.hInstance ) CL_UnloadProgs();
 
-	// initialize PlayerMove
-	clgame.pmove = &gpMove;
+	// initialize PlayerMove — use the single shared instance 
+	clgame.pmove = &g_shared_playermove;
 
 	cls.mempool = Mem_AllocPool( "Client Static Pool" );
 	clgame.mempool = Mem_AllocPool( "Client Edicts Zone" );
