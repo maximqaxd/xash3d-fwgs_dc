@@ -919,8 +919,50 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 
 /*
 ================
+AddDynamicLightToVertex
+Q2-style: 3D distance from vertex to light, add (radius - dist) * color.
+================
+*/
+static void AddDynamicLightToVertex( const msurface_t *surf, const vec3_t vert_world,
+	uint *r_accum, uint *g_accum, uint *b_accum )
+{
+	if( !surf->dlightbits || surf->dlightframe != tr.framecount || !r_dynamic->value )
+		return;
+
+	vec3_t impact;
+	for( int lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
+	{
+		if( !FBitSet( surf->dlightbits, BIT( lnum )))
+			continue;
+
+		const dlight_t *dl = &tr.dlights[lnum];
+		if( dl->die < gp_cl->time || !dl->radius )
+			continue;
+
+		VectorSubtract( dl->origin, vert_world, impact );
+		float dist = VectorLength( impact );
+		float add = dl->radius - dist;
+		if( add <= 0.0f )
+			continue;
+		if( add < dl->minlight )
+			continue;
+
+		uint add_scaled = (uint)( add * 256.0f );
+		*r_accum += ( dl->color.r * add_scaled ) / 256;
+		*g_accum += ( dl->color.g * add_scaled ) / 256;
+		*b_accum += ( dl->color.b * add_scaled ) / 256;
+	}
+
+	const uint max_light_accum = 255 * 256;
+	if( *r_accum > max_light_accum ) *r_accum = max_light_accum;
+	if( *g_accum > max_light_accum ) *g_accum = max_light_accum;
+	if( *b_accum > max_light_accum ) *b_accum = max_light_accum;
+}
+
+/*
+================
 SampleVertexLight
-Sample lightmap data at a vertex position from surf->samples
+Q2-style: nearest-neighbor static sample + LT2 single sample + simple 3D dlights.
 ================
 */
 static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
@@ -928,68 +970,65 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 #if REF_PVR_PROFILE
 	PVR_Prof_Start();
 #endif
-	int ir, ig, ib;
+	uint r_accum = 0, g_accum = 0, b_accum = 0;
+	qboolean has_static = false;
+	vec3_t vert_world;
 
-	// Sample static lightmap if available (BSP samples or LT2)
+	// World-space vertex for dlights (only when needed)
+	qboolean need_dlights = ( surf && surf->dlightbits && surf->dlightframe == tr.framecount );
+	if( need_dlights )
+	{
+		if( tr.modelviewIdentity )
+			VectorCopy( vert, vert_world );
+		else
+			PVR_Mat4x4_TransformVec3( &RI.objectMatrix, vert, vert_world );
+	}
+
+	// Static lightmap (BSP samples or LT2) — nearest-neighbor single sample
 	if( surf && WORLDMODEL && ( ( surf->samples && WORLDMODEL->lightdata ) || FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING )))
 	{
 		const mextrasurf_t *info = surf->info;
+#if XASH_DREAMCAST
+		SHZ_PREFETCH( info->lmvecs );
+#endif
 		const int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
 		const int smax = ( info->lightextents[0] / sample_size ) + 1;
 		const int tmax = ( info->lightextents[1] / sample_size ) + 1;
 		const int size = smax * tmax;
-		
-		// Compute lightmap (s,t) in luxel space
+
+#if XASH_DREAMCAST
+		shz_vec2_t st = shz_vec3_dot2( shz_vec3_deref( vert ),
+			shz_vec3_deref( info->lmvecs[0] ), shz_vec3_deref( info->lmvecs[1] ));
+		float s = st.x + info->lmvecs[0][3] - info->lightmapmins[0];
+		float t = st.y + info->lmvecs[1][3] - info->lightmapmins[1];
+#else
 		float s = DotProduct( vert, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
 		float t = DotProduct( vert, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
-		
-		// Convert to luxel coordinates
-		float ls = s / sample_size;
-		float lt = t / sample_size;
+#endif
 
-		// Clamp to valid range (fractional luxel coordinate).
-		// Using fractional coords + bilinear sampling avoids visible "tile pops"
-		// from truncation at surface boundaries.
-		float lx = ls, ly = lt;
-		if( lx < 0.0f ) lx = 0.0f;
-		if( ly < 0.0f ) ly = 0.0f;
-		if( lx > (float)( smax - 1 )) lx = (float)( smax - 1 );
-		if( ly > (float)( tmax - 1 )) ly = (float)( tmax - 1 );
+		float ls = s / (float)sample_size;
+		float lt = t / (float)sample_size;
+		int lux_s = (int)ls;
+		int lux_t = (int)lt;
+		if( lux_s < 0 ) lux_s = 0;
+		if( lux_s >= smax ) lux_s = smax - 1;
+		if( lux_t < 0 ) lux_t = 0;
+		if( lux_t >= tmax ) lux_t = tmax - 1;
 
-		const int ix0 = (int)floorf( lx );
-		const int iy0 = (int)floorf( ly );
-		const int ix1 = ( ix0 + 1 < smax ) ? ( ix0 + 1 ) : ix0;
-		const int iy1 = ( iy0 + 1 < tmax ) ? ( iy0 + 1 ) : iy0;
-		float fx = lx - (float)ix0;
-		float fy = ly - (float)iy0;
-		if( ix1 == ix0 ) fx = 0.0f;
-		if( iy1 == iy0 ) fy = 0.0f;
-		
-		uint r_accum = 0, g_accum = 0, b_accum = 0;
-		qboolean sampled_any = false;
 		for( int maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++ )
 		{
 			const uint scale = tr.lightstylevalue[surf->styles[maps]];
 
 			if( surf->samples && WORLDMODEL->lightdata )
 			{
-				const color24 *lm = &surf->samples[maps * size];
-				const color24 *p00 = &lm[iy0 * smax + ix0];
-				const color24 *p10 = &lm[iy0 * smax + ix1];
-				const color24 *p01 = &lm[iy1 * smax + ix0];
-				const color24 *p11 = &lm[iy1 * smax + ix1];
-
-				const float top_r = (float)p00->r + ((float)p10->r - (float)p00->r) * fx;
-				const float top_g = (float)p00->g + ((float)p10->g - (float)p00->g) * fx;
-				const float top_b = (float)p00->b + ((float)p10->b - (float)p00->b) * fx;
-				const float bot_r = (float)p01->r + ((float)p11->r - (float)p01->r) * fx;
-				const float bot_g = (float)p01->g + ((float)p11->g - (float)p01->g) * fx;
-				const float bot_b = (float)p01->b + ((float)p11->b - (float)p01->b) * fx;
-
-				r_accum += (uint)( top_r + ( bot_r - top_r ) * fy ) * scale;
-				g_accum += (uint)( top_g + ( bot_g - top_g ) * fy ) * scale;
-				b_accum += (uint)( top_b + ( bot_b - top_b ) * fy ) * scale;
-				sampled_any = true;
+				const color24 *p = &surf->samples[maps * size + lux_t * smax + lux_s];
+#if XASH_DREAMCAST
+				SHZ_PREFETCH( p );
+#endif
+				r_accum += (uint)p->r * scale;
+				g_accum += (uint)p->g * scale;
+				b_accum += (uint)p->b * scale;
+				has_static = true;
 			}
 			else if( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs && info )
 			{
@@ -997,7 +1036,7 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 				if( face_index >= 0 && (uint32_t)face_index < WORLDMODEL->lt2_lightsurfs_count )
 				{
 					uint32_t pos = WORLDMODEL->lt2_lightsurfs[face_index];
-					for( int st = 0; st < maps; st++ )
+					for( int m = 0; m < maps; m++ )
 					{
 						if( pos + 1u >= WORLDMODEL->lt2_payload_size ) { pos = 0; break; }
 						const byte op = WORLDMODEL->lt2_payload[pos];
@@ -1005,7 +1044,6 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 						const uint gh = (op & 0x0F) + 2u;
 						pos += 1u + gw * gh * 3u;
 					}
-
 					if( pos + 1u < WORLDMODEL->lt2_payload_size )
 					{
 						const byte op = WORLDMODEL->lt2_payload[pos];
@@ -1013,297 +1051,74 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 						const uint gh = (op & 0x0F) + 2u;
 						const uint need = 1u + gw * gh * 3u;
 						const byte *grid = WORLDMODEL->lt2_payload + pos + 1u;
-						if( pos + need <= WORLDMODEL->lt2_payload_size && gw >= 2 && gh >= 2 )
+						if( pos + need <= WORLDMODEL->lt2_payload_size && gw >= 1 && gh >= 1 )
 						{
-							const float u = (smax == 1) ? 0.0f : (lx / (float)(smax - 1)) * (float)(gw - 1);
-							const float v = (tmax == 1) ? 0.0f : (ly / (float)(tmax - 1)) * (float)(gh - 1);
-							int cx = (int)floorf( u );
-							int cy = (int)floorf( v );
+							float u = (smax <= 1) ? 0.0f : (ls / (float)(smax - 1)) * (float)(gw - 1);
+							float v = (tmax <= 1) ? 0.0f : (lt / (float)(tmax - 1)) * (float)(gh - 1);
+							int cx = (int)u;
+							int cy = (int)v;
 							if( cx < 0 ) cx = 0;
+							if( cx >= (int)gw ) cx = (int)gw - 1;
 							if( cy < 0 ) cy = 0;
-							if( cx > (int)gw - 2 ) cx = (int)gw - 2;
-							if( cy > (int)gh - 2 ) cy = (int)gh - 2;
-							const float fx = u - (float)cx;
-							const float fy = v - (float)cy;
-
-							const uint idx00 = (uint)((cy * (int)gw + cx) * 3);
-							const uint idx10 = (uint)((cy * (int)gw + (cx + 1)) * 3);
-							const uint idx01 = (uint)(((cy + 1) * (int)gw + cx) * 3);
-							const uint idx11 = (uint)(((cy + 1) * (int)gw + (cx + 1)) * 3);
-
-							const float c00r = (float)grid[idx00 + 0], c00g = (float)grid[idx00 + 1], c00b = (float)grid[idx00 + 2];
-							const float c10r = (float)grid[idx10 + 0], c10g = (float)grid[idx10 + 1], c10b = (float)grid[idx10 + 2];
-							const float c01r = (float)grid[idx01 + 0], c01g = (float)grid[idx01 + 1], c01b = (float)grid[idx01 + 2];
-							const float c11r = (float)grid[idx11 + 0], c11g = (float)grid[idx11 + 1], c11b = (float)grid[idx11 + 2];
-
-							const float top_r = c00r + (c10r - c00r) * fx;
-							const float top_g = c00g + (c10g - c00g) * fx;
-							const float top_b = c00b + (c10b - c00b) * fx;
-							const float bot_r = c01r + (c11r - c01r) * fx;
-							const float bot_g = c01g + (c11g - c01g) * fx;
-							const float bot_b = c01b + (c11b - c01b) * fx;
-
-							r_accum += (uint)(top_r + (bot_r - top_r) * fy) * scale;
-							g_accum += (uint)(top_g + (bot_g - top_g) * fy) * scale;
-							b_accum += (uint)(top_b + (bot_b - top_b) * fy) * scale;
-							sampled_any = true;
+							if( cy >= (int)gh ) cy = (int)gh - 1;
+							uint idx = (uint)( cy * gw + cx ) * 3u;
+							r_accum += (uint)grid[idx + 0] * scale;
+							g_accum += (uint)grid[idx + 1] * scale;
+							b_accum += (uint)grid[idx + 2] * scale;
+							has_static = true;
 						}
 					}
 				}
 			}
 		}
-		// IMPORTANT: do not treat black samples as "no lightmap".
-		// If we couldn't sample any static lighting at all, leave accum = 0 and let
-		// dynamic lights (below) or the final clamp/gamma produce the result.
-		(void)sampled_any;
+	}
 
-		// Apply lightscale (gamma compensation) and convert to 10-bit range
-		// This matches GL renderer: val = bl[i] * lightscale >> 14
-		int lightscale;
-		if( gl_overbright.value )
-			lightscale = 256; // Simple case for overbright
-		else
-			lightscale = (int)( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256.0f + 0.5f );
-		
-		uint r_val = ( r_accum * lightscale ) >> 14;
-		uint g_val = ( g_accum * lightscale ) >> 14;
-		uint b_val = ( b_accum * lightscale ) >> 14;
-		
-		// Clamp to 10-bit range (0-1023)
-		if( r_val > 1023 ) r_val = 1023;
-		if( g_val > 1023 ) g_val = 1023;
-		if( b_val > 1023 ) b_val = 1023;
-		
-		// Add dynamic lights before applying gamma
-		// Dynamic lights are additive and sampled per-vertex using 2D lightmap-space distance (like GL renderer)
-		if( surf && surf->dlightbits && r_dynamic->value && surf->dlightframe == tr.framecount )
-		{
-			const mextrasurf_t *info = surf->info;
-			const int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
-			int sample_frac = 1;
-			mtexinfo_t *tex = surf->texinfo;
-			
-			// Get sample fraction for world luxels (like GL renderer)
-			if( FBitSet( tex->flags, TEX_WORLD_LUXELS ))
-			{
-				if( surf->texinfo->faceinfo )
-					sample_frac = surf->texinfo->faceinfo->texture_step;
-				else if( FBitSet( surf->texinfo->flags, TEX_EXTRA_LIGHTMAP ))
-					sample_frac = LM_SAMPLE_EXTRASIZE;
-				else
-					sample_frac = LM_SAMPLE_SIZE;
-			}
-			
-			vec3_t vert_world;
-			vec3_t origin_l, impact;
-			float dist_plane, rad, minlight, add;
-			
-			// Transform vertex to world space if needed
-			if( !tr.modelviewIdentity )
-			{
-				PVR_Mat4x4_TransformVec3( &RI.objectMatrix, vert, vert_world );
-			}
-			else
-			{
-				VectorCopy( vert, vert_world );
-			}
-			
-			// Calculate vertex position in lightmap space (we already have this from static lighting)
-			float vert_s = DotProduct( vert_world, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
-			float vert_t = DotProduct( vert_world, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
-			
-			// Sample all dynamic lights affecting this surface
-			for( int lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
-			{
-				if( !FBitSet( surf->dlightbits, BIT( lnum )))
-					continue; // not lit by this light
-				
-				const dlight_t *dl = &tr.dlights[lnum];
-				
-				// Check if light is still alive
-				if( dl->die < gp_cl->time || !dl->radius )
-					continue;
-				
-				// Transform light origin to local bmodel space (like GL renderer)
-				if( !tr.modelviewIdentity )
-					PVR_Mat4x4_VectorITransform( &RI.objectMatrix, dl->origin, origin_l );
-				else
-					VectorCopy( dl->origin, origin_l );
-				
-				// Project light onto surface plane and calculate effective radius
-				rad = dl->radius;
-				dist_plane = PlaneDiff( origin_l, surf->plane );
-				rad -= fabs( dist_plane );
-				
-				// rad is now the highest intensity on the plane
-				minlight = dl->minlight;
-				if( rad < minlight )
-					continue;
-				
-				minlight = rad - minlight;
-				
-				// Calculate impact point on surface plane
-				if( surf->plane->type < 3 )
-				{
-					VectorCopy( origin_l, impact );
-					impact[surf->plane->type] -= dist_plane;
-				}
-				else
-				{
-					VectorMA( origin_l, -dist_plane, surf->plane->normal, impact );
-				}
-				
-				// Calculate light position in lightmap space
-				float light_s = DotProduct( impact, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
-				float light_t = DotProduct( impact, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
-				
-				// Calculate 2D distance in lightmap space (like GL renderer)
-				float sd = (light_s - vert_s) * sample_frac;
-				float td = (light_t - vert_t) * sample_frac;
-				
-				if( sd < 0 ) sd = -sd;
-				if( td < 0 ) td = -td;
-				
-				// Use same distance calculation as GL renderer
-				float dist_2d;
-				if( sd > td )
-					dist_2d = sd + (td * 0.5f);
-				else
-					dist_2d = td + (sd * 0.5f);
-				
-				// Check if within effective radius
-				if( dist_2d >= minlight )
-					continue;
-				
-				// Attenuation: (rad - dist_2d) matching GL renderer
-				add = rad - dist_2d;
-				
-				if( add < 0 )
-					continue;
-				
-				// Scale by 256 to match fixed-point format (same as static lights)
-				uint add_scaled = (uint)( add * 256.0f );
-				
-				// Add light contribution matching GL renderer: ((rad - dist) * 256) * color / 256
-				r_accum += ( dl->color.r * add_scaled ) / 256;
-				g_accum += ( dl->color.g * add_scaled ) / 256;
-				b_accum += ( dl->color.b * add_scaled ) / 256;
-			}
-			
-			// Clamp accumulated values to prevent overflow (max light value is ~255 * radius)
-			// For radius 80, max would be ~255 * 80 = 20400, which fits in uint
-			// But we want to prevent excessive brightness, so clamp to reasonable max
-			const uint max_light_accum = 255 * 256; // Max static light value
-			if( r_accum > max_light_accum ) r_accum = max_light_accum;
-			if( g_accum > max_light_accum ) g_accum = max_light_accum;
-			if( b_accum > max_light_accum ) b_accum = max_light_accum;
-			
-			// Recalculate values after adding dynamic lights
-			r_val = ( r_accum * lightscale ) >> 14;
-			g_val = ( g_accum * lightscale ) >> 14;
-			b_val = ( b_accum * lightscale ) >> 14;
-			
-			// Clamp to 10-bit range (0-1023)
-			if( r_val > 1023 ) r_val = 1023;
-			if( g_val > 1023 ) g_val = 1023;
-			if( b_val > 1023 ) b_val = 1023;
-		}
-		
-		// Apply gamma correction and convert to 8-bit: LightToTexGamma(val) >> 2
-		ir = LightToTexGamma( r_val ) >> 2;
-		ig = LightToTexGamma( g_val ) >> 2;
-		ib = LightToTexGamma( b_val ) >> 2;
+	// Add dynamic lights (Q2-style 3D distance; vert_world set only when need_dlights)
+	if( need_dlights )
+		AddDynamicLightToVertex( surf, vert_world, &r_accum, &g_accum, &b_accum );
+
+	// No static and no dlight contribution -> fullbright
+	if( !has_static && r_accum == 0 && g_accum == 0 && b_accum == 0 )
+	{
+#if REF_PVR_PROFILE
+		r_stats.t_world_lighting += PVR_Prof_End();
+#endif
+		return 0xFF000000 | (255 << 16) | (255 << 8) | 255;
+	}
+
+	// Apply lightscale (gamma compensation) and convert to 10-bit range
+	// This matches GL renderer: val = bl[i] * lightscale >> 14
+	int lightscale;
+	if( gl_overbright.value )
+		lightscale = 256; // Simple case for overbright
+	else
+		lightscale = (int)( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256.0f + 0.5f );
+
+	uint r_val = ( r_accum * lightscale ) >> 14;
+	uint g_val = ( g_accum * lightscale ) >> 14;
+	uint b_val = ( b_accum * lightscale ) >> 14;
+	if( r_val > 1023 ) r_val = 1023;
+	if( g_val > 1023 ) g_val = 1023;
+	if( b_val > 1023 ) b_val = 1023;
+
+	// Gamma to 8-bit
+	int ir, ig, ib;
+	if( FBitSet( gp_host->features, ENGINE_LINEAR_GAMMA_SPACE ))
+	{
+		ir = r_val >> 2;
+		ig = g_val >> 2;
+		ib = b_val >> 2;
 	}
 	else
 	{
-		// No lightmap - check for dynamic lights only
-		uint r_dyn = 0, g_dyn = 0, b_dyn = 0;
-		
-		if( surf && surf->dlightbits && r_dynamic->value && surf->dlightframe == tr.framecount )
-		{
-			vec3_t vert_world;
-			vec3_t light_vec;
-			float dist, rad, minlight, add;
-			
-			// Transform vertex to world space if needed
-			if( !tr.modelviewIdentity )
-			{
-				PVR_Mat4x4_TransformVec3( &RI.objectMatrix, vert, vert_world );
-			}
-			else
-			{
-				VectorCopy( vert, vert_world );
-			}
-			
-			// Sample all dynamic lights affecting this surface
-			for( int lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
-			{
-				if( !FBitSet( surf->dlightbits, BIT( lnum )))
-					continue;
-				
-				const dlight_t *dl = &tr.dlights[lnum];
-				
-				if( dl->die < gp_cl->time || !dl->radius )
-					continue;
-				
-				VectorSubtract( vert_world, dl->origin, light_vec );
-				dist = sqrtf( DotProduct( light_vec, light_vec ));
-				
-				rad = dl->radius;
-				minlight = dl->minlight;
-				
-				if( dist >= rad )
-					continue;
-				
-				add = rad - dist;
-				
-				if( add < minlight )
-					continue;
-				
-				uint add_scaled = (uint)( add * 256.0f );
-				
-				r_dyn += ( dl->color.r * add_scaled ) / 256;
-				g_dyn += ( dl->color.g * add_scaled ) / 256;
-				b_dyn += ( dl->color.b * add_scaled ) / 256;
-			}
-			
-			// Clamp accumulated values to prevent overflow
-			const uint max_light_accum = 255 * 256;
-			if( r_dyn > max_light_accum ) r_dyn = max_light_accum;
-			if( g_dyn > max_light_accum ) g_dyn = max_light_accum;
-			if( b_dyn > max_light_accum ) b_dyn = max_light_accum;
-			
-			// Apply lightscale and gamma to dynamic lights
-			int lightscale;
-			if( gl_overbright.value )
-				lightscale = 256;
-			else
-				lightscale = (int)( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256.0f + 0.5f );
-			
-			uint r_val = ( r_dyn * lightscale ) >> 14;
-			uint g_val = ( g_dyn * lightscale ) >> 14;
-			uint b_val = ( b_dyn * lightscale ) >> 14;
-			
-			if( r_val > 1023 ) r_val = 1023;
-			if( g_val > 1023 ) g_val = 1023;
-			if( b_val > 1023 ) b_val = 1023;
-			
-			ir = LightToTexGamma( r_val ) >> 2;
-			ig = LightToTexGamma( g_val ) >> 2;
-			ib = LightToTexGamma( b_val ) >> 2;
-			
-			// Clamp to valid range
-			if( ir > 255 ) ir = 255;
-			if( ig > 255 ) ig = 255;
-			if( ib > 255 ) ib = 255;
-		}
-		else
-		{
-			// No lightmap and no dynamic lights - fullbright
-			ir = ig = ib = 255;
-		}
+		ir = tr.lightgammatable[r_val] >> 2;
+		ig = tr.lightgammatable[g_val] >> 2;
+		ib = tr.lightgammatable[b_val] >> 2;
 	}
-	
+	if( ir > 255 ) ir = 255;
+	if( ig > 255 ) ig = 255;
+	if( ib > 255 ) ib = 255;
+
 #if REF_PVR_PROFILE
 	r_stats.t_world_lighting += PVR_Prof_End();
 #endif
@@ -1317,13 +1132,17 @@ Helper function to submit polygon vertices to PVR
 Now supports per-vertex colors for Gouraud shading
 ================
 */
+#if XASH_DREAMCAST
+static SHZ_HOT void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const uint32_t *vertex_colors, float sOffset, float tOffset, float xScale, float yScale )
+#else
 static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const uint32_t *vertex_colors, float sOffset, float tOffset, float xScale, float yScale )
+#endif
 {
 	if( !p || p->numverts < 3 ) return;
-	
+
 	float *v = p->verts[0];
 	const int numverts = p->numverts;
-	
+
 	// Load matrix once
 	__attribute__((aligned(8))) float aligned_matrix[16];
 	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
@@ -1331,44 +1150,70 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 	PVR_Prof_Start();
 #endif
 	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
-	
-	// Transform all vertices
+
+	// Transform all vertices and compute 1/w in same pass (cache-hot; avoids second pass in all-visible path).
 	shz_vec4_t transformed[64];
+	float inv_w[64];
 	float uv[64][2];
 	unsigned vismask_all = 0;
-	
-	SHZ_PREFETCH(v);
-	
+	float batch_4x[16];
+
 	int hasScale = (xScale != 0.0f && yScale != 0.0f);
-	
-	for( int i = 0; i < numverts; i++, v += VERTEXSIZE )
+
+	int j = 0;
+	for( ; j + 4 <= numverts; j += 4 )
 	{
-		SHZ_PREFETCH(v + VERTEXSIZE);
-		
-		shz_vec3_t pos = shz_vec3_init(v[0], v[1], v[2]);
-		transformed[i] = shz_xmtrx_transform_vec4(shz_vec3_vec4(pos, 1.0f));
-		
-		// Calculate UV coordinates
-		float s = v[3] + sOffset;
-		float t = v[4] + tOffset;
-		if( hasScale )
+		for( int k = 0; k < 4; k++ )
 		{
-			s *= xScale;
-			t *= yScale;
+			float *vk = v + (j + k) * VERTEXSIZE;
+			batch_4x[k*4 + 0] = vk[0];
+			batch_4x[k*4 + 1] = vk[1];
+			batch_4x[k*4 + 2] = vk[2];
+			batch_4x[k*4 + 3] = 1.0f;
 		}
-		uv[i][0] = s;
-		uv[i][1] = t;
-		
-		// Track if any vertex is in front of near plane 
-		if( transformed[i].w >= transformed[i].z + PVR_NEAR_CLIP_EPSILON )
-			vismask_all |= (1 << i);
+		shz_xmtrx_load_apply_unaligned_4x4( aligned_matrix, batch_4x );
+		for( int k = 0; k < 4; k++ )
+		{
+			const int i = j + k;
+			shz_vec4_t clip = shz_xmtrx_read_col( k );
+			transformed[i] = clip;
+			inv_w[i] = shz_invf_fsrra( clip.w );
+			if( clip.w >= clip.z + PVR_NEAR_CLIP_EPSILON )
+				vismask_all |= (1u << i);
+			float *vk = v + i * VERTEXSIZE;
+			float s = vk[3] + sOffset;
+			float t = vk[4] + tOffset;
+			if( hasScale ) { s *= xScale; t *= yScale; }
+			uv[i][0] = s;
+			uv[i][1] = t;
+		}
+		shz_xmtrx_load_4x4( (shz_mat4x4_t *)aligned_matrix );
 	}
-	
+	for( ; j < numverts; j++ )
+	{
+#if XASH_DREAMCAST
+		if( j + 1 < numverts )
+			SHZ_PREFETCH( v + (j + 1) * VERTEXSIZE );
+#endif
+		float *vj = v + j * VERTEXSIZE;
+		shz_vec3_t pos = shz_vec3_init( vj[0], vj[1], vj[2] );
+		shz_vec4_t clip = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
+		transformed[j] = clip;
+		inv_w[j] = shz_invf_fsrra( clip.w );
+		if( clip.w >= clip.z + PVR_NEAR_CLIP_EPSILON )
+			vismask_all |= (1u << j);
+		float s = vj[3] + sOffset;
+		float t = vj[4] + tOffset;
+		if( hasScale ) { s *= xScale; t *= yScale; }
+		uv[j][0] = s;
+		uv[j][1] = t;
+	}
+
 #if REF_PVR_PROFILE
 	r_stats.t_world_transforms += PVR_Prof_End();
 	PVR_Prof_Start(); // Start geometry profiling
 #endif
-	
+
 	// Early out if entire poly is behind near plane
 	if( vismask_all == 0 )
 	{
@@ -1377,19 +1222,21 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 #endif
 		return;
 	}
-	
+
 	// Check if all visible (common case)
-	unsigned all_visible_mask = (1 << numverts) - 1;
-	
+	unsigned all_visible_mask = (1u << numverts) - 1;
+
 	if( vismask_all == all_visible_mask )
 	{
-		// Fast path - no clipping
+		// Fast path: inv_w already computed in transform loop (cache-hot)
+
+		// Fan: tri (0,1,2), (0,2,3), ... — must emit 3 verts per tri (strip would give wrong tris)
 		for( int i = 1; i < numverts - 1; i++ )
 		{
-			float inv_w0 = shz_invf_fsrra(transformed[0].w);
-			float inv_wi = shz_invf_fsrra(transformed[i].w);
-			float inv_wi1 = shz_invf_fsrra(transformed[i+1].w);
-			
+			const float inv_w0 = inv_w[0];
+			const float inv_wi = inv_w[i];
+			const float inv_wi1 = inv_w[i+1];
+
 			pvr_vertex_t *vert = pvr_dr_target(*dr_state);
 			vert->flags = PVR_CMD_VERTEX;
 			vert->x = transformed[0].x * inv_w0;
@@ -1400,7 +1247,7 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			vert->argb = vertex_colors ? vertex_colors[0] : 0xFFFFFFFF;
 			vert->oargb = 0;
 			pvr_dr_commit(vert);
-			
+
 			vert = pvr_dr_target(*dr_state);
 			vert->flags = PVR_CMD_VERTEX;
 			vert->x = transformed[i].x * inv_wi;
@@ -1411,7 +1258,7 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			vert->argb = vertex_colors ? vertex_colors[i] : 0xFFFFFFFF;
 			vert->oargb = 0;
 			pvr_dr_commit(vert);
-			
+
 			vert = pvr_dr_target(*dr_state);
 			vert->flags = PVR_CMD_VERTEX_EOL;
 			vert->x = transformed[i+1].x * inv_wi1;
@@ -1441,7 +1288,7 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			);
 		}
 	}
-	
+
 #if REF_PVR_PROFILE
 	r_stats.t_world_geometry += PVR_Prof_End();
 #endif
@@ -1484,18 +1331,29 @@ DrawGLPolySurfaceGouraud
 Gouraud shaded polygon - samples light per vertex from surf->samples 
 ================
 */
-static void DrawGLPolySurfaceGouraud( glpoly2_t *p, pvr_dr_state_t *dr_state, const msurface_t *surf, float sOffset, float tOffset, float xScale, float yScale )
+static SHZ_HOT void DrawGLPolySurfaceGouraud( glpoly2_t *p, pvr_dr_state_t *dr_state, const msurface_t *surf, float sOffset, float tOffset, float xScale, float yScale )
 {
 	if( !p || p->numverts < 3 || !surf )
 		return;
 
 	float *v = p->verts[0];
 	const int numverts = p->numverts;
-	
+
+#if XASH_DREAMCAST
+	// Prefetch current surface's lmvecs so SampleVertexLight has it hot
+	if( surf->info )
+		SHZ_PREFETCH( surf->info->lmvecs );
+#endif
+
 	// Sample light per vertex from surf->samples
 	uint32_t colors[64];
 	for( int i = 0; i < numverts && i < 64; i++, v += VERTEXSIZE )
 	{
+#if XASH_DREAMCAST
+		// Prefetch next vertex so it's in cache for the next iteration
+		if( i + 1 < numverts && i + 1 < 64 )
+			SHZ_PREFETCH( v + VERTEXSIZE );
+#endif
 		colors[i] = SampleVertexLight( surf, v );
 	}
 	
@@ -2272,6 +2130,11 @@ static void R_DrawTextureChains( void )
 		// Now render all surfaces with this texture (they share the header and DR state we just created)
 		for( ; s != NULL; s = s->texturechain )
 		{
+#if XASH_DREAMCAST
+			// Prefetch next surface's lmvecs so it's hot when we advance
+			if( s->texturechain && s->texturechain->info )
+				SHZ_PREFETCH( s->texturechain->info->lmvecs );
+#endif
 			// Bind texture for DrawGLPoly (it reads glState.currentTexturesIndex as fallback)
 			GL_Bind( XASH_TEXTURE0, texnum );
 			
@@ -3260,3 +3123,15 @@ void GL_InitRandomTable( void )
 
 	gEngfuncs.COM_SetRandomSeed( 0 );
 }
+
+#if XASH_DREAMCAST
+uintptr_t R_SurfGetSampleVertexLightAddr( void )
+{
+	return (uintptr_t)&SampleVertexLight;
+}
+
+uintptr_t R_SurfGetDrawGLPolyVerticesAddr( void )
+{
+	return (uintptr_t)&DrawGLPolyVertices;
+}
+#endif
