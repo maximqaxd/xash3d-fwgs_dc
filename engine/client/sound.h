@@ -281,6 +281,9 @@ void SND_MoveMouth16( channel_t *ch, wavdata_t *pSource, int count );
 void SND_MoveMouthRaw( rawchan_t *ch, portable_samplepair_t *pData, int count );
 void SND_CloseMouth( channel_t *ch );
 void SND_ForceCloseMouth( int entnum );
+#ifdef XASH_DREAMCAST
+void SND_UpdateMouthDC( channel_t *ch );
+#endif
 
 //
 // s_stream.c

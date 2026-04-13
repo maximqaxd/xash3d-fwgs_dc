@@ -900,6 +900,11 @@ void CheckNewDspPresets( void )
 		Cvar_DirectSetValue( &sxdly_feedback, cur->room_feedback );
 		Cvar_DirectSetValue( &sxdly_lp, cur->room_dlylp );
 		Cvar_DirectSetValue( &sxste_delay, cur->room_left );
+
+#if defined(XASH_DREAMCAST)
+		AICA_DSP_ApplyPreset( idsp_room, cur->room_lp, cur->room_size,
+			cur->room_refl, cur->room_delay, cur->room_feedback );
+#endif
 	}
 
 	room_typeprev = idsp_room;

@@ -17,6 +17,9 @@ GNU General Public License for more details.
 #include "sound.h"
 #include "client.h"
 #include "const.h"
+#ifdef XASH_DREAMCAST
+#include "platform/dreamcast/AudioEngine.h"
+#endif
 
 #define CAVGSAMPLES		10
 
@@ -197,3 +200,91 @@ void SND_MoveMouthRaw( rawchan_t *ch, portable_samplepair_t *pData, int count )
 		pMouth->sndcount = 0;
 	}
 }
+
+#ifdef XASH_DREAMCAST
+/*
+=================
+SND_UpdateMouthDC
+
+Called from SND_UpdateSound every game frame for every active CHAN_VOICE /
+CHAN_STREAM channel.
+=================
+*/
+/* Our envelope stores avg(|sample|>>8): 0-127.
+ * PC SND_MoveMouth16 stores avg(sample/256) over CAVGSAMPLES: ~0-20 due to oscillation cancellation.
+ * Divide by 4 → typical speech gives mouthopen 6-12 (9-19% jaw open), loud peaks 25-30 (39-47%). */
+#define DC_MOUTH_DIVISOR 4
+
+void SND_UpdateMouthDC( channel_t *ch )
+{
+	cl_entity_t  *clientEntity;
+	mouth_t      *pMouth;
+	int           ae_idx;
+	uint32_t      sample_pos;
+	uint32_t      env_idx;
+	uint8_t      *amp_table;
+	uint16_t      amp_count;
+	float         t, amp, osc;
+
+	if( ch->entnum <= 0 ) return;
+	if( ch->entchannel != CHAN_VOICE && ch->entchannel != CHAN_STREAM ) return;
+	if( !ch->sfx ) return;
+	if( !ch->active ) return;
+
+	clientEntity = CL_GetEntityByIndex( ch->entnum );
+	if( !clientEntity ) return;
+
+	pMouth = &clientEntity->mouth;
+
+	/* Get AudioEngine stream/SFX index from the sfx cache.
+	   For sentences ch->sfx == ch->words[0].sfx (set by VOX_LoadSound),
+	   so cache->aica_pos gives the AudioEngine index for the first word. */
+	if( !ch->sfx->cache || ch->sfx->cache->aica_pos < 0 )
+	{
+		pMouth->mouthopen = 0;
+		return;
+	}
+	ae_idx = (int)ch->sfx->cache->aica_pos;
+
+	/* Query current AICA playback position */
+	sample_pos = AudioEngine_GetSamplePosition( ae_idx );
+
+	/* Choose amplitude table from the right AudioEngine struct */
+	amp_table = NULL;
+	amp_count = 0;
+	if( ae_idx < AUDIO_ENGINE_MAX_STREAMS )
+	{
+		struct stream_info *si = AudioEngine_getStreamInfo( ae_idx );
+		if( si && si->amplitude_count > 0 )
+		{
+			amp_table = si->amplitude;
+			amp_count = si->amplitude_count;
+		}
+	}
+	else
+	{
+		struct sfx_info *si = AudioEngine_getSfxInfo( ae_idx );
+		if( si && si->amplitude_count > 0 )
+		{
+			amp_table = si->amplitude;
+			amp_count = si->amplitude_count;
+		}
+	}
+
+	if( amp_table && amp_count > 0 )
+	{
+		env_idx = sample_pos / AE_ENVELOPE_STEP;
+		if( env_idx >= amp_count ) env_idx = amp_count - 1;
+		pMouth->mouthopen = (byte)( amp_table[env_idx] / DC_MOUTH_DIVISOR );
+		return;
+	}
+
+	/* Fallback: no envelope data (e.g. sound not yet played back via AE).
+	   Use a 2.5 Hz oscillator scaled by channel volume. */
+	t   = (float)( Sys_DoubleTime() - ch->start_time );
+	amp = ( ch->leftvol + ch->rightvol ) * ( 0.5f / 255.0f );
+	osc = fabsf( sinf( t * ( 2.0f * M_PI * 2.5f ) ) );
+	pMouth->mouthopen = (byte)bound( 0, (int)( osc * amp * 200.0f ), 255 );
+}
+#endif /* XASH_DREAMCAST */
+

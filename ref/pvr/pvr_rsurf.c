@@ -2426,7 +2426,9 @@ void R_DrawBrushModel( cl_entity_t *e )
 	if( ENGINE_GET_PARM( PARM_QUAKE_COMPATIBLE ) && FBitSet( clmodel->flags, MODEL_TRANSPARENT ))
 		e->curstate.rendermode = kRenderTransAlpha;
 
-	e->visframe = tr.realframecount; // visible
+#if !XASH_DREAMCAST
+	e->visframe = tr.realframecount; // visible 
+#endif
 
 	if( rotated ) PVR_Mat4x4_VectorITransform( &RI.objectMatrix, RI.cullorigin, tr.modelorg );
 	else VectorSubtract( RI.cullorigin, e->origin, tr.modelorg );

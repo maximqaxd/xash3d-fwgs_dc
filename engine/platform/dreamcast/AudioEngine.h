@@ -85,7 +85,13 @@ struct stream_info {
     uint8_t type;
 	uint32_t last_tick;
 	char fname[128];
+	/* Amplitude envelope for lipsync: one entry per AE_ENVELOPE_STEP samples.
+	   Computed from raw PCM during load; survives after buffer is sent to AICA. */
+	uint8_t  amplitude[256];
+	uint16_t amplitude_count;
 } __attribute__((aligned(32))); 
+
+#define AE_ENVELOPE_STEP 512  /* samples per amplitude envelope entry */
 
 struct sfx_info {
     uint32_t aica_buffer; 
@@ -111,6 +117,9 @@ struct sfx_info {
 	bool saw_near_end;     // true after playhead reached near end (avoid false "finished" on mid-playback 0)
 	uint32_t last_tick;
 	char fname[128];
+	/* Amplitude envelope for lipsync */
+	uint8_t  amplitude[256];
+	uint16_t amplitude_count;
 };
 
 struct sfx_chnnel {
@@ -140,6 +149,11 @@ struct sfx_info * AudioEngine_getSfxInfo(int nStream);
 struct stream_info * AudioEngine_getStreamInfo(int nStream);
 int AudioEngine_GetSfxChannel(int nStream); // Returns AICA channel number, or -1 if not playing
 int AudioEngine_IsStreamPlaying(int nStream); // Returns 1 if stream is currently playing, 0 otherwise
+uint32_t AudioEngine_GetSamplePosition(int nStream); // Current playback position in samples (for lipsync)
+/* Update vol/pan on an already-playing sound. Never restarts.
+   Returns 1 if sound was still playing, 0 if it had already ended.
+   Safe to call every frame from spatialize. */
+int AudioEngine_UpdateSfxVolPan(int nStream, uint8_t vol, uint8_t pan);
 
 #ifdef __cplusplus
 }

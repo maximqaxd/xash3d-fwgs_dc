@@ -380,10 +380,8 @@ qboolean Sound_LoadWAV( const char *name, const byte *buffer, fs_offset_t filesi
     if(fmt == 32 || fmt == 20)  // Yamaha ADPCM format
     {
         uint32_t chunk_size = GetLittleLong();
-        
-        // Calculate total samples using correct formula
-        int total_samples = (int)((float)chunk_size / (((float)(sound.width * 8) / 8) * (float)sound.channels));
-        
+        int total_samples = (int)chunk_size * 2;
+
         sound.samples = total_samples;
         sound.size = chunk_size;
 

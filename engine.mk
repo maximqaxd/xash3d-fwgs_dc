@@ -37,6 +37,7 @@ XASH_CLIENT_OBJS = \
 	engine/client/s_dsp.o \
 	engine/client/s_load.o \
 	engine/client/s_main.o \
+	engine/client/s_mouth.o \
 	engine/client/s_stream.o \
 	engine/client/s_vox.o \
 	engine/client/s_utils.o \
@@ -116,6 +117,7 @@ XASH_PLATFORM_OBJS = \
 	engine/platform/dreamcast/softreboot_dc.o \
 	engine/platform/dreamcast/AicaInterface.o \
 	engine/platform/dreamcast/AudioEngine.o \
+	engine/platform/dreamcast/AicaDsp.o \
 	engine/platform/dreamcast/sys_dc.o \
 	engine/platform/dreamcast/vid_dc.o \
 	engine/platform/dreamcast/in_dc.o 

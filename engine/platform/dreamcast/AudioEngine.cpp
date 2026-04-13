@@ -23,6 +23,7 @@
 
 #include "AicaInterface.h"
 #include "AudioEngine.h"
+#include "AicaDsp.h"
 
 // Xash3D VFS support - forward declarations
 #ifdef __cplusplus
@@ -63,6 +64,86 @@ static void AE_TraceStream(const char *evt, int nStream, const char *reason) {
 		streams[nStream].playing ? 1 : 0,
 		reason ? reason : "-",
 		streams[nStream].fname );
+}
+
+/* --- Amplitude envelope helpers (for NPC lipsync) ---
+   Compute one avg-|sample| entry per AE_ENVELOPE_STEP samples.
+   sfx_buffer is in signed form after any 8-bit conversion. */
+static void AE_ComputeEnvelope8( uint8_t *env, uint16_t *out_count,
+                                   const int8_t *pcm, uint32_t num_samples )
+{
+	uint32_t cnt = (num_samples + AE_ENVELOPE_STEP - 1) / AE_ENVELOPE_STEP;
+	if( cnt > 256 ) cnt = 256;
+	for( uint32_t e = 0; e < cnt; e++ ) {
+		uint32_t s = e * AE_ENVELOPE_STEP;
+		uint32_t end = s + AE_ENVELOPE_STEP;
+		if( end > num_samples ) end = num_samples;
+		uint32_t sum = 0;
+		for( uint32_t i = s; i < end; i++ ) {
+			int v = pcm[i]; sum += v < 0 ? -v : v;
+		}
+		env[e] = (uint8_t)(sum / (end - s));
+	}
+	*out_count = (uint16_t)cnt;
+}
+
+static void AE_ComputeEnvelope16( uint8_t *env, uint16_t *out_count,
+                                    const int16_t *pcm, uint32_t num_samples )
+{
+	uint32_t cnt = (num_samples + AE_ENVELOPE_STEP - 1) / AE_ENVELOPE_STEP;
+	if( cnt > 256 ) cnt = 256;
+	for( uint32_t e = 0; e < cnt; e++ ) {
+		uint32_t s = e * AE_ENVELOPE_STEP;
+		uint32_t end = s + AE_ENVELOPE_STEP;
+		if( end > num_samples ) end = num_samples;
+		uint32_t sum = 0;
+		for( uint32_t i = s; i < end; i++ ) {
+			int v = (int)pcm[i] >> 8; sum += v < 0 ? -v : v;
+		}
+		env[e] = (uint8_t)(sum / (end - s));
+	}
+	*out_count = (uint16_t)cnt;
+}
+
+/* Yamaha ADPCM (AICA_SM_ADPCM_LS) envelope: decode nibbles for avg amplitude.
+   Low nibble stored first.  pcm range ~-2048..2047, scaled >> 4 to 0..128. */
+static void AE_ComputeEnvelopeADPCM( uint8_t *env, uint16_t *out_count,
+                                      const uint8_t *data, uint32_t num_samples )
+{
+	static const int step_tab[49] = {
+		16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,
+		73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,
+		307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552
+	};
+	static const int idx_adj[8] = { -1,-1,-1,-1, 2,4,6,8 };
+	uint32_t cnt = (num_samples + AE_ENVELOPE_STEP - 1) / AE_ENVELOPE_STEP;
+	if( cnt > 256 ) cnt = 256;
+	int pcm = 0, sidx = 0;
+	uint32_t smp = 0;
+	for( uint32_t e = 0; e < cnt; e++ ) {
+		uint32_t end_s = (e + 1) * AE_ENVELOPE_STEP;
+		if( end_s > num_samples ) end_s = num_samples;
+		uint32_t sum = 0, count = 0;
+		while( smp < end_s ) {
+			uint8_t byte = data[smp >> 1];
+			uint8_t nib  = (smp & 1) ? (byte >> 4) : (byte & 0xF);
+			smp++;
+			int step = step_tab[sidx], diff = step >> 3;
+			if( nib & 4 ) diff += step;
+			if( nib & 2 ) diff += step >> 1;
+			if( nib & 1 ) diff += step >> 2;
+			if( nib & 8 ) diff = -diff;
+			pcm += diff;
+			if( pcm > 2047 ) pcm = 2047;
+			if( pcm < -2048 ) pcm = -2048;
+			sidx += idx_adj[nib & 7];
+			if( sidx < 0 ) sidx = 0;
+			if( sidx > 48 ) sidx = 48;
+			int v = pcm; sum += v < 0 ? -v : v; count++;
+		}
+		env[e] = count ? (uint8_t)((sum / count) >> 4) : 0;
+	}
+	*out_count = (uint16_t)cnt;
 }
  
 static void StreamRead(int nStream, void* buf, uint32_t size) {
@@ -171,7 +252,8 @@ bool AudioEngine_Initialise(void)
 		sfx[i].last_tick = ticks;
 	}
 
-	
+	AICA_DSP_Init();  /* initialise EFSDSP ring-buffer reverb after snd_init() */
+
 	snd_thread = std::thread([]() {
 		for(;;) {
 			{
@@ -181,24 +263,33 @@ bool AudioEngine_Initialise(void)
 						 continue;
 					 
 					 int sfx_idx = sfx_channels[i].sfx_index;
-						uint16_t channel_pos = (g2_read_32(SPU_RAM_UNCACHED_BASE + AICA_CHANNEL(sfx_channels[i].mapped_ch) + offsetof(aica_channel_t, pos)) & 0xffff);
+					 uint16_t channel_pos = (g2_read_32(SPU_RAM_UNCACHED_BASE + AICA_CHANNEL(sfx_channels[i].mapped_ch) + offsetof(aica_channel_t, pos)) & 0xffff);
 					 
+					 /* Keep looping channels perpetually fresh so LRU never picks them
+					  * over non-looping candidates sourced more recently.           */
+					 if (sfx[sfx_idx].loop)
+						 sfx_channels[i].last_tick = ticks;
+
 					 // Check if non-looping sound has finished
 					 if (!sfx[sfx_idx].loop) {
-						 // Mark that we've started playing (to detect wrap-around)
-						 if (channel_pos > 0 && !sfx[sfx_idx].has_offset) {
+						 // Set has_offset once we see the playhead advance past 0
+						 if (channel_pos > 0 && !sfx[sfx_idx].has_offset)
 							 sfx[sfx_idx].has_offset = true;
-						 }
-						 // Only treat as finished when playhead has reached near end then wrapped to 0
-						 // (avoids false "finished" if hardware reports 0 mid-playback)
+
+						 /* Stop once the playhead is confirmed started (has_offset) and
+						    reaches the near-end threshold. We do NOT wait for pos==0:
+						    the AICA hardware terminates a non-looping channel by keying
+						    it off, after which the observation register may freeze at
+						    the last position rather than wrapping to 0.  Cutting the
+						    last ~256 samples (~11 ms at 22050 Hz) is imperceptible. */
 						 uint32_t near_end = (sfx[sfx_idx].total_samples > 256)
-							 ? (sfx[sfx_idx].total_samples - 256) : (sfx[sfx_idx].total_samples / 2);
-						 if (channel_pos >= near_end)
-							 sfx[sfx_idx].saw_near_end = true;
-						 if (sfx[sfx_idx].has_offset && sfx[sfx_idx].saw_near_end && channel_pos == 0) {
-							 // Sound finished - stop channel but keep it allocated for reuse
+							 ? (sfx[sfx_idx].total_samples - 256)
+							 : (sfx[sfx_idx].total_samples / 2);
+						 if (sfx[sfx_idx].has_offset && channel_pos >= near_end) {
 							 aica_stop_chn(sfx_channels[i].mapped_ch);
-							 sfx_channels[i].sfx_index = -1;  // Mark slot as free, but keep channel allocated
+							 sfx_channels[i].sfx_index = -1;
+							 sfx[sfx_idx].has_offset   = false;
+							 sfx[sfx_idx].saw_near_end = false;
 							 continue;
 						 }
 					 }
@@ -865,6 +956,26 @@ int AudioEngine_LoadFromVFS(void *vfs_file_ptr, const char *fname, uint32_t seek
 		// Stage to memory
 		AudioEngine_LoadFirstChunk(nStream);
 
+		// Compute amplitude envelope from first chunk (for lipsync)
+		// First chunk is in streams[nStream].buffer after LoadFirstChunk
+		if( streams[nStream].type == AICA_SM_16BIT ) {
+			uint32_t chunk_smp = STREAM_STAGING_READ_SIZE_MONO / 2;
+			if( chunk_smp > (uint32_t)streams[nStream].total_samples ) chunk_smp = (uint32_t)streams[nStream].total_samples;
+			AE_ComputeEnvelope16( streams[nStream].amplitude, &streams[nStream].amplitude_count,
+				(const int16_t*)streams[nStream].buffer, chunk_smp );
+		} else if( streams[nStream].type == AICA_SM_8BIT ) {
+			uint32_t chunk_smp = STREAM_STAGING_READ_SIZE_MONO;
+			if( chunk_smp > (uint32_t)streams[nStream].total_samples ) chunk_smp = (uint32_t)streams[nStream].total_samples;
+			AE_ComputeEnvelope8( streams[nStream].amplitude, &streams[nStream].amplitude_count,
+				(const int8_t*)streams[nStream].buffer, chunk_smp );
+		} else {
+			// ADPCM stream: compute from raw nibbles in buffer
+			uint32_t chunk_smp = STREAM_STAGING_READ_SIZE_MONO * 2; // 4-bit: 2 samples/byte
+			if( chunk_smp > (uint32_t)streams[nStream].total_samples ) chunk_smp = (uint32_t)streams[nStream].total_samples;
+			AE_ComputeEnvelopeADPCM( streams[nStream].amplitude, &streams[nStream].amplitude_count,
+				(const uint8_t*)streams[nStream].buffer, chunk_smp );
+		}
+
         verbosef("AudioEngine_LoadFromVFS: PreloadStreamedFile: %p - %s, %d, %d, %d\n", vfs_file, fname, streams[nStream].rate, streams[nStream].stereo, streams[nStream].type);
 
         return nStream;
@@ -945,6 +1056,19 @@ int AudioEngine_LoadFromVFS(void *vfs_file_ptr, const char *fname, uint32_t seek
 			}
 		}
 		
+		// Compute amplitude envelope for lipsync (while PCM is still in sfx_buffer)
+		if( sfx[nStream].type == AICA_SM_8BIT ) {
+			AE_ComputeEnvelope8( sfx[nStream].amplitude, &sfx[nStream].amplitude_count,
+				(const int8_t*)sfx_buffer, (uint32_t)sfx[nStream].total_samples );
+		} else if( sfx[nStream].type == AICA_SM_16BIT ) {
+			AE_ComputeEnvelope16( sfx[nStream].amplitude, &sfx[nStream].amplitude_count,
+				(const int16_t*)sfx_buffer, (uint32_t)sfx[nStream].total_samples );
+		} else {
+			sfx[nStream].amplitude_count = 0; // ADPCM VFS: no host PCM; use ADPCM decoder
+			AE_ComputeEnvelopeADPCM( sfx[nStream].amplitude, &sfx[nStream].amplitude_count,
+				(const uint8_t*)sfx_buffer, (uint32_t)sfx[nStream].total_samples );
+		}
+
 		spu_memload_sq(sfx[nStream].aica_buffer, sfx_buffer, sfx_size);
 
         verbosef("AudioEngine_LoadFromVFS: Preload SFX File: %p - %s, %d, %d, %d\n", vfs_file, fname, sfx[nStream].rate, sfx[nStream].stereo, sfx[nStream].type);
@@ -1181,6 +1305,19 @@ int AudioEngine_LoadFromWaveInfo(const uint8_t * sample_data, uint32_t sample_si
 		memcpy(sfx_buffer, sample_data, sample_size);
 	}
 	
+	// Compute amplitude envelope for lipsync (sfx_buffer holds formatted PCM)
+	if( sfx[nStream].type == AICA_SM_8BIT ) {
+		AE_ComputeEnvelope8( sfx[nStream].amplitude, &sfx[nStream].amplitude_count,
+			(const int8_t*)sfx_buffer, (uint32_t)sfx[nStream].total_samples );
+	} else if( sfx[nStream].type == AICA_SM_16BIT ) {
+		AE_ComputeEnvelope16( sfx[nStream].amplitude, &sfx[nStream].amplitude_count,
+			(const int16_t*)sfx_buffer, (uint32_t)sfx[nStream].total_samples );
+	} else {
+		// ADPCM: sfx_buffer has 4-bit encoded nibbles — decode for envelope
+		AE_ComputeEnvelopeADPCM( sfx[nStream].amplitude, &sfx[nStream].amplitude_count,
+			(const uint8_t*)sfx_buffer, (uint32_t)sfx[nStream].total_samples );
+	}
+
 	spu_memload_sq(sfx[nStream].aica_buffer, sfx_buffer, sample_size);
 
     return nStream + AUDIO_ENGINE_MAX_STREAMS; // Offset for SFX
@@ -1230,17 +1367,33 @@ int getOpenSfxChannel() {
 			break;
 		}
 	}
-	// Otherwise evict LRU
+	// Otherwise evict LRU — prefer non-looping channels so ambient loops survive.
 	if (index < 0) {
-		uint32_t last_tick = sfx_channels[0].last_tick;
-		index = 0;
+		// First pass: find oldest non-looping channel.
+		uint32_t oldest_tick = UINT32_MAX;
 		for (int i = 0; i < AUDIO_ENGINE_MAX_CHANNELS; i++) {
-			if (sfx_channels[i].last_tick < last_tick) {
+			int idx = sfx_channels[i].sfx_index;
+			if (idx >= 0 && sfx[idx].loop)
+				continue;  // skip looping sounds
+			if (sfx_channels[i].last_tick < oldest_tick) {
+				oldest_tick = sfx_channels[i].last_tick;
 				index = i;
-				last_tick = sfx_channels[i].last_tick;
 			}
 		}
-		debugf("getOpenSfxChannel: Freeing LRU channel %d (SFX %d)\n", index, sfx_channels[index].sfx_index);
+		// Second pass fallback: all active channels are looping — steal oldest.
+		if (index < 0) {
+			oldest_tick = UINT32_MAX;
+			for (int i = 0; i < AUDIO_ENGINE_MAX_CHANNELS; i++) {
+				if (sfx_channels[i].last_tick < oldest_tick) {
+					oldest_tick = sfx_channels[i].last_tick;
+					index = i;
+				}
+			}
+		}
+		debugf("getOpenSfxChannel: Freeing LRU channel %d (SFX %d)%s\n",
+		       index, sfx_channels[index].sfx_index,
+		       (index >= 0 && sfx_channels[index].sfx_index >= 0 &&
+		        sfx[sfx_channels[index].sfx_index].loop) ? " [looping!]" : "");
 	}
 
 	// Stop the sound on this channel and free it
@@ -1387,6 +1540,11 @@ void AudioEngine_Play(int nStream, uint8_t volume, uint8_t panl, uint8_t panr, b
 			);
 		}
 
+        /* Route both stream channels into DSP reverb bus (MIXS[0], IMXL=15 = full send) */
+        AICA_DSP_RouteChannel(streams[nStream].mapped_ch[0], 15, 0);
+        if (streams[nStream].stereo && streams[nStream].mapped_ch[1] >= 0)
+            AICA_DSP_RouteChannel(streams[nStream].mapped_ch[1], 15, 0);
+
         streams[nStream].playing = true;  
     }
     else {
@@ -1437,7 +1595,9 @@ void AudioEngine_Play(int nStream, uint8_t volume, uint8_t panl, uint8_t panr, b
             sfx[nStream].pan, // PAN
             sfx[nStream].loop ? 1 : 0,  // hardware loop when channel wants to loop (incl. loop from start)
             sfx[nStream].rate
-        );    
+        );
+        /* Route SFX channel into DSP reverb bus (MIXS[0], IMXL=15 = full send) */
+        AICA_DSP_RouteChannel(sfx_channels[sfx_channel].mapped_ch, 15, 0);
     }
 }
 
@@ -1474,5 +1634,71 @@ int AudioEngine_IsStreamPlaying(int nStream) {
 
 	std::lock_guard<std::mutex> lk(channel_mtx);
 	return streams[nStream].playing ? 1 : 0;
+}
+
+/* Update vol/pan on an already-playing SFX or stream — never restarts.
+   Eliminates the TOCTOU race in SND_Spatialize where GetSfxChannel>=0 but
+   AudioEngine_Play restarts because the thread cleared sfx_index between
+   the check and the play call. Returns 1 if sound was still playing, 0 if ended. */
+int AudioEngine_UpdateSfxVolPan(int nStream, uint8_t vol, uint8_t pan)
+{
+	if( nStream < 0 ) return 0;
+
+	if( nStream < AUDIO_ENGINE_MAX_STREAMS ) {
+		/* Stream: update vol/pan if still playing */
+		std::lock_guard<std::mutex> lk(channel_mtx);
+		if( !streams[nStream].playing ) return 0;
+		streams[nStream].vol  = vol;
+		streams[nStream].pan[0] = pan;
+		streams[nStream].pan[1] = pan;
+		if( streams[nStream].mapped_ch[0] >= 0 )
+			aica_volpan_chn( streams[nStream].mapped_ch[0], vol, pan );
+		if( streams[nStream].stereo && streams[nStream].mapped_ch[1] >= 0 )
+			aica_volpan_chn( streams[nStream].mapped_ch[1], vol, pan );
+		return 1;
+	} else {
+		/* SFX: look up channel atomically and update — never restart */
+		int sfx_idx = nStream - AUDIO_ENGINE_MAX_STREAMS;
+		if( sfx_idx >= AUDIO_ENGINE_MAX_SFX ) return 0;
+		std::lock_guard<std::mutex> lk(channel_mtx);
+		int sfx_ch = getSfxChannelIndex( sfx_idx );
+		if( sfx_ch < 0 ) return 0; /* already ended */
+		sfx[sfx_idx].vol = vol;
+		sfx[sfx_idx].pan = pan;
+		sfx[sfx_idx].last_tick = ticks;
+		sfx_channels[sfx_ch].last_tick = ticks;
+		aica_snd_sfx_volume( sfx_channels[sfx_ch].mapped_ch, vol );
+		aica_snd_sfx_pan(   sfx_channels[sfx_ch].mapped_ch, pan );
+		return 1;
+	}
+}
+
+/* Return current playback position in samples for lipsync.
+   For streams: played_samples + current AICA ring-buffer position.
+   For SFX:     current AICA channel position register (16-bit, wraps at length). */
+uint32_t AudioEngine_GetSamplePosition(int nStream)
+{
+	if( nStream < 0 ) return 0;
+
+	if( nStream < AUDIO_ENGINE_MAX_STREAMS ) {
+		std::lock_guard<std::mutex> lk(channel_mtx);
+		if( streams[nStream].mapped_ch[0] < 0 || !streams[nStream].playing )
+			return streams[nStream].played_samples; // best estimate when channel freed
+		uint32_t ch_pos = g2_read_32(
+			SPU_RAM_UNCACHED_BASE +
+			AICA_CHANNEL(streams[nStream].mapped_ch[0]) +
+			offsetof(aica_channel_t, pos)) & 0xffff;
+		return streams[nStream].played_samples + ch_pos;
+	} else {
+		int sfx_idx = nStream - AUDIO_ENGINE_MAX_STREAMS;
+		if( sfx_idx >= AUDIO_ENGINE_MAX_SFX ) return 0;
+		std::lock_guard<std::mutex> lk(channel_mtx);
+		int sfx_ch_idx = getSfxChannelIndex(sfx_idx);
+		if( sfx_ch_idx < 0 || sfx_channels[sfx_ch_idx].mapped_ch < 0 ) return 0;
+		return (uint32_t)(g2_read_32(
+			SPU_RAM_UNCACHED_BASE +
+			AICA_CHANNEL(sfx_channels[sfx_ch_idx].mapped_ch) +
+			offsetof(aica_channel_t, pos)) & 0xffff);
+	}
 }
 

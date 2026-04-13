@@ -131,6 +131,11 @@ static studio_draw_state_t	g_studio;		// global studio state
 // Active DR state for studio submission (set by R_StudioDrawPoints).
 static pvr_dr_state_t *g_pvr_studio_dr = NULL;
 
+/* Pass 2→3: pre-packed per-normal-slot ARGB, indexed by ptricmds[1].
+   Valid only when g_studio.numlocallights == 0 (no dynamic entity lights).
+   Written in the R_StudioDrawPoints lighting loop; read in PVR_StudioDrawMesh. */
+static uint32_t s_argb[MAXSTUDIOVERTS];
+
 // global variables
 static qboolean		m_fDoRemap;
 mstudiomodel_t		*m_pSubModel;
@@ -812,9 +817,7 @@ static void R_StudioCalcRotations( cl_entity_t *e, float pos[][3], vec4_t *q, ms
 
 	// add in programtic controllers
 	pbone = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
-#if !XASH_DREAMCAST
 	R_StudioCalcBoneAdj( dadt, adj, e->curstate.controller, e->latched.prevcontroller, e->mouth.mouthopen );
-#endif // we are not latching mouths since we are speechless for now
 
 #if REF_PVR_PROFILE
 	PVR_Prof_Start();

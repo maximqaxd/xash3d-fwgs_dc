@@ -24,14 +24,13 @@ typedef struct efrag_s
 	struct cl_entity_s	*entity;
 	struct efrag_s	*entnext;
 } efrag_t;
-
+#endif
 typedef struct
 {
 	byte		mouthopen;	// 0 = mouth closed, 255 = mouth agape
 	byte		sndcount;		// counter for running average
 	int		sndavg;		// running average
 } mouth_t;
-#endif
 typedef struct
 {
 	float		prevanimtime;
@@ -80,9 +79,7 @@ struct cl_entity_s
 	int		current_position;	// Last received history update index
 	position_history_t	ph[HISTORY_MAX];	// History of position and angle updates for this player
 
-#if !XASH_DREAMCAST
 	mouth_t		mouth;		// For synchronizing mouth movements.
-#endif // restore when we restore NPC's speaking XASH_DREAMCAST
 
 	latchedvars_t	latched;		// Variables used by studio model rendering routines
 
@@ -107,7 +104,9 @@ struct cl_entity_s
 	struct mnode_s	*topnode;	// for bmodels, first world node that splits bmodel, or NULL if not split
 	float		syncbase;	// for client-side animations -- used by obsolete alias animation system, remove?
 #endif
-	int		visframe;	// last frame this entity was found in an active leaf
+#if !XASH_DREAMCAST
+	int		visframe;	// last frame this entity was found in an active leaf (cl_efrag / R_StoreEfrags)
+#endif
 
 #if !XASH_DREAMCAST
 	colorVec		cvFloorColor;
