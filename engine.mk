@@ -140,7 +140,8 @@ INCLUDE = -I. \
 -I3rdparty/MultiEmulator/include \
 -I$(KOS_PORTS)/include/opus \
 -I3rdparty/dreamcast/FatFs/include \
--I$(KOS_PORTS)/include/bzlib 
+-I$(KOS_PORTS)/include/bzlib \
+-I$(KOS_PORTS)/include/zlib 
 
 GIT_VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")

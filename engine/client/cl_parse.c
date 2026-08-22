@@ -953,7 +953,11 @@ void CL_ParseServerData( sizebuf_t *msg, connprotocol_t proto )
 		}
 		else
 		{
+#if XASH_DREAMCAST
 			clgame.maxEntities = bound( MIN_EDICTS, clgame.maxEntities, MAX_EDICTS );
+#else
+			clgame.maxEntities = bound( MIN_EDICTS, clgame.maxEntities, DC_MAX_EDICTS );
+#endif
 			clgame.maxModels = MSG_ReadWord( msg );
 			mask = ENGINE_FEATURES_MASK;
 		}

@@ -235,10 +235,10 @@ typedef struct mextrasurf_s
 	vec3_t		mins, maxs;
 	vec3_t		origin;		// surface origin
 	struct msurface_s	*surf;		// upcast to surface
-
+#if !XASH_DREAMCAST
 	// extended light info
 	int		dlight_s, dlight_t;	// gl lightmap coordinates for dynamic lightmaps
-
+#endif
 	short		lightmapmins[2];	// lightmatrix
 	short		lightextents[2];
 	float		lmvecs[2][4];
@@ -246,14 +246,12 @@ typedef struct mextrasurf_s
 #if !XASH_DREAMCAST
 	color24		*deluxemap;	// note: this is the actual deluxemap data for this surface
 	byte		*shadowmap;	// note: occlusion map for this surface
-#endif
 // begin userdata
 	struct msurface_s	*lightmapchain;	// lightmapped polys
-#if !XASH_DREAMCAST
 	struct mextrasurf_s	*detailchain;	// for detail textures drawing
+	struct mextrasurf_s	*lumachain;	// draw fullbrights
 #endif
 	mfacebevel_t	*bevel;		// for exact face traceline
-	struct mextrasurf_s	*lumachain;	// draw fullbrights
 #if XASH_DREAMCAST
 	int		lt2_face_index;	// index into worldmodel->lt2_lightsurfs for LT2 lighting
 #endif
@@ -282,36 +280,34 @@ typedef struct mdisplaylist_s
 
 struct msurface_s
 {
-	int		visframe;		// should be drawn when node is crossed
-
-	mplane_t		*plane;		// pointer to shared plane
-	int		flags;		// see SURF_ #defines
-
-	int		firstedge;	// look up in model->surfedges[], negative numbers
-	int		numedges;		// are backwards edges
+	byte		flags;		// see SURF_ #defines
+	byte		numedges;		// are backwards edges
+	byte		light_s, light_t;	// gl lightmap coordinates
+	byte		dlightframe;	// last frame the surface was checked by an animated light
+	byte		lightmaptexturenum;
+	byte		styles[MAXLIGHTMAPS];
 
 	short		texturemins[2];
 	short		extents[2];
 
-	int		light_s, light_t;	// gl lightmap coordinates
-
-	glpoly2_t		*polys;		// multiple if warped
-	struct msurface_s	*texturechain;
-
-	mtexinfo_t	*texinfo;
-
+#if !XASH_DREAMCAST
+	int		cached_light[MAXLIGHTMAPS];	// values currently used in lightmap
+#endif
+	int		firstedge;	// look up in model->surfedges[], negative numbers
 	// lighting info
-	int		dlightframe;	// last frame the surface was checked by an animated light
 	int		dlightbits;	// dynamically generated. Indicates if the surface illumination
 					// is modified by an animated light.
+	int		visframe;		// should be drawn when node is crossed
 
-	int		lightmaptexturenum;
-	byte		styles[MAXLIGHTMAPS];
-	int		cached_light[MAXLIGHTMAPS];	// values currently used in lightmap
 	mextrasurf_t	*info;		// pointer to surface extradata (was cached_dlight)
 
 	color24		*samples;		// note: this is the actual lightmap data for this surface
 	decal_t		*pdecals;
+	mplane_t	*plane;		// pointer to shared plane
+	glpoly2_t		*polys;		// multiple if warped
+	struct msurface_s	*texturechain;
+
+	mtexinfo_t	*texinfo;
 
 #ifdef SUPPORT_HL25_EXTENDED_STRUCTS
 	mdisplaylist_t displaylist;
@@ -342,7 +338,7 @@ typedef struct cache_user_s
 
 typedef struct model_s
 {
-	char		name[64];		// model name
+	char		name[MAX_QPATH];		// model name
 	qboolean		needload;		// bmodels and sprites don't cache normally
 
 	// shared modelinfo

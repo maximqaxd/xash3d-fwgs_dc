@@ -3650,11 +3650,6 @@ void Host_ClientFrame( void )
 	// adjust client time
 	CL_AdjustClock ();
 
-#if XASH_DREAMCAST
-	// Evict idle studio CPU blobs under budget
-	extern void DC_Studio_EvictLRU( void );
-	DC_Studio_EvictLRU();
-#endif
 }
 
 //============================================================================

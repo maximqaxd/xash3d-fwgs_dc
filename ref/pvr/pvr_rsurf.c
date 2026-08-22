@@ -659,7 +659,7 @@ static void LM_InitBlock( void )
 	memset( gl_lms.allocated, 0, sizeof( gl_lms.allocated ));
 }
 
-static int LM_AllocBlock( int w, int h, int *x, int *y )
+static int LM_AllocBlock( int w, int h, byte *x, byte *y )
 {
 	int	i, j;
 	int	best, best2;
@@ -1689,120 +1689,7 @@ static void R_BlendLightmaps( void )
 		return;
 
 	GL_SetupFogColorForSurfacesEx( r_detailtextures.value ? 3 : 2, 1.0f, true );
-#if 0
-	if( !r_lightmap->value )
-		pglEnable( GL_BLEND );
-	else pglDisable( GL_BLEND );
 
-	// lightmapped solid surfaces
-	pglDepthMask( GL_FALSE );
-	pglDepthFunc( GL_EQUAL );
-	pglDisable( GL_ALPHA_TEST );
-	if( gl_overbright.value )
-	{
-		pglBlendFunc( GL_DST_COLOR, GL_SRC_COLOR );
-		if(!( R_HasEnabledVBO() && !r_vbo_overbrightmode.value ))
-			pglColor4f( 128.0f / 192.0f, 128.0f / 192.0f, 128.0f / 192.0f, 1.0f );
-	}
-	else
-	{
-		pglBlendFunc( GL_ZERO, GL_SRC_COLOR );
-	}
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-
-	// render static lightmaps first
-	for( i = 0; i < MAX_LIGHTMAPS; i++ )
-	{
-		if( gl_lms.lightmap_surfaces[i] )
-		{
-			GL_Bind( XASH_TEXTURE0, tr.lightmapTextures[i] );
-
-			for( surf = gl_lms.lightmap_surfaces[i]; surf != NULL; surf = surf->info->lightmapchain )
-			{
-				if( surf->polys ) DrawGLPolyChain( surf->polys, 0.0f, 0.0f );
-			}
-		}
-	}
-
-	// render dynamic lightmaps
-	if( r_dynamic->value )
-	{
-		LM_InitBlock();
-		GL_Bind( XASH_TEXTURE0, tr.dlightTexture );
-		newsurf = gl_lms.dynamic_surfaces;
-
-		for( surf = gl_lms.dynamic_surfaces; surf != NULL; surf = surf->info->lightmapchain )
-		{
-			int		smax, tmax;
-			int		sample_size;
-			mextrasurf_t	*info = surf->info;
-			byte		*base;
-
-			sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
-			smax = ( info->lightextents[0] / sample_size ) + 1;
-			tmax = ( info->lightextents[1] / sample_size ) + 1;
-
-			if( LM_AllocBlock( smax, tmax, &surf->info->dlight_s, &surf->info->dlight_t ))
-			{
-				base = gl_lms.lightmap_buffer;
-				base += ( surf->info->dlight_t * BLOCK_SIZE + surf->info->dlight_s ) * LIGHTMAP_BPP;
-
-				R_BuildLightMap( surf, base, BLOCK_SIZE * LIGHTMAP_BPP, true );
-			}
-			else
-			{
-				msurface_t	*drawsurf;
-
-				// upload what we have so far
-				LM_UploadBlock( true );
-
-				// draw all surfaces that use this lightmap
-				for( drawsurf = newsurf; drawsurf != surf; drawsurf = drawsurf->info->lightmapchain )
-				{
-					if( drawsurf->polys )
-					{
-						DrawGLPolyChain( drawsurf->polys,
-						( drawsurf->light_s - drawsurf->info->dlight_s ) * ( 1.0f / (float)BLOCK_SIZE ),
-						( drawsurf->light_t - drawsurf->info->dlight_t ) * ( 1.0f / (float)BLOCK_SIZE ));
-					}
-				}
-
-				newsurf = drawsurf;
-
-				// clear the block
-				LM_InitBlock();
-
-				// try uploading the block now
-				if( !LM_AllocBlock( smax, tmax, &surf->info->dlight_s, &surf->info->dlight_t ))
-					gEngfuncs.Host_Error( "AllocBlock: full\n" );
-
-				base = gl_lms.lightmap_buffer;
-				base += ( surf->info->dlight_t * BLOCK_SIZE + surf->info->dlight_s ) * LIGHTMAP_BPP;
-
-				R_BuildLightMap( surf, base, BLOCK_SIZE * LIGHTMAP_BPP, true );
-			}
-		}
-
-		// draw remainder of dynamic lightmaps that haven't been uploaded yet
-		if( newsurf ) LM_UploadBlock( true );
-
-		for( surf = newsurf; surf != NULL; surf = surf->info->lightmapchain )
-		{
-			if( surf->polys )
-			{
-				DrawGLPolyChain( surf->polys,
-				( surf->light_s - surf->info->dlight_s ) * ( 1.0f / (float)BLOCK_SIZE ),
-				( surf->light_t - surf->info->dlight_t ) * ( 1.0f / (float)BLOCK_SIZE ));
-			}
-		}
-	}
-
-	pglDisable( GL_BLEND );
-	pglDepthMask( GL_TRUE );
-	pglDepthFunc( GL_LEQUAL );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
-#endif // TODO
 	// restore fog here
 	GL_ResetFogColor();
 }
@@ -1837,12 +1724,7 @@ static void R_RenderDetails( int passes )
 
 static void R_RenderFullbrightForSurface( msurface_t *fa, texture_t *t )
 {
-	if( !t->fb_texturenum )
-		return;
 
-	fa->info->lumachain = fullbright_surfaces[t->fb_texturenum];
-	fullbright_surfaces[t->fb_texturenum] = fa->info;
-	R_AddToSeparatePass( &draw_fullbrights, t->fb_texturenum );
 }
 
 static void R_RenderDetailsForSurface( msurface_t *fa, texture_t *t )
@@ -1937,22 +1819,6 @@ static qboolean R_CheckLightMap( msurface_t *fa )
 	return false; // updated
 }
 
-static void R_RenderLightmapForSurface( msurface_t *fa )
-{
-	if( !fa->polys || FBitSet( fa->flags, SURF_DRAWTILED ))
-		return;
-
-	if( R_CheckLightMap( fa ))
-	{
-		fa->info->lightmapchain = gl_lms.dynamic_surfaces;
-		gl_lms.dynamic_surfaces = fa;
-	}
-	else
-	{
-		fa->info->lightmapchain = gl_lms.lightmap_surfaces[fa->lightmaptexturenum];
-		gl_lms.lightmap_surfaces[fa->lightmaptexturenum] = fa;
-	}
-}
 
 /*
 ================

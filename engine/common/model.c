@@ -459,6 +459,51 @@ model_t *Mod_LoadModel( model_t *mod, qboolean crash )
 	Q_strncpy( tempname, mod->name, sizeof( tempname ));
 	COM_FixSlashes( tempname );
 
+#if XASH_DREAMCAST
+	/* On DC: probe the 4-byte magic cheaply, and for BSP files use the
+	 * piecewise loader that reads one lump at a time, avoiding allocating
+	 * the entire BSP file (3-6 MB) into RAM alongside the processed data. */
+	{
+		uint magic = 0;
+		dc_file_t *probe = FS_Open( tempname, "rb", false );
+		if( probe )
+		{
+			FS_Read( probe, &magic, sizeof( magic ));
+			FS_Close( probe );
+		}
+
+		if( magic == (uint)Q1BSP_VERSION || magic == (uint)HLBSP_VERSION || magic == (uint)QBSP2_VERSION )
+		{
+			Con_Printf( "loading %s (piecewise)\n", mod->name );
+			mod->needload = NL_PRESENT;
+			mod->type = mod_bad;
+
+			Mod_LoadBrushModelPiecewise( mod, tempname, &loaded );
+
+			if( loaded )
+			{
+				if( world.loading )
+					SetBits( mod->flags, MODEL_WORLD );
+#if !XASH_DEDICATED
+				if( !Host_IsDedicated() )
+					loaded = ref.dllFuncs.Mod_ProcessRenderData( mod, true, NULL );
+#endif
+			}
+
+			if( !loaded )
+			{
+				Mod_FreeModel( mod );
+				if( crash ) Host_Error( "Could not load model %s\n", tempname );
+				else Con_Printf( S_ERROR "Could not load model %s\n", tempname );
+				return NULL;
+			}
+
+			mod->needload = NL_PRESENT;
+			return mod;
+		}
+	}
+#endif /* XASH_DREAMCAST */
+
 	buf = FS_LoadFile( tempname, &length, false );
 
 	if( !buf )

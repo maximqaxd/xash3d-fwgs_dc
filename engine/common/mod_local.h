@@ -169,6 +169,9 @@ void Mod_LoadAliasModel( model_t *mod, const void *buffer, qboolean *loaded );
 // mod_bmodel.c
 //
 void Mod_LoadBrushModel( model_t *mod, const void *buffer, qboolean *loaded );
+#if XASH_DREAMCAST
+void Mod_LoadBrushModelPiecewise( model_t *mod, const char *filename, qboolean *loaded );
+#endif
 qboolean Mod_TestBmodelLumps( dc_file_t *f, const char *name, const byte *mod_base, qboolean silent, dlump_t *entities );
 int Mod_FatPVS( const vec3_t org, float radius, byte *visbuffer, int visbytes, qboolean merge, qboolean fullvis, qboolean false_pvs );
 qboolean Mod_BoxVisible( const vec3_t mins, const vec3_t maxs, const byte *visbits );

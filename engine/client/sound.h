@@ -20,8 +20,6 @@ extern poolhandle_t sndpool;
 
 #include "xash3d_mathlib.h"
 #if XASH_DREAMCAST
-#include <dc/sound/aica_comm.h>
-#undef int8
 #include <dc/sound/sound.h>
 #include <dc/sound/stream.h>
 static snd_stream_hnd_t music_stream = SND_STREAM_INVALID;
@@ -134,7 +132,6 @@ typedef struct channel_s
 	sfx_t   *sfx;         // sfx number
 
 #ifdef XASH_DREAMCAST
-	aica_channel_t aica;      // AICA channel data
 	qboolean    active;       // Is AICA channel in use?
 	qboolean    temp_aica; 
 	int         aica_channel;  

@@ -136,7 +136,7 @@ CVAR_DEFINE_AUTO( sv_validate_changelevel, "0", 0, "test change level for level-
 CVAR_DEFINE( sv_hostmap, "hostmap", "", 0, "keep name of last entered map" );
 
 #if XASH_DREAMCAST
-CVAR_DEFINE_AUTO( dc_softreboot, "1", FCVAR_ARCHIVE, "soft reboot on smooth changelevel to defragment heap" );
+CVAR_DEFINE_AUTO( dc_softreboot, "0", FCVAR_ARCHIVE, "soft reboot on smooth changelevel to defragment heap" );
 CVAR_DEFINE_AUTO( dc_softreboot_threshold_kb, "900", FCVAR_ARCHIVE, "run soft reboot when largest allocatable heap block is <= this threshold in KB (0 disables threshold trigger)" );
 CVAR_DEFINE_AUTO( dc_softreboot_minexec_kb, "600", FCVAR_ARCHIVE, "minimum largest allocatable heap block in KB required to attempt soft reboot (fallback to normal changelevel below this)" );
 #endif

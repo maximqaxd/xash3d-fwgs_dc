@@ -94,10 +94,10 @@ GNU General Public License for more details.
 	#undef NET_MAX_FRAGMENT
 	#undef CMD_BACKUP
 	#define CMD_BACKUP 16
-	#define MULTIPLAYER_BACKUP		16	
-	#define SINGLEPLAYER_BACKUP		8
-	#define NUM_PACKET_ENTITIES		32
-	#define MAX_CUSTOM_BASELINES    4  
+	#define MULTIPLAYER_BACKUP		4	
+	#define SINGLEPLAYER_BACKUP		4
+	#define NUM_PACKET_ENTITIES		64
+	#define MAX_CUSTOM_BASELINES    8  
 	#define NET_MAX_FRAGMENT		8192
 #else
 #if XASH_LOW_MEMORY == 2
