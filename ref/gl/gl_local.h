@@ -111,7 +111,7 @@ extern poolhandle_t r_temppool;
 	#undef MAX_LIGHTMAPS
 	#define MAX_LIGHTMAPS 64
 	#define BLOCK_SIZE_MAX 128
-	#define MAX_TEXTURES 1024
+	#define MAX_TEXTURES 768
 	#define MAX_DECAL_SURFS 32
 	#define MAX_DETAILTEXTURES 16	
 	
@@ -182,11 +182,11 @@ typedef struct gltexture_s
 
 	// debug info
 	size_t		size;		// upload size for debug targets
-
+#if !XASH_DREAMCAST
 	// detail textures stuff
 	float		xscale;
 	float		yscale;
-
+#endif
 	uint		hashValue;
 	struct gltexture_s	*nextHash;
 } gl_texture_t;
@@ -446,7 +446,7 @@ qboolean GL_UpdateTexture( int texnum, int xoff, int yoff, int width, int height
 void CL_RunLightStyles( lightstyle_t *ls );
 void R_PushDlights( void );
 void R_GetLightSpot( vec3_t lightspot );
-void R_MarkLights( dlight_t *light, int bit, mnode_t *node );
+void R_MarkLights( const dlight_t *light, int bit, const mnode_t *node );
 colorVec R_LightVec( const vec3_t start, const vec3_t end, vec3_t lightspot, vec3_t lightvec );
 colorVec R_LightPoint( const vec3_t p0 );
 
@@ -494,7 +494,7 @@ void R_DrawWorld( void );
 void R_DrawWaterSurfaces( void );
 void R_DrawBrushModel( cl_entity_t *e );
 void GL_SubdivideSurface( model_t *mod, msurface_t *fa );
-void GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa );
+static int GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa );
 void GL_SetupFogColorForSurfaces( void );
 void R_DrawAlphaTextureChains( void );
 void GL_RebuildLightmaps( void );
@@ -876,6 +876,8 @@ extern convar_t r_shadows;
 extern convar_t r_ripple;
 extern convar_t r_ripple_updatetime;
 extern convar_t r_ripple_spawntime;
+extern convar_t r_large_lightmaps;
+extern convar_t r_dlight_virtual_radius;
 
 //
 // engine shared convars

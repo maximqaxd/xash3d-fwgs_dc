@@ -234,25 +234,33 @@ static inline size_t Q_strncat( char *dst, const char *src, size_t size )
 #endif
 }
 
-#if XASH_DREAMCAST
+#if HAVE_STRICMP || HAVE_STRCASECMP
 static inline int Q_stricmp( const char *s1, const char *s2 )
 {
 	if( likely( s1 && s2 ))
 	{
-
+#if HAVE_STRICMP
+		return stricmp( s1, s2 );
+#elif HAVE_STRCASECMP
 		return strcasecmp( s1, s2 );
+#endif
 	}
 	return ( s1 ? 1 : 0 ) - ( s2 ? 1 : 0 );
 }
 #else
 int Q_stricmp( const char *s1, const char *s2 );
 #endif
-#if XASH_DREAMCAST
+
+#if HAVE_STRICMP || HAVE_STRCASECMP
 static inline int Q_strnicmp( const char *s1, const char *s2, size_t n )
 {
 	if( likely( s1 && s2 ))
 	{
+#if HAVE_STRICMP
+		return strnicmp( s1, s2, n );
+#elif HAVE_STRCASECMP
 		return strncasecmp( s1, s2, n );
+#endif
 	}
 	return ( s1 ? 1 : 0 ) - ( s2 ? 1 : 0 );
 }

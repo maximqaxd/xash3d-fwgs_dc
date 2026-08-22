@@ -16,6 +16,7 @@
 #ifndef CL_ENTITY_H
 #define CL_ENTITY_H
 
+#if !XASH_DREAMCAST
 typedef struct efrag_s
 {
 	struct mleaf_s	*leaf;
@@ -23,14 +24,13 @@ typedef struct efrag_s
 	struct cl_entity_s	*entity;
 	struct efrag_s	*entnext;
 } efrag_t;
-
+#endif
 typedef struct
 {
 	byte		mouthopen;	// 0 = mouth closed, 255 = mouth agape
 	byte		sndcount;		// counter for running average
 	int		sndavg;		// running average
 } mouth_t;
-
 typedef struct
 {
 	float		prevanimtime;
@@ -57,7 +57,11 @@ typedef struct
 
 typedef struct cl_entity_s cl_entity_t;
 
+#if XASH_DREAMCAST
+#define HISTORY_MAX		4		// Must be power of 2
+#else
 #define HISTORY_MAX		64		// Must be power of 2
+#endif
 #define HISTORY_MASK	( HISTORY_MAX - 1 )
 
 #include "entity_state.h"
@@ -91,15 +95,22 @@ struct cl_entity_s
 	vec3_t		attachment[4];
 
 	// Other entity local information
+#if !XASH_DREAMCAST
 	int		trivial_accept;
-
+#endif
 	struct model_s	*model;	// cl.model_precache[ curstate.modelindes ];  all visible entities have a model
+#if !XASH_DREAMCAST
 	struct efrag_s	*efrag;	// linked list of efrags
 	struct mnode_s	*topnode;	// for bmodels, first world node that splits bmodel, or NULL if not split
-
 	float		syncbase;	// for client-side animations -- used by obsolete alias animation system, remove?
-	int		visframe;	// last frame this entity was found in an active leaf
+#endif
+#if !XASH_DREAMCAST
+	int		visframe;	// last frame this entity was found in an active leaf (cl_efrag / R_StoreEfrags)
+#endif
+
+#if !XASH_DREAMCAST
 	colorVec		cvFloorColor;
+#endif
 };
 
 #endif//CL_ENTITY_H

@@ -43,7 +43,7 @@ typedef struct android_assets_s android_assets_t;
 
 struct file_s
 {
-	file_t          handle;      // file descriptor
+	int          handle;      // file descriptor
 	int          ungetc;      // single stored character from ungetc, cleared to EOF when read
 	time_t       filetime;    // pak, wad or real filetime
 	searchpath_t *searchpath;

@@ -482,7 +482,7 @@ void R_RotateForEntity( cl_entity_t *e )
 
 	shz_xmtrx_store_4x4( &RI.objectMatrix );
 
-	shz_mat4x4_init_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
+	shz_mat4x4_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
 	tr.modelviewIdentity = false;
 
 	// Update PVR transform for this entity: viewproj * object
@@ -515,7 +515,7 @@ void R_TranslateForEntity( cl_entity_t *e )
 		shz_xmtrx_apply_scale( scale, scale, scale );
 	shz_xmtrx_store_4x4( &RI.objectMatrix );
 
-	shz_mat4x4_init_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
+	shz_mat4x4_mult( &RI.modelviewMatrix, &RI.worldviewMatrix, &RI.objectMatrix );
 	tr.modelviewIdentity = false;
 
 	// Update PVR transform for this entity: viewproj * object
@@ -573,7 +573,7 @@ void R_SetupGL( qboolean set_gl_state )
 	// Build RI matrices (now sh4zam column-major) using sh4zam only.
 	R_SetupModelviewMatrix( &RI.worldviewMatrix );
 	R_SetupProjectionMatrix( &RI.projectionMatrix );
-	shz_mat4x4_init_mult( &RI.worldviewProjectionMatrix, &RI.projectionMatrix, &RI.worldviewMatrix );
+	shz_mat4x4_mult( &RI.worldviewProjectionMatrix, &RI.projectionMatrix, &RI.worldviewMatrix );
 
 	shz_xmtrx_init_identity();
 	shz_xmtrx_apply_screen( screen_width, screen_height );
@@ -1022,18 +1022,15 @@ void R_RenderScene( void )
 
 void R_GammaChanged( qboolean do_reset_gamma )
 {
-	if( do_reset_gamma )
-	{
-		// paranoia cubemap rendering
-		if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
-			gEngfuncs.drawFuncs->GL_BuildLightmaps( );
-	}
-	else
-	{
-		glConfig.softwareGammaUpdate = true;
-		GL_RebuildLightmaps();
-		glConfig.softwareGammaUpdate = false;
-	}
+	// PVR uses vertex lighting with gouraud shading, not lightmap textures
+	// Gamma tables are updated by engine, we just need to mark gamma changed
+	// so vertex colors will use updated gamma tables on next render
+	glConfig.softwareGammaUpdate = true;
+	
+	// No need to rebuild lightmaps - we sample vertex lights directly
+	// Gamma correction is applied per-vertex in SampleVertexLight()
+	
+	glConfig.softwareGammaUpdate = false;
 }
 
 static void R_CheckCvars( void )
@@ -1063,7 +1060,6 @@ void R_BeginFrame( qboolean clearScene )
 	R_CheckCvars();
 	pvr_wait_ready();
     pvr_scene_begin();
-	R_Set2DMode( true );
 
 	// update texture parameters
 	if( FBitSet( gl_texture_nearest.flags|gl_lightmap_nearest.flags|gl_texture_anisotropy.flags|gl_texture_lodbias.flags, FCVAR_CHANGED ))

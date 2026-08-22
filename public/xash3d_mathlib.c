@@ -146,7 +146,7 @@ rsqrt
 */
 float rsqrt( float number )
 {
-#if XASH_DREAMCAST
+#if XASH_DREAMCAST 
 	return frsqrt(number);
 #else
 	int	i;

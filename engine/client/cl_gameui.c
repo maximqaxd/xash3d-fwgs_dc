@@ -319,7 +319,11 @@ static void GAME_EXPORT UI_DrawLogo( const char *filename, float x, float y, flo
 
 		// run cinematic if not
 		Q_snprintf( path, sizeof( path ), "media/%s", filename );
+#if XASH_DREAMCAST
+		COM_DefaultExtension( path, ".mpg", sizeof( path ));
+#else
 		COM_DefaultExtension( path, ".avi", sizeof( path ));
+#endif
 		fullpath = FS_GetDiskPath( path, false );
 
 		if( FS_FileExists( path, false ) && !fullpath )
@@ -409,6 +413,7 @@ void Host_Credits( void )
 
 static void UI_ConvertGameInfo( gameinfo2_t *out, const gameinfo_t *in )
 {
+#if !XASH_DREAMCAST
 	out->gi_version = GAMEINFO_VERSION;
 
 	Q_strncpy( out->gamefolder, in->gamefolder, sizeof( out->gamefolder ));
@@ -437,6 +442,7 @@ static void UI_ConvertGameInfo( gameinfo2_t *out, const gameinfo_t *in )
 		SetBits( out->flags, GFL_HD_BACKGROUND );
 	if( in->animated_title )
 		SetBits( out->flags, GFL_ANIMATED_TITLE );
+#endif
 }
 
 static void UI_ToOldGameInfo( GAMEINFO *out, const gameinfo2_t *in )
@@ -457,11 +463,13 @@ static void UI_ToOldGameInfo( GAMEINFO *out, const gameinfo2_t *in )
 
 static void UI_GetModsInfo( void )
 {
+#if !XASH_DREAMCAST
 	int i;
 
 	gameui.modsInfo = Mem_Calloc( gameui.mempool, sizeof( *gameui.modsInfo ) * FI->numgames );
 	for( i = 0; i < FI->numgames; i++ )
 		UI_ConvertGameInfo( &gameui.modsInfo[i], FI->games[i] );
+#endif
 }
 
 /*
@@ -473,19 +481,34 @@ draw hudsprite routine
 */
 static void PIC_DrawGeneric( float x, float y, float width, float height, const wrect_t *prc )
 {
-	float	s1, s2, t1, t2;
+	float	s1, s2, t1, t2, half = 0.0f;
 	int	w, h;
+	int	texFlags;
 
 	// assume we get sizes from image
 	R_GetTextureParms( &w, &h, gameui.ds.gl_texturenum );
 
+	// Check if texture filtering is enabled and this is a font texture (TF_FONT flag)
+	// Adjust texture coordinates to avoid edge bleeding when filtering is enabled
+	if( prc && w > 0 && h > 0 )
+	{
+		texFlags = REF_GET_PARM( PARM_TEX_FLAGS, gameui.ds.gl_texturenum );
+		// Check if this is a font texture (has TF_FONT flags) and filtering is enabled
+		if( FBitSet( texFlags, TF_FONT ) && REF_GET_PARM( PARM_TEX_FILTERING, gameui.ds.gl_texturenum ))
+		{
+			// Add half-pixel offset to avoid edge bleeding with linear filtering
+			// This matches the engine's CL_DrawCharacter behavior
+			half = 0.5f;
+		}
+	}
+
 	if( prc )
 	{
-		// calc user-defined rectangle
-		s1 = prc->left / (float)w;
-		t1 = prc->top / (float)h;
-		s2 = prc->right / (float)w;
-		t2 = prc->bottom / (float)h;
+		// calc user-defined rectangle with filtering adjustment
+		s1 = ((float)prc->left + half) / (float)w;
+		t1 = ((float)prc->top + half) / (float)h;
+		s2 = ((float)prc->right - half) / (float)w;
+		t2 = ((float)prc->bottom - half) / (float)h;
 
 		if( width == -1 && height == -1 )
 		{
@@ -528,6 +551,7 @@ pfnPIC_Load
 static HIMAGE GAME_EXPORT pfnPIC_Load( const char *szPicName, const byte *image_buf, int image_size, int flags )
 {
 	HIMAGE	tx;
+	const char *ext;
 
 	if( !COM_CheckString( szPicName ))
 	{
@@ -535,8 +559,18 @@ static HIMAGE GAME_EXPORT pfnPIC_Load( const char *szPicName, const byte *image_
 		return 0;
 	}
 
-	// add default parms to image
-	SetBits( flags, TF_IMAGE );
+	// Check if this is a font file (.fnt) - use TF_FONT flags to match engine's font loading
+	ext = COM_FileExtension( szPicName );
+	if( ext && !Q_stricmp( ext, "fnt" ))
+	{
+		// Use TF_FONT flags for .fnt files to ensure consistent filtering with engine fonts
+		SetBits( flags, TF_FONT );
+	}
+	else
+	{
+		// add default parms to image
+		SetBits( flags, TF_IMAGE );
+	}
 
 	Image_SetForceFlags( IL_LOAD_DECAL ); // allow decal images for menu
 	tx = ref.dllFuncs.GL_LoadTexture( szPicName, image_buf, image_size, flags );
@@ -1252,7 +1286,7 @@ static const ui_enginefuncs_t gEngfuncs =
 	pfnGetOldGameInfo,
 	pfnGetGamesList,
 	pfnGetFilesList,
-	NULL,
+	SV_GetSaveComment,
 	CL_GetDemoComment,
 	pfnCheckGameDll,
 	pfnGetClipboardData,
@@ -1264,7 +1298,7 @@ static const ui_enginefuncs_t gEngfuncs =
 	COM_RandomFloat,
 	COM_RandomLong,
 	pfnSetCursor,
-	NULL,
+	pfnIsMapValid,
 	GL_ProcessTexture,
 	pfnCompareFileTime,
 	VID_GetModeString,
@@ -1298,14 +1332,17 @@ static char *pfnParseFileSafe( char *data, char *buf, const int size, unsigned i
 
 static gameinfo2_t *pfnGetGameInfo( int gi_version )
 {
+#if !XASH_DREAMCAST
 	if( gi_version != gameui.gameInfo.gi_version )
 		return NULL;
 
 	return &gameui.gameInfo;
+#endif
 }
 
 static gameinfo2_t *pfnGetModInfo( int gi_version, int i )
 {
+#if !XASH_DREAMCAST
 	if( i < 0 || i >= FI->numgames )
 		return NULL;
 
@@ -1316,6 +1353,7 @@ static gameinfo2_t *pfnGetModInfo( int gi_version, int i )
 		return NULL;
 
 	return &gameui.modsInfo[i];
+#endif
 }
 
 static int pfnIsCvarReadOnly( const char *name )
@@ -1463,9 +1501,9 @@ qboolean UI_LoadProgs( void )
 
 	Cvar_FullSet( "host_gameuiloaded", "1", FCVAR_READ_ONLY );
 	Cmd_AddRestrictedCommand( "ui_allowconsole", UI_ToggleAllowConsole_f, "unlocks developer console" );
-
+#if !XASH_DREAMCAST
 	UI_ConvertGameInfo( &gameui.gameInfo, FI->GameInfo ); // current gameinfo
-
+#endif
 	// setup globals
 	gameui.globals->developer = host.allow_console;
 

@@ -28,6 +28,9 @@ GNU General Public License for more details.
 #include "ref_common.h"
 #if defined( HAVE_OPENMP )
 #include <omp.h>
+#endif
+#if XASH_DREAMCAST
+#include <malloc.h>  /* mallinfo() for heap free tracking in piecewise loader */
 #endif // HAVE_OPENMP
 
 #define MIPTEX_CUSTOM_PALETTE_SIZE_BYTES ( sizeof( int16_t ) + 768 )
@@ -1928,6 +1931,7 @@ for embedded submodels
 static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
 {
 	qboolean	colored = false;
+	qboolean	lt2 = false;
 	qboolean	qbsp2 = false;
 	poolhandle_t mempool;
 	char	*ents;
@@ -1939,6 +1943,9 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
 	mempool = mod->mempool;
 	if( FBitSet( mod->flags, MODEL_COLORED_LIGHTING ))
 		colored = true;
+
+	if( FBitSet( mod->flags, MODEL_LT2_LIGHTING ))
+		lt2 = true;
 
 	if( FBitSet( mod->flags, MODEL_QBSP2 ))
 		qbsp2 = true;
@@ -1976,6 +1983,7 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
 
 		// this bit will be shared between all the submodels include worldmodel
 		if( colored ) SetBits( mod->flags, MODEL_COLORED_LIGHTING );
+		if( lt2 ) SetBits( mod->flags, MODEL_LT2_LIGHTING );
 		if( qbsp2 ) SetBits( mod->flags, MODEL_QBSP2 );
 
 		if( i != 0 )
@@ -2845,7 +2853,6 @@ static void Mod_LoadTexture( model_t *mod, dbspmodel_t *bmod, int textureIndex )
 		mtname[16] = '\0';
 		if( mtname[0] == '\0' )
 			Q_snprintf( mtname, sizeof( mtname ), "miptex_%i", textureIndex );
-		Con_Printf( "Loading texture %s\n", mtname );
 	}
 
 	texture = (texture_t *)Mem_Calloc( mod->mempool, sizeof( *texture ));
@@ -3795,7 +3802,81 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 {
 	int     i;
 
-    if( !bmod->lightdatasize )
+#if XASH_DREAMCAST
+	char modelname[64], path[64];
+	dc_file_t *f;
+	fs_offset_t filesize;
+	byte hdr_magic[3];
+	byte subformat;
+	uint32_t comp_size, lightsurfs_count;
+	size_t comp_rounded;
+
+	COM_FileBase( mod->name, modelname, sizeof( modelname ));
+	Q_snprintf( path, sizeof( path ), "maps/%s.lt2", modelname );
+
+	f = FS_Open( path, "rb", false );
+	if( f )
+	{
+		filesize = FS_FileLength( f );
+
+		if( FS_Read( f, hdr_magic, sizeof( hdr_magic )) == sizeof( hdr_magic ) && !memcmp( hdr_magic, "LT2", 3 ))
+		{
+			if( FS_Read( f, &subformat, 1 ) == 1 &&
+			    FS_Read( f, &comp_size, 4 ) == 4 &&
+			    FS_Read( f, &lightsurfs_count, 4 ) == 4 )
+			{
+				comp_size = LittleLong( comp_size );
+				lightsurfs_count = LittleLong( lightsurfs_count );
+				comp_rounded = (size_t)(( comp_size + 3u ) & ~3u );
+
+				/* basic sanity */
+				if( subformat == 'a' && comp_rounded > 0 && lightsurfs_count > 0 &&
+				    12u + comp_rounded + (size_t)lightsurfs_count * 4u <= (size_t)filesize )
+				{
+					mod->lt2_payload = Mem_Malloc( mod->mempool, comp_rounded );
+					mod->lt2_payload_size = (uint32_t)comp_rounded;
+					mod->lt2_lightsurfs = Mem_Malloc( mod->mempool, (size_t)lightsurfs_count * 4u );
+					mod->lt2_lightsurfs_count = lightsurfs_count;
+					mod->lt2_subformat = subformat;
+
+					if( FS_Read( f, mod->lt2_payload, comp_rounded ) == (int)comp_rounded &&
+					    FS_Read( f, mod->lt2_lightsurfs, (size_t)lightsurfs_count * 4u ) == (int)((size_t)lightsurfs_count * 4u ))
+					{
+						/* LightSurfs offsets are little-endian */
+						for( uint32_t li = 0; li < lightsurfs_count; li++ )
+							mod->lt2_lightsurfs[li] = LittleLong( mod->lt2_lightsurfs[li] );
+
+						SetBits( mod->flags, MODEL_LT2_LIGHTING );
+						SetBits( mod->flags, MODEL_COLORED_LIGHTING );
+
+						FS_Close( f );
+
+						/* Store surface indices for renderer-side LT2 lookup. */
+						for( i = 0; i < mod->numsurfaces; i++ )
+						{
+							if( mod->surfaces[i].info )
+								mod->surfaces[i].info->lt2_face_index = i;
+							mod->surfaces[i].samples = NULL;
+						}
+
+						Con_Printf( "lighting: lt2 ('%c')\n", subformat );
+						return;
+					}
+
+					mod->lt2_payload = NULL;
+					mod->lt2_payload_size = 0;
+					mod->lt2_lightsurfs = NULL;
+					mod->lt2_lightsurfs_count = 0;
+					mod->lt2_subformat = 0;
+				}
+			}
+		}
+
+		FS_Close( f );
+	}
+#endif /* XASH_DREAMCAST */
+
+	if( !bmod->lightdatasize )
 		return;
 
     switch (bmod->lightmap_samples)
@@ -3842,6 +3923,12 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
             int offset = lightofs / bmod->lightmap_samples;
             mod->surfaces[i].samples = mod->lightdata + offset;
         }
+
+#if XASH_DREAMCAST
+		/* keep surface index available for LT2 even when using BSP lighting */
+		if( mod->surfaces[i].info )
+			mod->surfaces[i].info->lt2_face_index = i;
+#endif
     }
 }
 
@@ -3944,39 +4031,6 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
 	else if( !bmod->isworld && loadstat.numwarnings )
 		Con_DPrintf( "Mod_Load%s: %i warning(s)\n", isworld ? "World" : "Brush", loadstat.numwarnings );
 
-	    // Profile lump sizes before loading into heap
-    Con_Printf("Profiling lump sizes for %s:\n", mod->name);
-    Con_Printf("\t^3Lump Name\tSize\n");
-    size_t total_size = 0;
-    struct lump_profile_s {
-        const char *name;
-        int lumpnum;
-    } lump_profile[] = {
-        {"Entities", LUMP_ENTITIES},
-        {"Planes", LUMP_PLANES},
-        {"Textures", LUMP_TEXTURES},
-        {"Vertexes", LUMP_VERTEXES},
-        {"Visibility", LUMP_VISIBILITY},
-        {"Nodes", LUMP_NODES},
-        {"TexInfo", LUMP_TEXINFO},
-        {"Surfaces", LUMP_FACES},
-        {"Lighting", LUMP_LIGHTING},
-        {"Clipnodes", LUMP_CLIPNODES},
-        {"Leafs", LUMP_LEAFS},
-        {"MarkSurfaces", LUMP_MARKSURFACES},
-        {"Edges", LUMP_EDGES},
-        {"SurfEdges", LUMP_SURFEDGES},
-        {"Models", LUMP_MODELS}
-    };
-
-    for (i = 0; i < ARRAYSIZE(lump_profile); i++)
-    {
-        int lumpnum = lump_profile[i].lumpnum;
-        size_t lump_size = header->lumps[lumpnum].filelen;
-        Con_Printf("\t%s\t\t%s\n", lump_profile[i].name, Q_memprint(lump_size));
-        total_size += lump_size;
-    }
-    Con_Printf("Total lump size: %s\n", Q_memprint(total_size));
 	// load into heap
 	Mod_LoadEntities( mod, bmod );
 	Con_Printf("Loaded entities\n");
@@ -4007,12 +4061,10 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
 	Mod_LoadNodes( mod, bmod );
 	Con_Printf("Loaded nodes\n");
 	Mod_LoadClipnodes( mod, bmod );
-	Con_Printf("Loaded clipnodes\n");
 	// preform some post-initalization
 	Mod_MakeHull0( mod, bmod );
 	Con_Printf("Made hull 0\n");
 	Mod_SetupSubmodels( mod, bmod );
-	Con_Printf("Setup submodels\n");
 
 	if( isworld )
 	{
@@ -4170,6 +4222,372 @@ qboolean Mod_TestBmodelLumps( dc_file_t *f, const char *name, const byte *mod_ba
 
 	return true;
 }
+
+#if XASH_DREAMCAST
+// helper for Mod_LoadBrushModelPiecewise: seek/read one lump into a temp buffer,
+// call processor, then free. processor copies data into mod->mempool.
+#define PW_LOAD( lumpnum, bmod_field, count_field, etype, fn ) \
+	do { \
+		const dlump_t *_l = &header.lumps[lumpnum]; \
+		if( _l->filelen > 0 ) \
+		{ \
+			lumpbuf = Z_Malloc( _l->filelen ); \
+			FS_Seek( f, _l->fileofs, SEEK_SET ); \
+			if( FS_Read( f, lumpbuf, _l->filelen ) == _l->filelen ) \
+			{ \
+				bmod->bmod_field  = (void *)lumpbuf; \
+				bmod->count_field = _l->filelen / sizeof( etype ); \
+				fn( mod, bmod ); \
+			} \
+			else Con_Printf( S_ERROR "%s: short read on lump %d\n", __func__, lumpnum ); \
+			Z_Free( lumpbuf ); \
+			bmod->bmod_field = NULL; bmod->count_field = 0; \
+		} \
+	} while(0)
+
+/*
+=================
+Mod_LoadBrushModelPiecewise
+
+DC-specific: loads BSP lumps one at a time to avoid holding the entire
+BSP file in RAM alongside the processed data.
+Peak RAM = header + one_lump_temp_buf + processed_data_so_far.
+=================
+*/
+void Mod_LoadBrushModelPiecewise( model_t *mod, const char *filename, qboolean *loaded )
+{
+	dheader_t	header;
+	dbspmodel_t	*bmod = &srcmodel;
+	dc_file_t	*f;
+	char		poolname[MAX_VA_STRING];
+	byte		*lumpbuf;
+	int		flags = 0;
+	char		wadvalue[2048];
+	size_t		len = 0;
+	qboolean	wadlist_warn = false;
+	int		i, ret;
+
+	if( loaded ) *loaded = false;
+
+	Q_snprintf( poolname, sizeof( poolname ), "^2%s^7", mod->name );
+	mod->mempool = Mem_AllocPool( poolname );
+	mod->type = mod_brush;
+
+	f = FS_Open( filename, "rb", false );
+	if( !f )
+	{
+		Con_Printf( S_ERROR "%s: can't open '%s'\n", __func__, filename );
+		return;
+	}
+
+	// read only the header (~552 bytes), avoids loading the entire file
+	if( FS_Read( f, &header, sizeof( header )) != (int)sizeof( header ))
+	{
+		Con_Printf( S_ERROR "%s: short read on header\n", __func__ );
+		FS_Close( f );
+		return;
+	}
+
+	memset( bmod, 0, sizeof( dbspmodel_t ));
+	memset( &loadstat, 0, sizeof( loadstat_t ));
+	Q_strncpy( loadstat.name, mod->name, sizeof( loadstat.name ));
+	wadvalue[0] = '\0';
+
+	switch( header.version )
+	{
+	case HLBSP_VERSION:
+		// check for blue-shift swapped lumps
+		ret = Mod_LumpLooksLikeEntitiesFile( f, &header.lumps[LUMP_ENTITIES], 0, "entities" );
+		if( ret < 0 ) { FS_Close( f ); return; }
+		if( !ret )
+		{
+			ret = Mod_LumpLooksLikeEntitiesFile( f, &header.lumps[LUMP_PLANES], 0, "planes" );
+			if( ret < 0 ) { FS_Close( f ); return; }
+			if( ret )
+			{
+				srclumps[0].lumpnumber = LUMP_PLANES;
+				srclumps[1].lumpnumber = LUMP_ENTITIES;
+				break;
+			}
+		}
+		// fallthrough
+	case Q1BSP_VERSION:
+	case QBSP2_VERSION:
+		srclumps[0].lumpnumber = LUMP_ENTITIES;
+		srclumps[1].lumpnumber = LUMP_PLANES;
+		if( header.version == QBSP2_VERSION )
+			SetBits( mod->flags, MODEL_QBSP2 );
+		break;
+	default:
+		Con_Printf( S_ERROR "%s has wrong version number (%i should be %i)\n",
+			mod->name, header.version, HLBSP_VERSION );
+		FS_Close( f );
+		return;
+	}
+
+	bmod->version   = header.version;
+	bmod->isworld   = world.loading;
+	bmod->isbsp30ext = false; // no extra header on DC
+
+	if( bmod->isworld )
+	{
+		world.flags = 0;
+		SetBits( flags, LUMP_SAVESTATS | LUMP_SILENT );
+	}
+
+
+	// entities (may be swapped for blue-shift)
+	const dlump_t *ent_l = &header.lumps[srclumps[0].lumpnumber];
+	if( ent_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( ent_l->filelen + 1 );
+		FS_Seek( f, ent_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, ent_l->filelen ) == ent_l->filelen )
+		{
+			lumpbuf[ent_l->filelen] = 0;
+			bmod->entdata     = lumpbuf;
+			bmod->entdatasize = ent_l->filelen;
+			Mod_LoadEntities( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->entdata = NULL; bmod->entdatasize = 0;
+	}
+
+	PW_LOAD( LUMP_PLANES,    planes,    numplanes,    dplane_t,    Mod_LoadPlanes    );
+	PW_LOAD( LUMP_MODELS,    submodels, numsubmodels, dmodel_t,    Mod_LoadSubmodels );
+	PW_LOAD( LUMP_VERTEXES,  vertexes,  numvertexes,  dvertex_t,   Mod_LoadVertexes  );
+
+	// edges: element size varies by BSP version
+	const dlump_t *edge_l = &header.lumps[LUMP_EDGES];
+	if( edge_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( edge_l->filelen );
+		FS_Seek( f, edge_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, edge_l->filelen ) == edge_l->filelen )
+		{
+			if( bmod->version == QBSP2_VERSION )
+			{
+				bmod->edges32  = (dedge32_t *)lumpbuf;
+				bmod->numedges = edge_l->filelen / sizeof( dedge32_t );
+			}
+			else
+			{
+				bmod->edges    = (dedge_t *)lumpbuf;
+				bmod->numedges = edge_l->filelen / sizeof( dedge_t );
+			}
+			Mod_LoadEdges( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->edges = NULL; bmod->numedges = 0;
+	}
+
+	PW_LOAD( LUMP_SURFEDGES, surfedges,  numsurfedges, dsurfedge_t, Mod_LoadSurfEdges );
+
+	// textures: bmod->textures is dmiptexlump_t*, texdatasize is raw byte count
+	const dlump_t *tex_l = &header.lumps[LUMP_TEXTURES];
+	if( tex_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( tex_l->filelen );
+		FS_Seek( f, tex_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, tex_l->filelen ) == tex_l->filelen )
+		{
+			bmod->textures    = (dmiptexlump_t *)lumpbuf;
+			bmod->texdatasize = tex_l->filelen;
+			Mod_LoadTextures( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->textures = NULL; bmod->texdatasize = 0;
+	}
+
+	const dlump_t *vis_l = &header.lumps[LUMP_VISIBILITY];
+	if( vis_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( vis_l->filelen );
+		FS_Seek( f, vis_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, vis_l->filelen ) == vis_l->filelen )
+		{
+			bmod->visdata     = lumpbuf;
+			bmod->visdatasize = vis_l->filelen;
+			Mod_LoadVisibility( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->visdata = NULL;
+		// keep bmod->visdatasize: Mod_LoadLeafs checks visofs < visdatasize per leaf
+	}
+
+	PW_LOAD( LUMP_TEXINFO, texinfo, numtexinfo, dtexinfo_t, Mod_LoadTexInfo );
+
+	// surfaces: needs mod->planes, texinfo, vertexes, edges, surfedges (processed above)
+	const dlump_t *face_l = &header.lumps[LUMP_FACES];
+	if( face_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( face_l->filelen );
+		FS_Seek( f, face_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, face_l->filelen ) == face_l->filelen )
+		{
+			if( bmod->version == QBSP2_VERSION )
+			{
+				bmod->surfaces32  = (dface32_t *)lumpbuf;
+				bmod->numsurfaces = face_l->filelen / sizeof( dface32_t );
+			}
+			else
+			{
+				bmod->surfaces    = (dface_t *)lumpbuf;
+				bmod->numsurfaces = face_l->filelen / sizeof( dface_t );
+			}
+			Mod_LoadSurfaces( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->surfaces = NULL; bmod->numsurfaces = 0;
+	}
+
+	// lighting: if .lt2 sidecar exists skip BSP lump (saves the temp alloc)
+	// Mod_LoadLighting with lightdata==NULL falls through to .lt2 loading
+	char	lt2path[64], lt2base[32];
+	COM_FileBase( mod->name, lt2base, sizeof( lt2base ));
+	Q_snprintf( lt2path, sizeof( lt2path ), "maps/%s.lt2", lt2base );
+
+	if( FS_FileExists( lt2path, false ))
+	{
+		Mod_LoadLighting( mod, bmod );
+	}
+	else
+	{
+		const dlump_t *lit_l = &header.lumps[LUMP_LIGHTING];
+		if( lit_l->filelen > 0 )
+		{
+			lumpbuf = Z_Malloc( lit_l->filelen );
+			FS_Seek( f, lit_l->fileofs, SEEK_SET );
+			if( FS_Read( f, lumpbuf, lit_l->filelen ) == lit_l->filelen )
+			{
+				bmod->lightdata     = lumpbuf;
+				bmod->lightdatasize = lit_l->filelen;
+			}
+			Mod_LoadLighting( mod, bmod );
+			Z_Free( lumpbuf );
+			bmod->lightdata = NULL; bmod->lightdatasize = 0;
+		}
+		else Mod_LoadLighting( mod, bmod );
+	}
+
+	// marksurfaces: needs mod->surfaces
+	const dlump_t *ms_l = &header.lumps[LUMP_MARKSURFACES];
+	if( ms_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( ms_l->filelen );
+		FS_Seek( f, ms_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, ms_l->filelen ) == ms_l->filelen )
+		{
+			if( bmod->version == QBSP2_VERSION )
+			{
+				bmod->markfaces32  = (dmarkface32_t *)lumpbuf;
+				bmod->nummarkfaces = ms_l->filelen / sizeof( dmarkface32_t );
+			}
+			else
+			{
+				bmod->markfaces    = (dmarkface_t *)lumpbuf;
+				bmod->nummarkfaces = ms_l->filelen / sizeof( dmarkface_t );
+			}
+			Mod_LoadMarkSurfaces( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->markfaces = NULL; bmod->nummarkfaces = 0;
+	}
+
+	// leafs: needs mod->marksurfaces
+	const dlump_t *leaf_l = &header.lumps[LUMP_LEAFS];
+	if( leaf_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( leaf_l->filelen );
+		FS_Seek( f, leaf_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, leaf_l->filelen ) == leaf_l->filelen )
+		{
+			if( bmod->version == QBSP2_VERSION )
+			{
+				bmod->leafs32  = (dleaf32_t *)lumpbuf;
+				bmod->numleafs = leaf_l->filelen / sizeof( dleaf32_t );
+			}
+			else
+			{
+				bmod->leafs    = (dleaf_t *)lumpbuf;
+				bmod->numleafs = leaf_l->filelen / sizeof( dleaf_t );
+			}
+			Mod_LoadLeafs( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->leafs = NULL; bmod->numleafs = 0;
+	}
+
+	// nodes: needs mod->planes, mod->leafs
+	const dlump_t *node_l = &header.lumps[LUMP_NODES];
+	if( node_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( node_l->filelen );
+		FS_Seek( f, node_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, node_l->filelen ) == node_l->filelen )
+		{
+			if( bmod->version == QBSP2_VERSION )
+			{
+				bmod->nodes32  = (dnode32_t *)lumpbuf;
+				bmod->numnodes = node_l->filelen / sizeof( dnode32_t );
+			}
+			else
+			{
+				bmod->nodes    = (dnode_t *)lumpbuf;
+				bmod->numnodes = node_l->filelen / sizeof( dnode_t );
+			}
+			Mod_LoadNodes( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->nodes = NULL; bmod->numnodes = 0;
+	}
+
+	const dlump_t *clip_l = &header.lumps[LUMP_CLIPNODES];
+	if( clip_l->filelen > 0 )
+	{
+		lumpbuf = Z_Malloc( clip_l->filelen );
+		FS_Seek( f, clip_l->fileofs, SEEK_SET );
+		if( FS_Read( f, lumpbuf, clip_l->filelen ) == clip_l->filelen )
+		{
+			bmod->clipnodes    = (dclipnode_t *)lumpbuf;
+			bmod->numclipnodes = clip_l->filelen / sizeof( dclipnode_t );
+			Mod_LoadClipnodes( mod, bmod );
+		}
+		Z_Free( lumpbuf );
+		bmod->clipnodes = NULL; bmod->numclipnodes = 0;
+	}
+
+
+	FS_Close( f );
+
+
+	Mod_MakeHull0( mod, bmod );
+	Mod_SetupSubmodels( mod, bmod );
+
+	if( bmod->isworld )
+		world.version = bmod->version;
+
+	for( i = 0; i < world.wadlist.count; i++ )
+	{
+		if( !world.wadlist.wadusage[i] ) continue;
+		if( !wadlist_warn )
+		{
+			ret = Q_snprintf( &wadvalue[len], sizeof( wadvalue ) - len, "%s; ", world.wadlist.wadnames[i] );
+			if( ret == -1 ) wadlist_warn = true;
+			else len += ret;
+		}
+	}
+
+	if( COM_CheckString( wadvalue ))
+	{
+		wadvalue[Q_strlen( wadvalue ) - 2] = '\0';
+		Con_Reportf( "Wad files required to run the map: \"%s\"\n", wadvalue );
+	}
+
+	if( bmod->isworld ) worldmodel = mod;
+	if( loaded ) *loaded = true;
+}
+#endif // XASH_DREAMCAST
 
 /*
 =================

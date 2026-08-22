@@ -21,7 +21,7 @@ GNU General Public License for more details.
 #include "shake.h"
 #include "hltv.h"
 #include "input.h"
-#if XASH_LOW_MEMORY != 2 || XASH_DREAMCAST
+#if XASH_LOW_MEMORY != 2 
 int CL_UPDATE_BACKUP = SINGLEPLAYER_BACKUP;
 #endif
 /*
@@ -336,8 +336,10 @@ static void CL_ParseStaticEntity( sizebuf_t *msg )
 	ent->index = 0; // static entities doesn't has the numbers
 
 	// statics may be respawned in game e.g. for demo recording
+#if !XASH_DREAMCAST
 	if( cls.state == ca_connected || cls.state == ca_validate )
 		ent->trivial_accept = INVALID_HANDLE;
+#endif
 
 	// setup the new static entity
 	VectorCopy( ent->curstate.origin, ent->origin );
@@ -610,8 +612,9 @@ static void CL_StartResourceDownloading( const char *pszMessage, qboolean bCusto
 	}
 	else
 	{
+#if !XASH_DREAMCAST
 		HTTP_ResetProcessState();
-
+#endif
 		cls.state = ca_validate;
 		cls.dl.custom = false;
 	}
@@ -950,7 +953,11 @@ void CL_ParseServerData( sizebuf_t *msg, connprotocol_t proto )
 		}
 		else
 		{
+#if XASH_DREAMCAST
 			clgame.maxEntities = bound( MIN_EDICTS, clgame.maxEntities, MAX_EDICTS );
+#else
+			clgame.maxEntities = bound( MIN_EDICTS, clgame.maxEntities, DC_MAX_EDICTS );
+#endif
 			clgame.maxModels = MSG_ReadWord( msg );
 			mask = ENGINE_FEATURES_MASK;
 		}
@@ -1620,6 +1627,7 @@ void CL_UpdateUserPings( sizebuf_t *msg )
 
 static void CL_SendConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 {
+#if !XASH_DREAMCAST
 	qboolean		user_changed_diskfile;
 	vec3_t		mins, maxs;
 	string		filename;
@@ -1734,6 +1742,7 @@ static void CL_SendConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 
 		COM_Munge( &msg->pData[pos + 2], len, cl.servercount );
 	}
+#endif
 }
 
 /*
@@ -1859,6 +1868,7 @@ void CL_RegisterResources( sizebuf_t *msg, connprotocol_t proto )
 
 static void CL_ParseConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 {
+#if !XASH_DREAMCAST
 	int		lastcheck;
 	int		delta;
 	int		i;
@@ -1930,6 +1940,7 @@ static void CL_ParseConsistencyInfo( sizebuf_t *msg, connprotocol_t proto )
 		skip_crc_change = pResource;
 		lastcheck = delta;
 	}
+#endif
 }
 
 /*
@@ -2055,7 +2066,9 @@ void CL_ParseResLocation( sizebuf_t *msg )
 	{
 		Con_Reportf( "Adding %s as download location\n", token );
 		cl.http_download = true;
+#if !XASH_DREAMCAST
 		HTTP_AddCustomServer( token );
+#endif
 	}
 }
 
@@ -2551,7 +2564,7 @@ void CL_ParseServerMessage( sizebuf_t *msg )
 
 				cls.changelevel = true;
 				S_StopAllSounds( true );
-
+				S_StreamSetPause( true );
 				Con_Printf( "Server changing, reconnecting\n" );
 
 				if( cls.demoplayback )
@@ -2643,9 +2656,11 @@ void CL_ParseServerMessage( sizebuf_t *msg )
 			CL_ParseRestoreSoundPacket( msg );
 			cl.frames[cl.parsecountmod].graphdata.sound += MSG_GetNumBytesRead( msg ) - bufStart;
 			break;
+#ifndef XASH_DREAMCAST
 		case svc_spawnstatic:
 			CL_ParseStaticEntity( msg );
 			break;
+#endif
 		case svc_event_reliable:
 			CL_ParseReliableEvent( msg, PROTO_CURRENT );
 			cl.frames[cl.parsecountmod].graphdata.event += MSG_GetNumBytesRead( msg ) - bufStart;

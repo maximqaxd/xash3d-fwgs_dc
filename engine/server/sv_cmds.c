@@ -15,6 +15,10 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "server.h"
+#if XASH_DREAMCAST
+void SV_SoftReboot_Resume_f( void );
+void SV_SoftReboot_Test_f( void );
+#endif
 
 /*
 =================
@@ -386,7 +390,11 @@ static void SV_HazardCourse_f( void )
 		Cbuf_AddTextf( "wait; movie %s\n", GI->trainmap );
 		Host_EndGame( true, DEFAULT_ENDGAME_MESSAGE );
 	}
+#if XASH_DREAMCAST
+	else COM_NewGame( "t0a0" );
+#else
 	else COM_NewGame( GI->trainmap );
+#endif
 }
 
 /*
@@ -473,8 +481,13 @@ static void SV_DeleteSave_f( void )
 	}
 
 	// delete save and saveshot
+#if XASH_DREAMCAST
+	FS_Delete( va( "/vmu/a1/%s.sav", Cmd_Argv( 1 )));
+	FS_Delete( va( "/vmu/a1/%s.bmp", Cmd_Argv( 1 )));
+#else
 	FS_Delete( va( DEFAULT_SAVE_DIRECTORY "%s.sav", Cmd_Argv( 1 )));
 	FS_Delete( va( DEFAULT_SAVE_DIRECTORY "%s.bmp", Cmd_Argv( 1 )));
+#endif
 }
 
 /*
@@ -713,7 +726,9 @@ SV_Heartbeat_f
 */
 static void SV_Heartbeat_f( void )
 {
+#if !XASH_DREAMCAST
 	NET_MasterClear();
+#endif
 }
 
 /*
@@ -1029,6 +1044,10 @@ void SV_InitOperatorCommands( void )
 	Cmd_AddCommand( "shutdownserver", SV_KillServer_f, "shutdown current server" );
 	Cmd_AddCommand( "changelevel", SV_ChangeLevel_f, "change level" );
 	Cmd_AddCommand( "changelevel2", SV_ChangeLevel2_f, "smooth change level" );
+#if XASH_DREAMCAST
+	Cmd_AddRestrictedCommand( "softreboot_resume", SV_SoftReboot_Resume_f, "resume a pending Dreamcast soft reboot" );
+	Cmd_AddRestrictedCommand( "softreboot_test", SV_SoftReboot_Test_f, "Dreamcast: reload binary via arch_exec (heap reset test)" );
+#endif
 	Cmd_AddCommand( "redirect", Rcon_Redirect_f, "force enable rcon redirection" );
 	Cmd_AddCommand( "logaddress", SV_SetLogAddress_f, "sets address and port for remote logging host" );
 	Cmd_AddCommand( "log", SV_ServerLog_f, "enables logging to file" );

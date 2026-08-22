@@ -33,9 +33,9 @@ static const loadwavfmt_t load_game[] =
 #ifndef XASH_DEDICATED
 { DEFAULT_SOUNDPATH "%s%s.%s", "wav", Sound_LoadWAV },
 { "%s%s.%s", "wav", Sound_LoadWAV },
+#if !XASH_DREAMCAST
 { DEFAULT_SOUNDPATH "%s%s.%s", "mp3", Sound_LoadMPG },
 { "%s%s.%s", "mp3", Sound_LoadMPG },
-#if !XASH_DREAMCAST
 { DEFAULT_SOUNDPATH "%s%s.%s", "ogg", Sound_LoadOggVorbis },
 { "%s%s.%s", "ogg", Sound_LoadOggVorbis },
 { DEFAULT_SOUNDPATH "%s%s.%s", "opus", Sound_LoadOggOpus },
@@ -60,9 +60,9 @@ static const loadwavfmt_t load_game[] =
 static const streamfmt_t stream_game[] =
 {
 #ifndef XASH_DEDICATED
-{ "%s%s.%s", "mp3", Stream_OpenMPG, Stream_ReadMPG, Stream_SetPosMPG, Stream_GetPosMPG, Stream_FreeMPG },
 { "%s%s.%s", "wav", Stream_OpenWAV, Stream_ReadWAV, Stream_SetPosWAV, Stream_GetPosWAV, Stream_FreeWAV },
 #if !XASH_DREAMCAST
+{ "%s%s.%s", "mp3", Stream_OpenMPG, Stream_ReadMPG, Stream_SetPosMPG, Stream_GetPosMPG, Stream_FreeMPG },
 { "%s%s.%s", "ogg", Stream_OpenOggVorbis, Stream_ReadOggVorbis, Stream_SetPosOggVorbis, Stream_GetPosOggVorbis, Stream_FreeOggVorbis },
 { "%s%s.%s", "opus", Stream_OpenOggOpus, Stream_ReadOggOpus, Stream_SetPosOggOpus, Stream_GetPosOggOpus, Stream_FreeOggOpus },
 #endif

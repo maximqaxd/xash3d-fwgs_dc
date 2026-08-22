@@ -365,7 +365,7 @@ static const ref_api_t gEngfuncs =
 	CL_AllocParticleFast,
 	CL_AllocElight,
 	pfnGetDefaultSprite,
-	R_StoreEfrags,
+	NULL, // R_StoreEfrags XASH_DREAMCAST
 
 	Mod_ForName,
 	pfnMod_Extradata,

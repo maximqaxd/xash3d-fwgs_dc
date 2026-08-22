@@ -4,12 +4,12 @@
 
 XASH_CLIENT_OBJS = \
 	engine/client/vgui/vgui_draw.o \
-	engine/client/avi/avi_stub.o \
+	engine/client/avi/mpg_dc.o \
+	engine/client/avi/mpeg.o \
 	engine/client/cl_cmds.o \
 	engine/client/cl_custom.o \
 	engine/client/cl_debug.o \
 	engine/client/cl_demo.o \
-	engine/client/cl_efrag.o \
 	engine/client/cl_efx.o \
 	engine/client/cl_events.o \
 	engine/client/cl_font.o \
@@ -17,7 +17,6 @@ XASH_CLIENT_OBJS = \
 	engine/client/cl_game.o \
 	engine/client/cl_gameui.o \
 	engine/client/cl_main.o \
-	engine/client/cl_netgraph.o \
 	engine/client/cl_parse.o \
 	engine/client/cl_pmove.o \
 	engine/client/cl_render.o \
@@ -33,26 +32,14 @@ XASH_CLIENT_OBJS = \
 	engine/client/keys.o \
 	engine/client/mod_dbghulls.o \
 	engine/client/ref_common.o \
-	engine/client/soundlib/libmpg/dct36.o \
-	engine/client/soundlib/libmpg/dct64.o \
-	engine/client/soundlib/libmpg/format.o \
-	engine/client/soundlib/libmpg/frame.o \
-	engine/client/soundlib/libmpg/index.o \
-	engine/client/soundlib/libmpg/layer3.o \
-	engine/client/soundlib/libmpg/libmpg.o \
-	engine/client/soundlib/libmpg/mpg123.o \
-	engine/client/soundlib/libmpg/parse.o \
-	engine/client/soundlib/libmpg/reader.o \
-	engine/client/soundlib/libmpg/synth.o \
-	engine/client/soundlib/libmpg/tabinit.o \
 	engine/client/soundlib/snd_main.o \
-	engine/client/soundlib/snd_mp3.o \
 	engine/client/soundlib/snd_wav.o \
 	engine/client/s_dsp.o \
 	engine/client/s_load.o \
 	engine/client/s_main.o \
 	engine/client/s_mouth.o \
 	engine/client/s_stream.o \
+	engine/client/s_vox.o \
 	engine/client/s_utils.o \
 	engine/client/titles.o \
 	engine/client/vid_common.o \
@@ -71,13 +58,8 @@ XASH_OBJS = \
 	engine/common/host_state.o\
 	engine/common/hpak.o\
 	engine/common/identification.o \
-	engine/common/imagelib/img_bmp.o \
-	engine/common/imagelib/img_dds.o \
-	engine/common/imagelib/img_ktx2.o \
 	engine/common/imagelib/img_main.o \
-	engine/common/imagelib/img_png.o \
 	engine/common/imagelib/img_quant.o \
-	engine/common/imagelib/img_tga.o \
 	engine/common/imagelib/img_utils.o \
 	engine/common/imagelib/img_wad.o \
 	engine/common/imagelib/img_pvr.o \
@@ -85,18 +67,18 @@ XASH_OBJS = \
 	engine/common/ipv6text.o \
 	engine/common/launcher.o \
 	engine/common/lib_common.o \
-	engine/common/masterlist.o \
 	engine/common/mod_bmodel.o\
 	engine/common/mod_sprite.o \
 	engine/common/mod_studio.o \
 	engine/common/model.o \
 	engine/common/munge.o \
+	engine/common/masterlist.o \
 	engine/common/net_buffer.o \
 	engine/common/net_chan.o \
 	engine/common/net_encode.o \
 	engine/common/net_ws.o \
-	engine/common/net_http.o \
 	engine/common/pm_surface.o \
+	engine/common/pm_shared_move.o \
 	engine/common/pm_trace.o \
 	engine/common/soundlib/snd_utils.o \
 	engine/common/sounds.o \
@@ -126,13 +108,16 @@ XASH_SERVER_OBJS =	\
 	engine/server/sv_move.o \
 	engine/server/sv_phys.o \
 	engine/server/sv_pmove.o \
-	engine/server/sv_query.o \
 	engine/server/sv_save.o \
 	engine/server/sv_world.o \
 	
 XASH_PLATFORM_OBJS = \
 	engine/platform/misc/lib_static.o \
 	engine/platform/dreamcast/s_dc.o \
+	engine/platform/dreamcast/softreboot_dc.o \
+	engine/platform/dreamcast/AicaInterface.o \
+	engine/platform/dreamcast/AudioEngine.o \
+	engine/platform/dreamcast/AicaDsp.o \
 	engine/platform/dreamcast/sys_dc.o \
 	engine/platform/dreamcast/vid_dc.o \
 	engine/platform/dreamcast/in_dc.o 
@@ -155,7 +140,8 @@ INCLUDE = -I. \
 -I3rdparty/MultiEmulator/include \
 -I$(KOS_PORTS)/include/opus \
 -I3rdparty/dreamcast/FatFs/include \
--I$(KOS_PORTS)/include/bzlib 
+-I$(KOS_PORTS)/include/bzlib \
+-I$(KOS_PORTS)/include/zlib 
 
 GIT_VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
@@ -168,3 +154,13 @@ DEFINES += -DXASH_BUILD_COMMIT=\"$(GIT_VERSION)\" \
 		  
 FLAGS = -Os -fno-omit-frame-pointer -fno-common -fno-strict-aliasing -fno-stack-protector -ffunction-sections -fdata-sections -fno-exceptions -freorder-blocks-algorithm=simple -flto=auto  -Wno-implicit-function-declaration -Wno-int-conversion
 CFLAGS +=  $(INCLUDE) $(DEFINES) $(FLAGS)  
+# Critical hot path files that need -O3 optimization
+cl_frame.o: CFLAGS += -O3
+cl_pmove.o: CFLAGS += -O3
+cl_main.o: CFLAGS += -O3
+cl_parse.o: CFLAGS += -O3
+sv_frame.o: CFLAGS += -O3
+net_buffer.o: CFLAGS += -O3
+net_encode.o: CFLAGS += -O3
+xash3d_mathlib.o: CFLAGS += -O3
+matrixlib.o: CFLAGS += -O3

@@ -32,7 +32,7 @@ GNU General Public License for more details.
 //=============================================================================
 
 #define SV_UPDATE_MASK	(SV_UPDATE_BACKUP - 1)
-#if XASH_LOW_MEMORY == 2 && !XASH_DREAMCAST
+#if XASH_LOW_MEMORY == 2 
 #define SV_UPDATE_BACKUP SINGLEPLAYER_BACKUP
 #else
 extern int SV_UPDATE_BACKUP;
@@ -132,8 +132,9 @@ typedef struct server_s
 
 	int		hostflags;	// misc server flags: predicting etc
 	CRC32_t		worldmapCRC;	// check crc for catch cheater maps
+#if !XASH_DREAMCAST
 	int		progsCRC;		// this is used with feature ENGINE_QUAKE_COMPATIBLE
-
+#endif
 	char		name[MAX_QPATH];	// map name
 	char		startspot[MAX_QPATH];
 
@@ -151,9 +152,13 @@ typedef struct server_s
 	// run local lightstyles to let SV_LightPoint grab the actual information
 	lightstyle_t	lightstyles[MAX_LIGHTSTYLES];
 
+#if !XASH_DREAMCAST
 	consistency_t	consistency_list[MAX_MODELS];
+#endif
 	resource_t	resources[MAX_RESOURCES];
+#if !XASH_DREAMCAST
 	int		num_consistency;	// typically check model bounds on this
+#endif
 	int		num_resources;
 
 	sv_baseline_t	instanced[MAX_CUSTOM_BASELINES];	// instanced baselines

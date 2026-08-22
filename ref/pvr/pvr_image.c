@@ -16,6 +16,7 @@ GNU General Public License for more details.
 #include <stdarg.h>
 #include "pvr_local.h"
 #include "crclib.h"
+#include "pvr_alloc.h"
 
 #define TEXTURES_HASH_SIZE	(MAX_TEXTURES >> 2)
 #define TEXTURE_SIZE_MIN	8
@@ -25,6 +26,28 @@ static gl_texture_t*	gl_texturesHashTable[TEXTURES_HASH_SIZE];
 static uint		gl_numTextures;
 static uint		vq_codebook_sz = 2048;
 static int		next_texture_id = 1;		// Next PVR texture ID (start at 1, 0 = unused)
+
+// Callback for defragmentation: update texture vram_ptr when blocks are moved
+static void defrag_texture_callback(void* old_ptr, void* new_ptr, void* user_data)
+{
+	(void)user_data;
+	
+	// Update all textures that point to the old address
+	for( uint i = 0; i < gl_numTextures; i++ )
+	{
+		gl_texture_t *tex = &gl_textures[i];
+		if( tex->loaded && tex->vram_ptr == old_ptr )
+		{
+			tex->vram_ptr = (pvr_ptr_t)new_ptr;
+		}
+	}
+}
+
+// Public function to run defragmentation with texture pointer updates
+void R_DefragmentVRAM( int max_iterations )
+{
+	alloc_run_defrag( NULL, defrag_texture_callback, max_iterations, NULL );
+}
 
 static byte    dottexture[8][8] =
 {
@@ -363,6 +386,10 @@ static void GL_SetTextureDimensions( gl_texture_t *tex, int width, int height, i
 	tex->srcHeight = height;
 
 	int	step = (int)gl_round_down.value;
+
+	if( FBitSet( tex->flags, TF_NOMIPMAP ))
+		step = 0;
+	
 	int	scaled_width, scaled_height;
 
 	for( scaled_width = 1; scaled_width < width; scaled_width <<= 1 );
@@ -956,7 +983,7 @@ static void GL_TextureImageRAW( gl_texture_t *tex, int side, int level, int widt
 		// Allocate PVR memory if not already allocated
 		if( !tex->loaded || tex->vram_ptr == NULL )
 		{
-			tex->vram_ptr = pvr_mem_malloc( src_padded );
+			tex->vram_ptr = alloc_malloc( NULL, src_padded );
 			if( !tex->vram_ptr )
 			{
 				gEngfuncs.Con_Printf( S_ERROR "%s: failed to allocate PVR memory for %s\n", __func__, tex->name );
@@ -1000,6 +1027,7 @@ static void GL_TextureImageRAW( gl_texture_t *tex, int side, int level, int widt
 	qboolean is_bgra = (type == PF_BGRA_32);
 	qboolean is_rgba32 = (type == PF_RGBA_32 || type == PF_BGRA_32);
 	qboolean is_rgb24 = (type == PF_RGB_24 || type == PF_BGR_24);
+	qboolean is_creditsfont = (tex->name != NULL && strstr( tex->name, "creditsfont" ) != NULL);
 
 	// Convert to PVR format
 	switch( base_format )
@@ -1047,26 +1075,107 @@ static void GL_TextureImageRAW( gl_texture_t *tex, int side, int level, int widt
 	case PVR_TXRFMT_ARGB4444:
 		if( is_rgba32 )
 		{
-			// ARGB4444 conversion (assume RGBA for now, can add BGRA variant if needed)
-			// Note: BGRA32 is still 4 bytes per pixel; current helper expects RGBA ordering.
+			// ARGB4444 conversion.
+			// Special-case creditsfont: source often carries an opaque black background (RGB=0, A=255).
+			// Punch it out here so it works with normal translucent blending on PVR.
+			//
+			// NOTE: Keep this targeted to creditsfont only to avoid breaking legitimate black pixels
+			// in other UI textures.
+			const byte *s = src;
+			uint16_t *d = converted_data;
+			size_t i;
+
 			if( is_bgra )
 			{
-				// Convert BGRA -> ARGB4444 locally (opaque alpha preserved from src)
-				const byte *s = src;
-				uint16_t *d = converted_data;
-				size_t i;
 				for( i = 0; i < pixels; i++, s += 4, d++ )
 				{
-					uint16_t a = (uint16_t)(s[3] >> 4);
-					uint16_t r = (uint16_t)(s[2] >> 4);
-					uint16_t g = (uint16_t)(s[1] >> 4);
-					uint16_t b = (uint16_t)(s[0] >> 4);
-					*d = (a << 12) | (r << 8) | (g << 4) | b;
+					const byte b8 = s[0], g8 = s[1], r8 = s[2], a8 = s[3];
+					uint16_t a = (uint16_t)(a8 >> 4);
+
+					if( is_creditsfont && a8 == 0xFF && r8 == 0x00 && g8 == 0x00 && b8 == 0x00 )
+					{
+						// Only punch out "background" black: if any neighbor is non-black, keep it.
+						const size_t px = (i % (size_t)width);
+						const size_t py = (i / (size_t)width);
+						const byte *row = src + (py * (size_t)width + px) * 4;
+						qboolean neighbor_nonblack = false;
+
+						if( px > 0 )
+						{
+							const byte *n = row - 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+						if( !neighbor_nonblack && px + 1 < (size_t)width )
+						{
+							const byte *n = row + 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+						if( !neighbor_nonblack && py > 0 )
+						{
+							const byte *n = row - (size_t)width * 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+						if( !neighbor_nonblack && py + 1 < (size_t)height )
+						{
+							const byte *n = row + (size_t)width * 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+
+						if( !neighbor_nonblack )
+							a = 0;
+					}
+
+					*d = (a << 12)
+						| ((uint16_t)(r8 >> 4) << 8)
+						| ((uint16_t)(g8 >> 4) << 4)
+						| ((uint16_t)(b8 >> 4) << 0);
 				}
 			}
 			else
 			{
-				GL_ConvertRGBA32ToARGB4444( src, converted_data, width, height );
+				for( i = 0; i < pixels; i++, s += 4, d++ )
+				{
+					const byte r8 = s[0], g8 = s[1], b8 = s[2], a8 = s[3];
+					uint16_t a = (uint16_t)(a8 >> 4);
+
+					if( is_creditsfont && a8 == 0xFF && r8 == 0x00 && g8 == 0x00 && b8 == 0x00 )
+					{
+						// Only punch out "background" black: if any neighbor is non-black, keep it.
+						const size_t px = (i % (size_t)width);
+						const size_t py = (i / (size_t)width);
+						const byte *row = src + (py * (size_t)width + px) * 4;
+						qboolean neighbor_nonblack = false;
+
+						if( px > 0 )
+						{
+							const byte *n = row - 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+						if( !neighbor_nonblack && px + 1 < (size_t)width )
+						{
+							const byte *n = row + 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+						if( !neighbor_nonblack && py > 0 )
+						{
+							const byte *n = row - (size_t)width * 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+						if( !neighbor_nonblack && py + 1 < (size_t)height )
+						{
+							const byte *n = row + (size_t)width * 4;
+							if( (n[0] | n[1] | n[2]) != 0 ) neighbor_nonblack = true;
+						}
+
+						if( !neighbor_nonblack )
+							a = 0;
+					}
+
+					*d = (a << 12)
+						| ((uint16_t)(r8 >> 4) << 8)
+						| ((uint16_t)(g8 >> 4) << 4)
+						| ((uint16_t)(b8 >> 4) << 0);
+				}
 			}
 		}
 		else if( is_rgb24 )
@@ -1149,7 +1258,7 @@ static void GL_TextureImageRAW( gl_texture_t *tex, int side, int level, int widt
 	// Allocate PVR memory if not already allocated
 	if( !tex->loaded || tex->vram_ptr == NULL )
 	{
-		tex->vram_ptr = pvr_mem_malloc( padded_size );
+		tex->vram_ptr = alloc_malloc( NULL, padded_size );
 		if( !tex->vram_ptr )
 		{
 			gEngfuncs.Con_Printf( S_ERROR "%s: failed to allocate PVR memory for %s\n", __func__, tex->name );
@@ -1195,7 +1304,7 @@ static void GL_TextureImageCompressed( gl_texture_t *tex, int side, int level, i
 	const size_t padded_size = ( size + 31 ) & ~31;
 	if( !tex->loaded || tex->vram_ptr == NULL )
 	{
-		tex->vram_ptr = pvr_mem_malloc( padded_size );
+		tex->vram_ptr = alloc_malloc( NULL, padded_size );
 		if( !tex->vram_ptr )
 		{
 			gEngfuncs.Con_Printf( S_ERROR "%s: failed to allocate PVR memory for compressed texture %s\n", __func__, tex->name );
@@ -1616,7 +1725,7 @@ static void GL_DeleteTexture( gl_texture_t *tex )
 	// Free PVR memory
 	if( tex->loaded && tex->vram_ptr != NULL )
 	{
-		pvr_mem_free( tex->vram_ptr );
+		alloc_free( NULL, tex->vram_ptr );
 		tex->vram_ptr = NULL;
 		tex->loaded = false;
 	}

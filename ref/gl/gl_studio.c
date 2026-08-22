@@ -21,6 +21,7 @@ GNU General Public License for more details.
 #include "studio.h"
 #include "pm_local.h"
 #include "pmtrace.h"
+#include "gl_export.h"
 #if XASH_DREAMCAST
 #include "img_pvr.h"
 #endif	
@@ -30,7 +31,7 @@ GNU General Public License for more details.
 
 #if XASH_DREAMCAST
 #undef MAXSTUDIOVERTS
-#define MAXSTUDIOVERTS 1024
+#define MAXSTUDIOVERTS 512
 #endif
 
 typedef struct
@@ -147,6 +148,10 @@ studiohdr_t		*m_pStudioHeader;
 float			m_flGaitMovement;
 int			g_nTopColor, g_nBottomColor;	// remap colors
 int			g_nFaceFlags, g_nForceFaceFlags;
+
+#if XASH_DREAMCAST
+static qboolean R_StudioProjectedTooSmall( cl_entity_t *ent );
+#endif
 
 /*
 ====================
@@ -822,14 +827,12 @@ static void R_StudioCalcRotations( cl_entity_t *e, float pos[][3], vec4_t *q, ms
 
 	// add in programtic controllers
 	pbone = (mstudiobone_t *)((byte *)m_pStudioHeader + m_pStudioHeader->boneindex);
-
+#if !XASH_DREAMCAST
 	R_StudioCalcBoneAdj( dadt, adj, e->curstate.controller, e->latched.prevcontroller, e->mouth.mouthopen );
+#endif // we are not latching mouths since we are speechless for now
 
 	for( i = 0; i < m_pStudioHeader->numbones; i++, pbone++, panim++ )
-	{
-		R_StudioCalcBoneQuaternion( frame, s, pbone, panim, adj, q[i] );
-		R_StudioCalcBonePosition( frame, s, pbone, panim, adj, pos[i] );
-	}
+		R_StudioCalcBones( frame, s, pbone, panim, adj, pos[i], q[i] );
 
 	if( pseqdesc->motiontype & STUDIO_X ) pos[pseqdesc->motionbone][0] = 0.0f;
 	if( pseqdesc->motiontype & STUDIO_Y ) pos[pseqdesc->motionbone][1] = 0.0f;
@@ -1441,17 +1444,18 @@ static void R_StudioDynamicLight( cl_entity_t *ent, alight_t *plight )
 			VectorCopy( g_studio.lightvec, lightDir );
 		}
 	}
-#if !XASH_DREAMCAST
+
 	if( ent->curstate.renderfx == kRenderFxLightMultiplier && ent->curstate.iuser4 != 10 )
 	{
 		light.r *= ent->curstate.iuser4 / 10.0f;
 		light.g *= ent->curstate.iuser4 / 10.0f;
 		light.b *= ent->curstate.iuser4 / 10.0f;
 	}
-#endif
+	
 	VectorSet( finalLight, light.r, light.g, light.b );
+#if !XASH_DREAMCAST
 	ent->cvFloorColor = light;
-
+#endif
 	total = Q_max( Q_max( light.r, light.g ), light.b );
 	if( total == 0.0f ) total = 1.0f;
 
@@ -3369,6 +3373,14 @@ static void R_StudioRenderModel( void )
 	R_StudioSetChromeOrigin();
 	R_StudioSetForceFaceFlags( 0 );
 
+#if XASH_DREAMCAST
+	// Cheap distance-based projected area cull for DC
+	if( RI.currententity && RI.currententity->model && RI.currententity->model->type == mod_studio )
+	{
+		if( R_StudioProjectedTooSmall( RI.currententity ))
+			return;
+	}
+#endif
 	if( RI.currententity->curstate.renderfx == kRenderFxGlowShell )
 	{
 		RI.currententity->curstate.renderfx = kRenderFxNone;
@@ -3672,6 +3684,13 @@ static int R_StudioDrawModel( int flags )
 	alight_t	lighting;
 	vec3_t	dir;
 
+#if XASH_DREAMCAST
+	if( RI.currententity && RI.currententity->model && RI.currententity->model->type == mod_studio )
+	{
+		if( R_StudioProjectedTooSmall( RI.currententity ))
+			return 0;
+	}
+#endif
 	if( RI.currententity->curstate.renderfx == kRenderFxDeadPlayer )
 	{
 		entity_state_t	deadplayer;
@@ -4132,12 +4151,14 @@ void Mod_StudioUnloadTextures( void *data )
 
 	ptexture = (mstudiotexture_t *)(((byte *)phdr) + phdr->textureindex);
 
-	// release all textures
+	// release all textures and reset indices to default to avoid stale binds
 	for( i = 0; i < phdr->numtextures; i++ )
 	{
-		if( ptexture[i].index == tr.defaultTexture )
-			continue;
-		GL_FreeTexture( ptexture[i].index );
+		if( ptexture[i].index != tr.defaultTexture )
+		{
+			GL_FreeTexture( ptexture[i].index );
+		}
+		ptexture[i].index = tr.defaultTexture;
 	}
 }
 
@@ -4253,3 +4274,41 @@ void CL_InitStudioAPI( void )
 	// just restore pointer to builtin function
 	pStudioDraw = &gStudioDraw;
 }
+
+// DC-only: projected area cull for studio models
+#if XASH_DREAMCAST
+static qboolean R_StudioProjectedTooSmall( cl_entity_t *ent )
+{
+	vec3_t mins, maxs, corners[8], s;
+	float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+	int i;
+	// world-space AABB from model bounds
+	for( i = 0; i < 3; ++i )
+	{
+		mins[i] = ent->origin[i] + ent->model->mins[i];
+		maxs[i] = ent->origin[i] + ent->model->maxs[i];
+	}
+	// 8 corners
+	corners[0][0]=mins[0]; corners[0][1]=mins[1]; corners[0][2]=mins[2];
+	corners[1][0]=maxs[0]; corners[1][1]=mins[1]; corners[1][2]=mins[2];
+	corners[2][0]=mins[0]; corners[2][1]=maxs[1]; corners[2][2]=mins[2];
+	corners[3][0]=maxs[0]; corners[3][1]=maxs[1]; corners[3][2]=mins[2];
+	corners[4][0]=mins[0]; corners[4][1]=mins[1]; corners[4][2]=maxs[2];
+	corners[5][0]=maxs[0]; corners[5][1]=mins[1]; corners[5][2]=maxs[2];
+	corners[6][0]=mins[0]; corners[6][1]=maxs[1]; corners[6][2]=maxs[2];
+	corners[7][0]=maxs[0]; corners[7][1]=maxs[1]; corners[7][2]=maxs[2];
+	for( i = 0; i < 8; ++i )
+	{
+		if( R_WorldToScreen( corners[i], s ))
+			return false; // behind; keep (let normal cull handle)
+		if( s[0] < minx ) minx = s[0];
+		if( s[0] > maxx ) maxx = s[0];
+		if( s[1] < miny ) miny = s[1];
+		if( s[1] > maxy ) maxy = s[1];
+	}
+	// approximate area
+	if( (maxx - minx) * (maxy - miny) < 96.0f )
+		return true;
+	return false;
+}
+#endif

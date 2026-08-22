@@ -195,7 +195,9 @@ static void CL_ClearTempEnts( void )
 	for( i = 0; i < DC_MAX_TENTS - 1; i++ )
 	{
 		cl_tempents[i].next = &cl_tempents[i+1];
+#if !XASH_DREAMCAST
 		cl_tempents[i].entity.trivial_accept = INVALID_HANDLE;
+#endif
 	}
 
 	cl_tempents[DC_MAX_TENTS-1].next = NULL;
@@ -248,12 +250,15 @@ static void CL_PrepareTEnt( TEMPENTITY *pTemp, model_t *pmodel )
 {
 	int	frameCount = 0;
 	int	modelIndex = 0;
+#if !XASH_DREAMCAST
 	int	modelHandle = pTemp->entity.trivial_accept;
-
+#endif
 	memset( pTemp, 0, sizeof( *pTemp ));
 
 	// use these to set per-frame and termination conditions / actions
+#if !XASH_DREAMCAST
 	pTemp->entity.trivial_accept = modelHandle; // keep unchanged
+#endif
 	pTemp->flags = FTENT_NONE;
 	pTemp->die = cl.time + 0.75f;
 
@@ -3110,6 +3115,7 @@ e.g. by demo request
 */
 void CL_ClearStaticEntities( void )
 {
+#if !XASH_DREAMCAST
 	int	i;
 
 	if( host.type == HOST_DEDICATED )
@@ -3122,6 +3128,7 @@ void CL_ClearStaticEntities( void )
 	clgame.numStatics = 0;
 
 	CL_ClearEfrags ();
+#endif
 }
 
 /*
@@ -3131,7 +3138,9 @@ CL_ClearEffects
 */
 void CL_ClearEffects( void )
 {
+#if !XASH_DREAMCAST
 	CL_ClearEfrags ();
+#endif
 	CL_ClearDlights ();
 	CL_ClearTempEnts ();
 	CL_ClearViewBeams ();

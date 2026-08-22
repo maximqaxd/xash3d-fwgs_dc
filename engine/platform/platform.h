@@ -107,6 +107,7 @@ int Linux_GetProcessID( void );
 #if XASH_DREAMCAST
 void setSystemRam( void );
 void getRamStatus( void );
+size_t getLargestAllocatableBlockEstimate( void );
 #endif
 
 static inline void Platform_Init( qboolean con_showalways )

@@ -15,11 +15,19 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "server.h"
+#include "crclib.h"
+#include <zlib.h>
 #include "library.h"
 #include "const.h"
 #include "render_api.h"	// decallist_t
 #include "sound.h"		// S_GetDynamicSounds
 #include "ref_common.h" // decals
+#if XASH_DREAMCAST
+#include <kos.h>
+#include <dc/vmu_pkg.h>
+#include <arch/cache.h>
+#include "platform/dreamcast/softreboot_dc.h"
+#endif
 
 /*
 ==============================================================================
@@ -33,8 +41,73 @@ half-life implementation of saverestore system
 #define SAVEGAME_VERSION		0x0071				// Version 0.71 GoldSrc compatible
 #define CLIENT_SAVEGAME_VERSION	0x0067				// Version 0.67
 
+// Optional zlib-compressed payload marker (little-endian "ZSVZ")
+#define SAVEGAME_ZMAGIC		(('Z'<<24)+('V'<<16)+('S'<<8)+'Z')
+
+static qboolean SV_SaveZlibCompress( const byte *in, uint inSize, byte **out, uint *outSize )
+{
+	uLongf bound;
+	Bytef *dst;
+	int rc;
+
+	if( !in || !inSize || !out || !outSize )
+		return false;
+
+	bound = compressBound( (uLong)inSize );
+	dst = (Bytef *)Mem_Malloc( host.mempool, (size_t)bound );
+	if( !dst )
+		return false;
+
+	rc = compress2( dst, &bound, (const Bytef *)in, (uLong)inSize, Z_BEST_COMPRESSION );
+	if( rc != Z_OK )
+	{
+		Mem_Free( dst );
+		return false;
+	}
+
+	*out = (byte *)dst;
+	*outSize = (uint)bound;
+	return true;
+}
+
+static qboolean SV_SaveZlibDecompress( const byte *in, uint inSize, byte *out, uint outSize )
+{
+	uLongf destLen = (uLongf)outSize;
+	int rc;
+
+	if( !in || !inSize || !out || !outSize )
+		return false;
+
+	rc = uncompress( (Bytef *)out, &destLen, (const Bytef *)in, (uLong)inSize );
+	if( rc != Z_OK )
+		return false;
+
+	// Require exact size match to avoid partial/garbage reads.
+	return (uint)destLen == outSize;
+}
+
+static void BuildHashTableFromMemory( SAVERESTOREDATA *pSaveData )
+{
+	char *pszTokenList;
+	int i;
+
+	pszTokenList = pSaveData->pBaseData;
+
+	if( pSaveData->tokenSize > 0 )
+	{
+		for( i = 0; i < pSaveData->tokenCount; i++ )
+		{
+			pSaveData->pTokens[i] = *pszTokenList ? pszTokenList : NULL;
+			while( *pszTokenList++ ); // Find next token (after next null)
+		}
+	}
+
+	pSaveData->pBaseData = pszTokenList;
+	pSaveData->pCurrentData = pSaveData->pBaseData;
+}
+
 #if XASH_DREAMCAST
-#define SAVE_HEAPSIZE		0x020000				// reserve 1Mb for now
+#define SAVE_HEAPSIZE		0x040000				// reserve 400kb for now
 #else
 #define SAVE_HEAPSIZE		0x400000				// reserve 4Mb for now
 #endif
@@ -502,7 +575,11 @@ static void ClearSaveDir( void )
 	int	i;
 
 	// just delete all HL? files
+#if XASH_DREAMCAST
+	t = FS_Search( va( "%s*.HL?", DEFAULT_SAVE_DIRECTORY ), true, true );
+#else
 	t = FS_Search( DEFAULT_SAVE_DIRECTORY "*.HL?", true, true );
+#endif
 	if( !t ) return; // already empty
 	for( i = 0; i < t->numfilenames; i++ )
 		FS_Delete( t->filenames[i] );
@@ -649,21 +726,65 @@ static void DirectoryCopy( const char *pPath, dc_file_t *pFile )
 	int	i, fileSize;
 	dc_file_t	*pCopy;
 	search_t	*t;
+	byte		*inBuf = NULL;
+	byte		*outBuf = NULL;
+	uint		outSize = 0;
 
 	t = FS_Search( pPath, true, true );
 	if( !t ) return; // nothing to copy ?
 
 	for( i = 0; i < t->numfilenames; i++ )
 	{
-		pCopy = FS_Open( t->filenames[i], "rb", true );
+#if XASH_DREAMCAST
+		char ramPath[MAX_SYSPATH];
+		Q_snprintf(ramPath, sizeof(ramPath), "/ram/%s", t->filenames[i]);
+        pCopy = FS_SysOpen(ramPath, "rb");
+#else
+        pCopy = FS_Open(t->filenames[i], "rb", true);
+#endif
+		if( !pCopy )
+			continue;
+
 		fileSize = FS_FileLength( pCopy );
 
 		memset( szName, 0, sizeof( szName )); // clearing the string to prevent garbage in output file
 		Q_strncpy( szName, COM_FileWithoutPath( t->filenames[i] ), sizeof( szName ));
 		FS_Write( pFile, szName, MAX_OSPATH );
-		FS_Write( pFile, &fileSize, sizeof( int ));
-		FS_FileCopy( pFile, pCopy, fileSize );
-		FS_Close( pCopy );
+
+		// Read file into memory, try to compress. If compression doesn't win, store raw.
+		inBuf = (byte *)Mem_Malloc( host.mempool, fileSize );
+		if( inBuf )
+		{
+			FS_Read( pCopy, inBuf, fileSize );
+			FS_Close( pCopy );
+
+			if( SV_SaveZlibCompress( inBuf, (uint)fileSize, &outBuf, &outSize ) && outSize < (uint)fileSize )
+			{
+				const int sizeMarker = (fileSize | 0x80000000);
+				const int compSize = (int)outSize;
+				FS_Write( pFile, &sizeMarker, sizeof( int ));
+				FS_Write( pFile, &compSize, sizeof( int ));
+				FS_Write( pFile, outBuf, outSize );
+				Mem_Free( outBuf );
+				outBuf = NULL;
+				outSize = 0;
+			}
+			else
+			{
+				FS_Write( pFile, &fileSize, sizeof( int ));
+				FS_Write( pFile, inBuf, fileSize );
+			}
+
+			Mem_Free( inBuf );
+			inBuf = NULL;
+		}
+		else
+		{
+			// Fallback: stream copy uncompressed if OOM
+			FS_Write( pFile, &fileSize, sizeof( int ));
+			FS_FileCopy( pFile, pCopy, fileSize );
+			FS_Close( pCopy );
+		}
 	}
 	Mem_Free( t );
 }
@@ -679,20 +800,68 @@ static void DirectoryExtract( dc_file_t *pFile, int fileCount )
 {
 	char	szName[MAX_OSPATH];
 	char	fileName[MAX_OSPATH];
-	int	i, fileSize;
+	int	i, sizeMarker, fileSize;
 	dc_file_t	*pCopy;
 
 	for( i = 0; i < fileCount; i++ )
 	{
 		// filename can only be as long as a map name + extension
 		FS_Read( pFile, szName, MAX_OSPATH );
-		FS_Read( pFile, &fileSize, sizeof( int ));
-		Q_snprintf( fileName, sizeof( fileName ), DEFAULT_SAVE_DIRECTORY "%s", szName );
+		FS_Read( pFile, &sizeMarker, sizeof( int ));
+		Q_snprintf( fileName, sizeof( fileName ), "/ram/%s", szName );
 		COM_FixSlashes( fileName );
-
+#if XASH_DREAMCAST
+		pCopy = FS_SysOpen( fileName, "wb");
+#else
 		pCopy = FS_Open( fileName, "wb", true );
-		FS_FileCopy( pCopy, pFile, fileSize );
-		FS_Close( pCopy );
+#endif
+		if( !pCopy )
+			return;
+
+		if( sizeMarker & 0x80000000 )
+		{
+			const int rawSize = (sizeMarker & 0x7FFFFFFF);
+			int compSize = 0;
+			byte *cdata = NULL;
+			byte *raw = NULL;
+
+			FS_Read( pFile, &compSize, sizeof( int ));
+			if( compSize <= 0 || rawSize <= 0 )
+			{
+				FS_Close( pCopy );
+				return;
+			}
+
+			cdata = (byte *)Mem_Malloc( host.mempool, compSize );
+			raw = (byte *)Mem_Malloc( host.mempool, rawSize );
+			if( !cdata || !raw )
+			{
+				if( cdata ) Mem_Free( cdata );
+				if( raw ) Mem_Free( raw );
+				FS_Close( pCopy );
+				return;
+			}
+
+			FS_Read( pFile, cdata, compSize );
+			if( !SV_SaveZlibDecompress( cdata, (uint)compSize, raw, (uint)rawSize ))
+			{
+				Mem_Free( cdata );
+				Mem_Free( raw );
+				FS_Close( pCopy );
+				return;
+			}
+
+			FS_Write( pCopy, raw, rawSize );
+			Mem_Free( cdata );
+			Mem_Free( raw );
+			FS_Close( pCopy );
+		}
+		else
+		{
+			fileSize = sizeMarker;
+			FS_FileCopy( pCopy, pFile, fileSize );
+			FS_Close( pCopy );
+		}
 	}
 }
 
@@ -1696,6 +1865,18 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	SAVERESTOREDATA	*pSaveData;
 	GAME_HEADER	gameHeader;
 	dc_file_t		*pFile;
+#if XASH_DREAMCAST
+	uint8_t*		saveBuffer = NULL;
+	uint32_t		saveBufferSize = 0;
+	uint32_t		saveWritten = 0;
+	FILE*		iconFile = NULL;
+	uint8_t*		iconData = NULL;
+	int		iconSize = 0;
+	vmu_pkg_t		pkg;
+	char		iconPath[MAX_QPATH];
+	uint8_t*		pkgData = NULL;
+	int		pkgDataSize = 0;
+#endif
 
 	pSaveData = SaveGameState( false );
 	if( !pSaveData ) return false;
@@ -1720,11 +1901,210 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	COM_FixSlashes( name );
 
 	// output to disk
+#if !XASH_DREAMCAST
 	if( !Q_stricmp( pSaveName, "quick" ))
 		AgeSaveList( pSaveName, GI->quicksave_aged_count );
 	else if( !Q_stricmp( pSaveName, "autosave" ))
 		AgeSaveList( pSaveName, GI->autosave_aged_count );
+#endif
 
+#if XASH_DREAMCAST
+	// Calculate maximum buffer size needed
+	uint32_t adjacencySize = 0;
+	search_t *t_size = FS_Search(hlPath, true, true);
+	
+	if(t_size)
+	{
+		for(int i = 0; i < t_size->numfilenames; i++)
+		{
+			// Worst-case per file: name + sizeMarker + compSize + compressBound(raw)
+			char ramPath[MAX_SYSPATH];
+			Q_snprintf(ramPath, sizeof(ramPath), "/ram/%s", t_size->filenames[i]);
+			dc_file_t *pFile_size = FS_SysOpen(ramPath, "rb");
+			
+			if(pFile_size)
+			{
+				int rawSize = FS_FileLength( pFile_size );
+				adjacencySize += (uint32_t)( MAX_OSPATH + sizeof(int) + sizeof(int) + (uint32_t)compressBound( (uLong)rawSize ));
+				FS_Close(pFile_size);
+			}
+		}
+		Mem_Free(t_size);
+	}
+	
+	// Build uncompressed payload: [tokenData][baseData], then compress it.
+	{
+		const uint32_t rawSize = (uint32_t)pSaveData->size;
+		const uint32_t tokenSize = (uint32_t)pSaveData->tokenSize;
+		const uint32_t tokenCount = (uint32_t)pSaveData->tokenCount;
+		const uint32_t payloadSize = tokenSize + rawSize;
+		byte *payload = (byte *)Mem_Malloc( host.mempool, payloadSize );
+		byte *cdata = NULL;
+		uint csize = 0;
+
+		if( !payload )
+		{
+			Con_Printf( "Failed to allocate save payload\n" );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		memcpy( payload, pTokenData, tokenSize );
+		memcpy( payload + tokenSize, pSaveData->pBaseData, rawSize );
+
+		if( !SV_SaveZlibCompress( payload, payloadSize, &cdata, &csize ))
+		{
+			Con_Printf( "Failed to compress save payload\n" );
+			Mem_Free( payload );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		Mem_Free( payload );
+
+		// Header: id, version, zmagic, rawSize, tokenCount, tokenSize, compSize
+		saveBufferSize = (uint32_t)( sizeof(int) * 7 + csize + adjacencySize );
+		saveBuffer = Mem_Malloc( host.mempool, saveBufferSize );
+
+		if( !saveBuffer )
+		{
+			Con_Printf( "Failed to allocate save buffer\n" );
+			Mem_Free( cdata );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		uint8_t *ptr = saveBuffer;
+
+		version = SAVEGAME_VERSION;
+		id = SAVEGAME_HEADER;
+		const int zmagic = SAVEGAME_ZMAGIC;
+		const int compSizeI = (int)csize;
+
+		memcpy( ptr, &id, sizeof( id )); ptr += sizeof( id );
+		memcpy( ptr, &version, sizeof( version )); ptr += sizeof( version );
+		memcpy( ptr, &zmagic, sizeof( zmagic )); ptr += sizeof( zmagic );
+		memcpy( ptr, &rawSize, sizeof( int )); ptr += sizeof( int );
+		memcpy( ptr, &tokenCount, sizeof( int )); ptr += sizeof( int );
+		memcpy( ptr, &tokenSize, sizeof( int )); ptr += sizeof( int );
+		memcpy( ptr, &compSizeI, sizeof( int )); ptr += sizeof( int );
+
+		memcpy( ptr, cdata, csize ); ptr += csize;
+		Mem_Free( cdata );
+
+		// Append adjacency map files (same format as DirectoryCopy, but supports per-file zlib)
+		search_t *t = FS_Search( hlPath, true, true );
+		if( t )
+		{
+			for( int i = 0; i < t->numfilenames; i++ )
+			{
+				char szName[MAX_OSPATH];
+				memset( szName, 0, sizeof( szName ));
+				Q_strncpy( szName, COM_FileWithoutPath( t->filenames[i] ), sizeof( szName ));
+				memcpy( ptr, szName, MAX_OSPATH );
+				ptr += MAX_OSPATH;
+
+				char ramPath[MAX_SYSPATH];
+				Q_snprintf( ramPath, sizeof( ramPath ), "/ram/%s", t->filenames[i] );
+				dc_file_t *pCopy = FS_SysOpen( ramPath, "rb" );
+				int fileSize = pCopy ? FS_FileLength( pCopy ) : 0;
+
+				if( pCopy && fileSize > 0 )
+				{
+					uint8_t *fileBuffer = (uint8_t *)Mem_Malloc( host.mempool, fileSize );
+					byte *cbuf = NULL;
+					uint csize = 0;
+
+					FS_Read( pCopy, fileBuffer, fileSize );
+					FS_Close( pCopy );
+
+					if( SV_SaveZlibCompress( fileBuffer, (uint)fileSize, &cbuf, &csize ) && csize < (uint)fileSize )
+					{
+						const int sizeMarker = (fileSize | 0x80000000);
+						const int compSize = (int)csize;
+						memcpy( ptr, &sizeMarker, sizeof( int )); ptr += sizeof( int );
+						memcpy( ptr, &compSize, sizeof( int )); ptr += sizeof( int );
+						memcpy( ptr, cbuf, csize ); ptr += csize;
+						Mem_Free( cbuf );
+					}
+					else
+					{
+						memcpy( ptr, &fileSize, sizeof( int )); ptr += sizeof( int );
+						memcpy( ptr, fileBuffer, fileSize ); ptr += fileSize;
+					}
+
+					Mem_Free( fileBuffer );
+				}
+				else
+				{
+					// Store empty/unreadable file as raw size=0 (legacy-compatible)
+					if( pCopy ) FS_Close( pCopy );
+					memcpy( ptr, &fileSize, sizeof( int ));
+					ptr += sizeof( int );
+				}
+			}
+			Mem_Free( t );
+		}
+
+		saveWritten = (uint32_t)( ptr - saveBuffer );
+	}
+
+	// Create the VMU package
+	uint8_t *vmu_data;
+	uint8_t icon_buf[512];
+	int vmu_data_size = (int)saveWritten; // Use actual written size
+	
+	vmu_pkg_t vmu_pkg;
+	memset(&vmu_pkg, 0, sizeof(vmu_pkg));
+	
+	Q_snprintf(vmu_pkg.desc_short, sizeof(vmu_pkg.desc_short), "%s", svgame.dllFuncs.pfnGetGameDescription());
+	Q_snprintf(vmu_pkg.desc_long, sizeof(vmu_pkg.desc_long), "%s", gameHeader.comment);
+	strncpy(vmu_pkg.app_id, "Xash3D", 16);
+	vmu_pkg.icon_cnt = 1;
+	vmu_pkg.icon_anim_speed = 0;
+	vmu_pkg.eyecatch_type = VMUPKG_EC_NONE;
+	vmu_pkg.data_len = vmu_data_size;
+	vmu_pkg.icon_data = icon_buf;
+	vmu_pkg.data = saveBuffer;
+	
+	// Try to load an icon
+	if(vmu_pkg_load_icon(&vmu_pkg, "/cd/valve/game.ico") < 0)
+	{
+		vmu_pkg.icon_cnt = 0;
+	}
+	
+	// Build the VMU package (also writes it to VMU)
+	char path[MAX_SYSPATH];
+	Q_snprintf(path, sizeof(path), "/vmu/a1/%s", name);
+	
+	if(vmu_pkg_build(&vmu_pkg, &vmu_data, &vmu_data_size) < 0)
+	{
+		Con_Printf("Failed to create VMU package\n");
+		Mem_Free(saveBuffer);
+		SaveFinish(pSaveData);
+		return false;
+	}
+	
+	// Write to VMU as a regular file
+	pFile = FS_SysOpen(path, "wb");
+	if(!pFile)
+	{
+		Con_Printf("Couldn't open %s\n", path);
+		free(vmu_data);
+		Mem_Free(saveBuffer);
+		SaveFinish(pSaveData);
+		return false;
+	}
+	
+	FS_Write(pFile, vmu_data, vmu_data_size);
+	FS_Close(pFile);
+	
+	// Clean up
+	free(vmu_data);
+	Mem_Free(saveBuffer);
+	
+	Con_Printf("Game saved to VMU (device a1)\n");
+#else
 	if(( pFile = FS_Open( name, "wb", true )) == NULL )
 	{
 		// something bad is happens
@@ -1739,20 +2119,54 @@ static qboolean SaveGameSlot( const char *pSaveName, const char *pSaveComment )
 	version = SAVEGAME_VERSION;
 	id = SAVEGAME_HEADER;
 
-	FS_Write( pFile, &id, sizeof( id ));
-	FS_Write( pFile, &version, sizeof( version ));
-	FS_Write( pFile, &pSaveData->size, sizeof( int )); // does not include token table
+	// Compress header+globals ([tokenData][baseData]) but keep adjacency raw at the end
+	{
+		const uint payloadSize = (uint)(pSaveData->tokenSize + pSaveData->size);
+		byte *payload = (byte *)Mem_Malloc( host.mempool, payloadSize );
+		byte *cdata = NULL;
+		uint csize = 0;
+		const int zmagic = SAVEGAME_ZMAGIC;
+		const int rawSize = pSaveData->size;
+		const int tokenCount = pSaveData->tokenCount;
+		const int tokenSize = pSaveData->tokenSize;
 
-	// write out the tokens first so we can load them before we load the entities
-	FS_Write( pFile, &pSaveData->tokenCount, sizeof( int ));
-	FS_Write( pFile, &pSaveData->tokenSize, sizeof( int ));
-	FS_Write( pFile, pTokenData, pSaveData->tokenSize );
-	FS_Write( pFile, pSaveData->pBaseData, pSaveData->size ); // header and globals
+		if( !payload )
+		{
+			FS_Close( pFile );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		memcpy( payload, pTokenData, pSaveData->tokenSize );
+		memcpy( payload + pSaveData->tokenSize, pSaveData->pBaseData, pSaveData->size );
+
+		if( !SV_SaveZlibCompress( payload, payloadSize, &cdata, &csize ))
+		{
+			Mem_Free( payload );
+			FS_Close( pFile );
+			SaveFinish( pSaveData );
+			return false;
+		}
+
+		Mem_Free( payload );
+
+		FS_Write( pFile, &id, sizeof( id ));
+		FS_Write( pFile, &version, sizeof( version ));
+		FS_Write( pFile, &zmagic, sizeof( zmagic ));
+		FS_Write( pFile, &rawSize, sizeof( int ));
+		FS_Write( pFile, &tokenCount, sizeof( int ));
+		FS_Write( pFile, &tokenSize, sizeof( int ));
+		FS_Write( pFile, &csize, sizeof( int ));
+		FS_Write( pFile, cdata, csize );
+
+		Mem_Free( cdata );
+	}
 
 	DirectoryCopy( hlPath, pFile );
-	SaveFinish( pSaveData );
 	FS_Close( pFile );
+#endif
 
+	SaveFinish( pSaveData );
 	return true;
 }
 
@@ -1768,6 +2182,7 @@ static int SaveReadHeader( dc_file_t *pFile, GAME_HEADER *pHeader )
 	int		tokenCount, tokenSize;
 	int		size, id, version;
 	SAVERESTOREDATA	*pSaveData;
+	int		marker;
 
 	FS_Read( pFile, &id, sizeof( id ));
 	if( id != SAVEGAME_HEADER )
@@ -1783,9 +2198,68 @@ static int SaveReadHeader( dc_file_t *pFile, GAME_HEADER *pHeader )
 		return 0;
 	}
 
-	FS_Read( pFile, &size, sizeof( int ));
-	FS_Read( pFile, &tokenCount, sizeof( int ));
-	FS_Read( pFile, &tokenSize, sizeof( int ));
+	// New format: id,version,ZSVZ,size,tokenCount,tokenSize,compSize,compData, then adjacency raw.
+	// Old format: id,version,size,tokenCount,tokenSize,tokenData,baseData, then adjacency raw.
+	FS_Read( pFile, &marker, sizeof( int ));
+	if( marker == SAVEGAME_ZMAGIC )
+	{
+		int compSize;
+		byte *cdata;
+		uint payloadSize;
+
+		FS_Read( pFile, &size, sizeof( int ));
+		FS_Read( pFile, &tokenCount, sizeof( int ));
+		FS_Read( pFile, &tokenSize, sizeof( int ));
+		FS_Read( pFile, &compSize, sizeof( int ));
+
+		payloadSize = (uint)( size + tokenSize );
+		if( compSize <= 0 || payloadSize <= 0 )
+		{
+			FS_Close( pFile );
+			return 0;
+		}
+
+		pSaveData = SaveInit( payloadSize, tokenCount );
+		pSaveData->tokenCount = tokenCount;
+		pSaveData->tokenSize = tokenSize;
+
+		cdata = (byte *)Mem_Malloc( host.mempool, compSize );
+		if( !cdata )
+		{
+			SaveFinish( pSaveData );
+			FS_Close( pFile );
+			return 0;
+		}
+
+		FS_Read( pFile, cdata, compSize );
+
+		if( !SV_SaveZlibDecompress( cdata, (uint)compSize, (byte *)pSaveData->pBaseData, payloadSize ))
+		{
+			Mem_Free( cdata );
+			SaveFinish( pSaveData );
+			FS_Close( pFile );
+			return 0;
+		}
+
+		Mem_Free( cdata );
+
+		BuildHashTableFromMemory( pSaveData );
+
+		pSaveData->fUseLandmark = false;
+		pSaveData->time = 0.0f;
+
+		svgame.dllFuncs.pfnSaveReadFields( pSaveData, "GameHeader", pHeader, gGameHeader, ARRAYSIZE( gGameHeader ));
+		svgame.dllFuncs.pfnRestoreGlobalState( pSaveData );
+		SaveFinish( pSaveData );
+		return 1;
+	}
+	else
+	{
+		// Legacy: marker is the "size"
+		size = marker;
+		FS_Read( pFile, &tokenCount, sizeof( int ));
+		FS_Read( pFile, &tokenSize, sizeof( int ));
+	}
 
 	pSaveData = SaveInit( size + tokenSize, tokenCount );
 	pSaveData->tokenCount = tokenCount;
@@ -1988,6 +2462,493 @@ static void LoadAdjacentEnts( const char *pOldLevel, const char *pLandmarkName )
 		Host_Error( "Level transition ERROR\nCan't find connection to %s from %s\n", pOldLevel, sv.name );
 }
 
+#if XASH_DREAMCAST
+extern cvar_t dc_softreboot;
+extern cvar_t dc_softreboot_threshold_kb;
+extern cvar_t dc_softreboot_minexec_kb;
+
+static qboolean SoftReboot_LoadVfsFileToReserved( const char *path, uint32_t *out_addr, uint32_t *out_len )
+{
+	dc_file_t *f;
+	fs_offset_t size;
+	void *dst;
+
+	if( !path || !out_addr || !out_len )
+		return false;
+
+	f = FS_Open( path, "rb", true );
+	if( !f )
+		return false;
+
+	size = FS_FileLength( f );
+	if( size <= 0 )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	dst = DC_SoftReboot_ReserveAlloc( (size_t)size, 32 );
+	if( !dst )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	if( FS_Read( f, dst, (size_t)size ) != (int)size )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	FS_Close( f );
+	*out_addr = (uint32_t)(uintptr_t)dst;
+	*out_len = (uint32_t)size;
+	return true;
+}
+
+static qboolean SoftReboot_SaveVfsFileFromBlob( const char *path, uint32_t addr, uint32_t len )
+{
+	dc_file_t *f;
+	const void *src = (const void *)(uintptr_t)addr;
+
+	if( !path || !addr || !len )
+		return false;
+
+	f = FS_Open( path, "wb", true );
+	if( !f )
+		return false;
+
+	if( FS_Write( f, src, (size_t)len ) != (int)len )
+	{
+		FS_Close( f );
+		return false;
+	}
+
+	FS_Close( f );
+	return true;
+}
+
+static qboolean SoftReboot_SaveSysFileFromBlob( const char *path, uint32_t addr, uint32_t len )
+{
+	file_t f;
+	ssize_t rv;
+	const void *src = (const void *)(uintptr_t)addr;
+
+	if( !path || !addr || !len )
+		return false;
+
+	f = fs_open( path, O_WRONLY | O_CREAT | O_TRUNC );
+	if( f < 0 )
+		return false;
+
+	rv = fs_write( f, src, len );
+	fs_close( f );
+	return rv == (ssize_t)len;
+}
+
+static uint32_t SoftReboot_CalcCRC32( const void *data, uint32_t len )
+{
+	uint32_t crc;
+
+	if( !data || !len )
+		return 0;
+
+	CRC32_Init( &crc );
+	CRC32_ProcessBuffer( &crc, data, (int)len );
+	return CRC32_Final( crc );
+}
+
+#define SOFTREBOOT_GS_MAGIC 0x31534744u /* 'DGS1' */
+
+static void SoftReboot_BuildHashTableFromMem( SAVERESTOREDATA *pSaveData )
+{
+	char *pszTokenList = pSaveData->pBaseData;
+	int i;
+
+	if( pSaveData->tokenSize > 0 )
+	{
+		for( i = 0; i < pSaveData->tokenCount; i++ )
+		{
+			pSaveData->pTokens[i] = *pszTokenList ? pszTokenList : NULL;
+			while( *pszTokenList++ );
+		}
+	}
+
+	pSaveData->pBaseData = pszTokenList;
+	pSaveData->pCurrentData = pSaveData->pBaseData;
+}
+
+static qboolean SoftReboot_SaveGlobalStateToReserved( SAVERESTOREDATA *scratch, uint32_t *out_addr, uint32_t *out_len )
+{
+	char *pTokenData;
+	uint32_t dataSize, tokenSize, tokenCount;
+	uint32_t total;
+	byte *dst, *p;
+
+	if( !scratch || !out_addr || !out_len || !svgame.dllFuncs.pfnSaveGlobalState )
+		return false;
+
+	/* Reuse existing SaveGameState buffer */
+	SaveClear( scratch );
+
+	svgame.dllFuncs.pfnSaveGlobalState( scratch );
+	pTokenData = StoreHashTable( scratch );
+
+	dataSize = (uint32_t)scratch->size;
+	tokenSize = (uint32_t)scratch->tokenSize;
+	tokenCount = (uint32_t)scratch->tokenCount;
+	total = 16u + tokenSize + dataSize;
+
+	dst = (byte *)DC_SoftReboot_ReserveAlloc( total, 32 );
+	if( !dst )
+	{
+		return false;
+	}
+
+	p = dst;
+	*(uint32_t *)p = SOFTREBOOT_GS_MAGIC; p += 4u;
+	*(uint32_t *)p = dataSize; p += 4u;
+	*(uint32_t *)p = tokenCount; p += 4u;
+	*(uint32_t *)p = tokenSize; p += 4u;
+
+	if( tokenSize )
+	{
+		memcpy( p, pTokenData, tokenSize );
+		p += tokenSize;
+	}
+
+	if( dataSize )
+	{
+		memcpy( p, scratch->pBaseData, dataSize );
+		p += dataSize;
+	}
+
+	dcache_flush_range( (uintptr_t)dst, total );
+
+	*out_addr = (uint32_t)(uintptr_t)dst;
+	*out_len = total;
+	return true;
+}
+
+static qboolean SoftReboot_RestoreGlobalStateFromReserved( uint32_t addr, uint32_t len )
+{
+	const byte *p = (const byte *)(uintptr_t)addr;
+	uint32_t magic, dataSize, tokenCount, tokenSize;
+	SAVERESTOREDATA *pSaveData;
+
+	if( !addr || len < 16u || !svgame.dllFuncs.pfnRestoreGlobalState )
+		return false;
+
+	magic = *(const uint32_t *)p; p += 4u;
+	dataSize = *(const uint32_t *)p; p += 4u;
+	tokenCount = *(const uint32_t *)p; p += 4u;
+	tokenSize = *(const uint32_t *)p; p += 4u;
+
+	if( magic != SOFTREBOOT_GS_MAGIC )
+		return false;
+	if( 16u + tokenSize + dataSize > len )
+		return false;
+
+	pSaveData = SaveInit( (int)( dataSize + tokenSize ), (int)tokenCount );
+	if( !pSaveData )
+		return false;
+	pSaveData->tokenCount = (int)tokenCount;
+	pSaveData->tokenSize = (int)tokenSize;
+
+	if( tokenSize )
+		memcpy( pSaveData->pBaseData, p, tokenSize );
+	SoftReboot_BuildHashTableFromMem( pSaveData );
+	p += tokenSize;
+
+	if( dataSize )
+		memcpy( pSaveData->pBaseData, p, dataSize );
+
+	svgame.dllFuncs.pfnRestoreGlobalState( pSaveData );
+	SaveFinish( pSaveData );
+	return true;
+}
+
+static qboolean SV_SoftReboot_ChangeLevel( const char *mapname, const char *startspot, qboolean background )
+{
+	char oldlevel[MAX_QPATH];
+	char hl1_path[MAX_OSPATH];
+	char hl2_path[MAX_QPATH];
+	char hl3_path[MAX_QPATH];
+	SAVERESTOREDATA *pSaveData;
+	dc_softreboot_desc_t *d;
+	uint32_t addr, len;
+	qboolean old_changelevel;
+	size_t largest_block;
+	int largest_kb, threshold_kb, minexec_kb;
+
+	if( !dc_softreboot.value )
+		return false;
+
+	largest_block = getLargestAllocatableBlockEstimate();
+	largest_kb = (int)( largest_block / 1024u );
+	threshold_kb = Q_max( 0, (int)dc_softreboot_threshold_kb.value );
+	minexec_kb = Q_max( 0, (int)dc_softreboot_minexec_kb.value );
+
+	/* Trigger soft reboot only when memory gets low enough. */
+	if( threshold_kb > 0 && largest_kb > threshold_kb )
+		return false;
+
+	/* Don't attempt soft reboot if we are already too low to serialize safely. */
+	if( minexec_kb > 0 && largest_kb < minexec_kb )
+	{
+		Con_DPrintf( S_WARN "%s: skipped: largest block %d KB < minexec %d KB\n", __func__, largest_kb, minexec_kb );
+		return false;
+	}
+
+	if( threshold_kb > 0 )
+		Con_DPrintf( "%s:  trigger: largest block %d KB <= threshold %d KB\n", __func__, largest_kb, threshold_kb );
+
+	d = DC_SoftReboot_Desc();
+	DC_SoftReboot_Clear();
+
+	Q_strncpy( oldlevel, sv.name, sizeof( oldlevel ));
+
+	d->magic = DC_SOFTREBOOT_MAGIC;
+	d->version = (uint16_t)DC_SOFTREBOOT_VERSION;
+	d->header_size = (uint16_t)sizeof( *d );
+	d->commit = 0;
+	d->flags = 0;
+
+	Q_strncpy( d->prev_map, oldlevel, sizeof( d->prev_map ));
+	Q_strncpy( d->next_map, mapname, sizeof( d->next_map ));
+	Q_strncpy( d->startspot, startspot ? startspot : "", sizeof( d->startspot ));
+	d->background = background ? 1u : 0u;
+
+	/* Save the current level's state to temp save files (HL1/HL2/HL3). */
+	old_changelevel = svgame.globals->changelevel;
+	svgame.globals->changelevel = true;
+	pSaveData = SaveGameState( true );
+	if( !pSaveData )
+	{
+		DC_SoftReboot_Clear();
+		svgame.globals->changelevel = old_changelevel;
+		return false;
+	}
+
+	/*
+	 * Important: reserve reboot window only after SaveGameState().
+	 * SaveInit/SaveGameState needs about 300kb from heap.
+	 */
+	DC_SoftReboot_MemReserveInit();
+	DC_SoftReboot_ReserveReset();
+
+	/* Capture DLL global state (critical for global entities like tracktrain). */
+	if( SoftReboot_SaveGlobalStateToReserved( pSaveData, &addr, &len ))
+	{
+		d->gs_addr = addr;
+		d->gs_len = len;
+		d->gs_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_GS;
+	}
+
+	SaveFinish( pSaveData );
+
+	/* Capture save blobs into reserved RAM. */
+	Q_snprintf( hl1_path, sizeof( hl1_path ), "/ram/%s.HL1", oldlevel );
+	if( DC_SoftReboot_LoadFileToReserved( hl1_path, &addr, &len ))
+	{
+		d->hl1_addr = addr;
+		d->hl1_len = len;
+		d->hl1_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_HL1;
+	}
+	else
+	{
+		DC_SoftReboot_Clear();
+		DC_SoftReboot_MemReserveShutdown();
+		return false;
+	}
+
+	Q_snprintf( hl2_path, sizeof( hl2_path ), DEFAULT_SAVE_DIRECTORY "%s.HL2", oldlevel );
+	if( SoftReboot_LoadVfsFileToReserved( hl2_path, &addr, &len ))
+	{
+		d->hl2_addr = addr;
+		d->hl2_len = len;
+		d->hl2_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_HL2;
+	}
+
+	Q_snprintf( hl3_path, sizeof( hl3_path ), DEFAULT_SAVE_DIRECTORY "%s.HL3", oldlevel );
+	if( SoftReboot_LoadVfsFileToReserved( hl3_path, &addr, &len ))
+	{
+		d->hl3_addr = addr;
+		d->hl3_len = len;
+		d->hl3_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		dcache_flush_range( (uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_HL3;
+	}
+
+	/* Load fresh (unscrambled) engine image and exec. */
+	if( DC_SoftReboot_LoadFileToReserved( "/cd/XASH.BIN", &addr, &len ))
+	{
+		d->image_addr = addr;
+		d->image_len = len;
+		d->image_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_IMAGE;
+
+		/* two-phase commit: mark ready only after all blobs are in place */
+		d->commit = DC_SOFTREBOOT_COMMIT;
+		dcache_flush_range( (uintptr_t)d, sizeof( *d ));
+
+		DC_SoftReboot_ExecImage( addr, len );
+		return true; /* unreachable */
+	}
+
+	DC_SoftReboot_Clear();
+	DC_SoftReboot_MemReserveShutdown();
+	svgame.globals->changelevel = old_changelevel;
+	return false;
+}
+
+void SV_SoftReboot_Resume_f( void )
+{
+	dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	char hl1_path[MAX_OSPATH];
+	char hl2_path[MAX_QPATH];
+	char hl3_path[MAX_QPATH];
+	char prev_map[MAX_QPATH];
+	char next_map[MAX_QPATH];
+	char startspot_buf[MAX_QPATH];
+	const char *startspot;
+	qboolean background;
+	uint32_t crc;
+
+	if( d->magic != DC_SOFTREBOOT_MAGIC || d->version != DC_SOFTREBOOT_VERSION || d->commit != DC_SOFTREBOOT_COMMIT )
+		return;
+
+	/* Validate blobs before touching filesystem or server state. */
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL1 ) && d->hl1_addr && d->hl1_len && d->hl1_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->hl1_addr, d->hl1_len );
+		if( crc != d->hl1_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL2 ) && d->hl2_addr && d->hl2_len && d->hl2_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->hl2_addr, d->hl2_len );
+		if( crc != d->hl2_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL3 ) && d->hl3_addr && d->hl3_len && d->hl3_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->hl3_addr, d->hl3_len );
+		if( crc != d->hl3_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_GS ) && d->gs_addr && d->gs_len && d->gs_crc32 )
+	{
+		crc = SoftReboot_CalcCRC32( (const void *)(uintptr_t)d->gs_addr, d->gs_len );
+		if( crc != d->gs_crc32 ) { DC_SoftReboot_Clear(); return; }
+	}
+
+	Q_strncpy( prev_map, d->prev_map, sizeof( prev_map ));
+	Q_strncpy( next_map, d->next_map, sizeof( next_map ));
+	Q_strncpy( startspot_buf, d->startspot, sizeof( startspot_buf ));
+	startspot = COM_CheckString( startspot_buf ) ? startspot_buf : NULL;
+	background = d->background ? true : false;
+
+	if( !COM_CheckString( next_map ))
+	{
+		DC_SoftReboot_Clear();
+		return;
+	}
+
+	/* Rehydrate temp save files from handoff blobs. */
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL1 ) && d->hl1_addr && d->hl1_len )
+	{
+		/*
+		 * HL1/HL2/HL3 blobs we captured belong to the PREVIOUS map state
+		 * (the one we just saved before reboot). Do not fabricate next_map
+		 * save files from prev_map blobs: if next_map has no saved state yet,
+		 * LoadGameState(next_map) must fail and the engine will spawn entities
+		 * from BSP, then transfer globals/player from prev_map via LoadAdjacentEnts.
+		 */
+		Q_snprintf( hl1_path, sizeof( hl1_path ), "/ram/%s.HL1", prev_map );
+		if( !SoftReboot_SaveSysFileFromBlob( hl1_path, d->hl1_addr, d->hl1_len ))
+			Con_Printf( S_ERROR "%s: failed to rehydrate %s (%u bytes)\n", __func__, hl1_path, (uint)d->hl1_len );
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL2 ) && d->hl2_addr && d->hl2_len )
+	{
+		Q_snprintf( hl2_path, sizeof( hl2_path ), DEFAULT_SAVE_DIRECTORY "%s.HL2", prev_map );
+		if( !SoftReboot_SaveVfsFileFromBlob( hl2_path, d->hl2_addr, d->hl2_len ))
+			Con_Printf( S_ERROR "%s: failed to rehydrate %s (%u bytes)\n", __func__, hl2_path, (uint)d->hl2_len );
+	}
+
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_HL3 ) && d->hl3_addr && d->hl3_len )
+	{
+		Q_snprintf( hl3_path, sizeof( hl3_path ), DEFAULT_SAVE_DIRECTORY "%s.HL3", prev_map );
+		if( !SoftReboot_SaveVfsFileFromBlob( hl3_path, d->hl3_addr, d->hl3_len ))
+			Con_Printf( S_ERROR "%s: failed to rehydrate %s (%u bytes)\n", __func__, hl3_path, (uint)d->hl3_len );
+	}
+
+	if( !SV_InitGame( ))
+		return;
+
+	svs.initialized = true;
+	svgame.globals->changelevel = true;
+
+	/* Restore DLL global state before loading the next map. */
+	if( FBitSet( d->flags, DC_SOFTREBOOT_F_HAS_GS ) && d->gs_addr && d->gs_len )
+	{
+		if( !SoftReboot_RestoreGlobalStateFromReserved( d->gs_addr, d->gs_len ))
+			Con_Printf( S_WARN "%s: failed to restore global state blob\n", __func__ );
+	}
+
+	/* Clear descriptor early to avoid loops if anything below fails. */
+	DC_SoftReboot_Clear();
+
+	if( !SV_SpawnServer( next_map, (char *)startspot, background ))
+		return;
+
+	if( !LoadGameState( next_map, true ))
+		SV_SpawnEntities( next_map );
+
+	LoadAdjacentEnts( prev_map, startspot );
+	ClearSaveDir();
+	SV_ActivateServer( false );
+}
+
+void SV_SoftReboot_Test_f( void )
+{
+	dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	uint32_t addr = 0, len = 0;
+
+	DC_SoftReboot_MemReserveInit();
+	DC_SoftReboot_Clear();
+	DC_SoftReboot_ReserveReset();
+
+	d->magic = DC_SOFTREBOOT_MAGIC;
+	d->version = (uint16_t)DC_SOFTREBOOT_VERSION;
+	d->header_size = (uint16_t)sizeof( *d );
+	d->commit = 0;
+	d->flags = 0;
+
+	if( DC_SoftReboot_LoadFileToReserved( "/cd/XASH.BIN", &addr, &len ))
+	{
+		d->image_addr = addr;
+		d->image_len = len;
+		d->image_crc32 = SoftReboot_CalcCRC32( (const void *)(uintptr_t)addr, len );
+		d->flags |= DC_SOFTREBOOT_F_HAS_IMAGE;
+		d->commit = DC_SOFTREBOOT_COMMIT;
+		dcache_flush_range( (uintptr_t)d, sizeof( *d ));
+
+		DC_SoftReboot_ExecImage( addr, len );
+	}
+
+	DC_SoftReboot_Clear();
+	DC_SoftReboot_MemReserveShutdown();
+}
+#endif /* XASH_DREAMCAST */
+
 /*
 =============
 SV_LoadGameState
@@ -2045,6 +3006,11 @@ void SV_ChangeLevel( qboolean loadfromsavedgame, const char *mapname, const char
 
 	if( loadfromsavedgame )
 	{
+#if XASH_DREAMCAST
+		/* Optional: defragment heap by soft rebooting on changelevel. */
+		if( SV_SoftReboot_ChangeLevel( level, startspot, background ))
+			return; /* unreachable on success */
+#endif
 		// smooth transition in-progress
 		svgame.globals->changelevel = true;
 
@@ -2067,9 +3033,12 @@ void SV_ChangeLevel( qboolean loadfromsavedgame, const char *mapname, const char
 		if( !LoadGameState( level, true ))
 			SV_SpawnEntities( level );
 		LoadAdjacentEnts( oldlevel, startspot );
-
+#if XASH_DREAMCAST
+		ClearSaveDir();
+#else
 		if( sv_newunit.value )
 			ClearSaveDir();
+#endif
 		SV_ActivateServer( false );
 	}
 	else
@@ -2111,7 +3080,13 @@ qboolean SV_LoadGame( const char *pPath )
 		return false;
 
 	svs.initialized = true;
+#if XASH_DREAMCAST
+	char		path[MAX_SYSPATH];
+	Q_snprintf( path, sizeof( path ), "/vmu/a1/%s", pPath);
+	pFile = FS_SysOpen( path, "rb" );
+#else
 	pFile = FS_Open( pPath, "rb", true );
+#endif
 	if( pFile )
 	{
 		SV_ClearGameState();
@@ -2183,8 +3158,20 @@ qboolean SV_SaveGame( const char *pName )
 		{
 			Q_snprintf( savename, sizeof( savename ), "save%03d", n );
 
+#if XASH_DREAMCAST
+			{
+				char vmuPath[MAX_SYSPATH];
+				dc_file_t *test;
+				Q_snprintf( vmuPath, sizeof( vmuPath ), "/vmu/a1/%s.sav", savename );
+				test = FS_SysOpen( vmuPath, "rb" );
+				if( !test )
+					break;
+				FS_Close( test );
+			}
+#else
 			if( !FS_FileExists( va( DEFAULT_SAVE_DIRECTORY "%s.sav", savename ), true ))
 				break;
+#endif
 		}
 
 		if( n == 1000 )
@@ -2194,6 +3181,7 @@ qboolean SV_SaveGame( const char *pName )
 		}
 	}
 	else Q_strncpy( savename, pName, sizeof( savename ));
+
 
 #if !XASH_DEDICATED
 	// unload previous image from memory (it's will be overwritten)
@@ -2230,9 +3218,28 @@ const char *SV_GetLatestSave( void )
 	int		newest = 0, ft;
 	int		i, found = 0;
 	search_t		*t;
+
+#if XASH_DREAMCAST
+	// Dreamcast: saves are stored on VMU, so FS_Search may not see them.
+	// Fallback to the highest existing slot saveNNN.sav on /vmu/a1.
+	for( i = 10; i >= 0; i-- )
+	{
+		char vmuPath[MAX_SYSPATH];
+		dc_file_t *test;
+		Q_snprintf( savename, sizeof( savename ), "save%03d.sav", i );
+		Q_snprintf( vmuPath, sizeof( vmuPath ), "/vmu/a1/%s", savename );
+		test = FS_SysOpen( vmuPath, "rb" );
+		if( test )
+		{
+			FS_Close( test );
+			return savename;
+		}
+	}
+	return NULL;
+#else
 	if(( t = FS_Search( "DEFAULT_SAVE_DIRECTORY" "*.sav" , true, true )) == NULL )
 		return NULL;
-
+#endif
 	for( i = 0; i < t->numfilenames; i++ )
 	{
 		ft = FS_FileTime( t->filenames[i], true );
@@ -2267,11 +3274,18 @@ check savegame for valid
 int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 {
 	int	i, tag, size, nNumberOfFields, nFieldSize, tokenSize, tokenCount;
+	int	marker;
 	char	*pData, *pSaveData, *pFieldName, **pTokenList;
 	string	mapName, description;
 	dc_file_t	*f;
 
+#if XASH_DREAMCAST
+	char		path[MAX_SYSPATH];
+	Q_snprintf( path, sizeof( path ), "/vmu/a1/%s", savename);
+	if(( f = FS_SysOpen( path, "rb")) == NULL )
+#else
 	if(( f = FS_Open( savename, "rb", true )) == NULL )
+#endif
 	{
 		// just not exist - clear comment
 		comment[0] = '\0';
@@ -2314,10 +3328,68 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 	mapName[0] = '\0';
 	comment[0] = '\0';
 
-	FS_Read( f, &size, sizeof( int ));
-	FS_Read( f, &tokenCount, sizeof( int ));	// These two ints are the token list
-	FS_Read( f, &tokenSize, sizeof( int ));
-	size += tokenSize;
+	FS_Read( f, &marker, sizeof( int ));
+	if( marker == SAVEGAME_ZMAGIC )
+	{
+		int compSize;
+		byte *cdata;
+		uint payloadSize;
+
+		FS_Read( f, &size, sizeof( int ));
+		FS_Read( f, &tokenCount, sizeof( int ));
+		FS_Read( f, &tokenSize, sizeof( int ));
+		FS_Read( f, &compSize, sizeof( int ));
+
+		payloadSize = (uint)( size + tokenSize );
+		if( compSize <= 0 || payloadSize == 0 )
+		{
+			Q_strncpy( comment, "<corrupted>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		// sanity check.
+		if( tokenCount < 0 || tokenCount > SAVE_HASHSTRINGS || tokenSize < 0 || tokenSize > SAVE_HEAPSIZE )
+		{
+			Q_strncpy( comment, "<corrupted hashtable>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		pSaveData = (char *)Mem_Malloc( host.mempool, payloadSize );
+		cdata = (byte *)Mem_Malloc( host.mempool, compSize );
+
+		if( !pSaveData || !cdata )
+		{
+			if( pSaveData ) Mem_Free( pSaveData );
+			if( cdata ) Mem_Free( cdata );
+			Q_strncpy( comment, "<out of memory>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		FS_Read( f, cdata, compSize );
+		if( !SV_SaveZlibDecompress( cdata, (uint)compSize, (byte *)pSaveData, payloadSize ))
+		{
+			Mem_Free( cdata );
+			Mem_Free( pSaveData );
+			Q_strncpy( comment, "<corrupted>", MAX_STRING );
+			FS_Close( f );
+			return 0;
+		}
+
+		Mem_Free( cdata );
+		pData = pSaveData;
+		size = (int)payloadSize;
+	}
+	else
+	{
+		// Legacy: marker is "size"
+		size = marker;
+		FS_Read( f, &tokenCount, sizeof( int ));	// These two ints are the token list
+		FS_Read( f, &tokenSize, sizeof( int ));
+		size += tokenSize;
+	}
 
 	// sanity check.
 	if( tokenCount < 0 || tokenCount > SAVE_HASHSTRINGS )
@@ -2334,9 +3406,12 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 		return 0;
 	}
 
-	pSaveData = (char *)Mem_Malloc( host.mempool, size );
-	FS_Read( f, pSaveData, size );
-	pData = pSaveData;
+	if( marker != SAVEGAME_ZMAGIC )
+	{
+		pSaveData = (char *)Mem_Malloc( host.mempool, size );
+		FS_Read( f, pSaveData, size );
+		pData = pSaveData;
+	}
 
 	// allocate a table for the strings, and parse the table
 	if( tokenSize > 0 )
@@ -2353,9 +3428,19 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 	else pTokenList = NULL;
 
 	// short, short (size, index of field name)
+#if XASH_DREAMCAST /* FIX Unaligned access! */
+	short offpd;
+	memcpy(&offpd, pData, sizeof( short ) );
+	nFieldSize = offpd;
+	pData += sizeof( short );
+
+	memcpy(&offpd, pData, sizeof( short ));
+	pFieldName = pTokenList[offpd];
+#else	
 	nFieldSize = *(short *)pData;
 	pData += sizeof( short );
 	pFieldName = pTokenList[*(short *)pData];
+#endif
 
 	if( Q_stricmp( pFieldName, "GameHeader" ))
 	{
@@ -2368,7 +3453,11 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 
 	// int (fieldcount)
 	pData += sizeof( short );
+#if XASH_DREAMCAST /* FIX Unaligned access! */
+	memcpy(&nNumberOfFields, pData, sizeof(int));
+#else
 	nNumberOfFields = (int)*pData;
+#endif	
 	pData += nFieldSize;
 
 	// each field is a short (size), short (index of name), binary string of "size" bytes (data)
@@ -2379,11 +3468,21 @@ int GAME_EXPORT SV_GetSaveComment( const char *savename, char *comment )
 		// Size
 		// szName
 		// Actual Data
+#if XASH_DREAMCAST /* FIX Unaligned access! */
+		memcpy(&offpd, pData, sizeof( short ) );
+		nFieldSize = offpd;
+		pData += sizeof( short );
+		
+		memcpy(&offpd, pData, sizeof( short ));
+		pFieldName = pTokenList[offpd];
+		pData += sizeof( short );
+#else
 		nFieldSize = *(short *)pData;
 		pData += sizeof( short );
 
 		pFieldName = pTokenList[*(short *)pData];
 		pData += sizeof( short );
+#endif
 
 		size = Q_min( nFieldSize, MAX_STRING );
 

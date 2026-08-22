@@ -86,5 +86,6 @@ static inline void PM_InitPMTrace( pmtrace_t *trace, const vec3_t end )
 msurface_t *PM_RecursiveSurfCheck( model_t *model, mnode_t *node, vec3_t p1, vec3_t p2 );
 msurface_t *PM_TraceSurface( physent_t *pe, vec3_t start, vec3_t end );
 int PM_TestLineExt( playermove_t *pmove, physent_t *ents, int numents, const vec3_t start, const vec3_t end, int flags );
+extern playermove_t g_shared_playermove;
 
 #endif//PM_LOCAL_H

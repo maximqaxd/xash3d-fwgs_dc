@@ -96,7 +96,7 @@ typedef struct
 #define ANGLE_MASK		(ANGLE_BACKUP - 1)
 
 #define CL_UPDATE_MASK	(CL_UPDATE_BACKUP - 1)
-#if XASH_LOW_MEMORY == 2 && !XASH_DREAMCAST
+#if XASH_LOW_MEMORY == 2 
 #define CL_UPDATE_BACKUP SINGLEPLAYER_BACKUP
 #else
 extern int CL_UPDATE_BACKUP;
@@ -258,10 +258,10 @@ typedef struct
 	char		files_precache[MAX_CUSTOM][MAX_QPATH];
 	lightstyle_t	lightstyles[MAX_LIGHTSTYLES];
 	int		numfiles;
-
+#if !XASH_DREAMCAST
 	consistency_t	consistency_list[MAX_MODELS];
 	int		num_consistency;
-
+#endif
 	qboolean		need_force_consistency_response;
 	resource_t	resourcesonhand;
 	resource_t	resourcesneeded;
@@ -454,8 +454,9 @@ typedef struct
 
 	cl_entity_t	*entities;		// dynamically allocated entity array
 	cl_entity_t	*static_entities;		// dynamically allocated static entity array
+#if !XASH_DREAMCAST
 	remap_info_t	**remap_info;		// store local copy of all remap textures for each entity
-
+#endif
 	int		maxEntities;
 	int		maxRemapInfos;		// maxEntities + cl.viewEnt; also used for catch entcount
 	int		numStatics;		// actual static entity count
@@ -1036,13 +1037,14 @@ static inline qboolean CL_IsPlayerIndex( int idx )
 	return idx >= 1 && idx <= cl.maxclients ? true : false;
 }
 
+#if !XASH_DREAMCAST
 //
 // cl_remap.c
 //
 remap_info_t *CL_GetRemapInfoForEntity( cl_entity_t *e );
 qboolean CL_EntitySetRemapColors( cl_entity_t *e, model_t *mod, int top, int bottom );
 void CL_ClearAllRemaps( void );
-
+#endif
 //
 // cl_render.c
 //
@@ -1052,12 +1054,13 @@ lightstyle_t *CL_GetLightStyle( int number );
 int R_FatPVS( const vec3_t org, float radius, byte *visbuffer, qboolean merge, qboolean fullvis );
 const ref_overview_t *GL_GetOverviewParms( void );
 
+#if !XASH_DREAMCAST
 //
 // cl_efrag.c
 //
 void R_StoreEfrags( efrag_t **ppefrag, int framecount );
 void R_AddEfrags( cl_entity_t *ent );
-
+#endif
 //
 // cl_tent.c
 //

@@ -39,6 +39,9 @@ GNU General Public License for more details.
 #include "enginefeatures.h"
 #include "render_api.h"	// decallist_t
 #include "tests.h"
+#if XASH_DREAMCAST
+#include "platform/dreamcast/softreboot_dc.h"
+#endif
 
 static pfnChangeGame	pChangeGame = NULL;
 host_parm_t		host;	// host parms
@@ -376,14 +379,15 @@ static int Host_CalcSleep( void )
 	return host_sleeptime.value;
 }
 
-static void Host_NewInstance( const char *name, const char *finalmsg )
+static qboolean Host_NewInstance( const char *name, const char *finalmsg )
 {
-	if( !pChangeGame ) return;
+	if( !pChangeGame ) return false;
 
 	host.change_game = true;
 
 	if( !Sys_NewInstance( name, finalmsg ))
 		pChangeGame( name ); // call from hl.exe
+	return false;  /* true only when exec/chainload does not return */
 }
 
 /*
@@ -412,6 +416,13 @@ static void Host_ChangeGame_f( void )
 
 	if( i == FI->numgames )
 	{
+#if XASH_DREAMCAST
+		/* Try chainloading gamedir.bin even if game not in FI (e.g. cstrike) */
+		char finalmsg[MAX_VA_STRING];
+		Q_snprintf( finalmsg, sizeof( finalmsg ), "change game to '%s'", Cmd_Argv( 1 ));
+		Host_NewInstance( Cmd_Argv( 1 ), finalmsg );
+		/* If chainload succeeded we never return; if we're here, bin not found */
+#endif
 		Con_Printf( "%s not exist\n", Cmd_Argv( 1 ));
 	}
 	else if( !Q_stricmp( GI->gamefolder, Cmd_Argv( 1 )))
@@ -796,13 +807,15 @@ void Host_Frame( double time )
 	if( host.framecount == 0 )
 		Con_DPrintf( "Time to first frame: %.3f seconds\n", t1 - host.starttime );
 
+	
 	Host_InputFrame ();  // input frame
 	Host_ClientBegin (); // begin client
 	Host_GetCommands (); // dedicated in
 	Host_ServerFrame (); // server frame
 	Host_ClientFrame (); // client frame
+#if !XASH_DREAMCAST
 	HTTP_Run();			 // both server and client
-
+#endif
 	host.framecount++;
 	host.pureframetime = Sys_DoubleTime() - t1;
 }
@@ -1109,12 +1122,9 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 	Cvar_Init();
 
 	// share developer level across all dlls
-#if XASH_DREAMCAST
-	Cvar_DirectSet( &host_developer, "5" );
-#else
+
 	Q_snprintf( dev_level, sizeof( dev_level ), "%i", developer );
 	Cvar_DirectSet( &host_developer, dev_level );
-#endif
 	Cvar_RegisterVariable( &sys_ticrate );
 
 	if( Sys_GetParmFromCmdLine( "-sys_ticrate", ticrate ))
@@ -1257,7 +1267,9 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	SV_Init();
 	CL_Init();
 
+#if !XASH_DREAMCAST
 	HTTP_Init();
+#endif
 	ID_Init();
 	SoundList_Init();
 
@@ -1314,6 +1326,16 @@ int EXPORT Host_Main( int argc, char **argv, const char *progname, int bChangeGa
 	Cmd_RemoveCommand( "setgl" );
 	Cbuf_ExecStuffCmds();	// execute stuffcmds (commandline)
 	SCR_CheckStartupVids();	// must be last
+
+#if XASH_DREAMCAST
+	/* If we rebooted via arch_exec with a pending handoff, resume it now. */
+	const dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	if( d && d->magic == DC_SOFTREBOOT_MAGIC && d->commit == DC_SOFTREBOOT_COMMIT )
+	{
+		Cbuf_AddText( "softreboot_resume\n" );
+		Cbuf_Execute();
+	}
+#endif
 
 	if( Sys_GetParmFromCmdLine( "-timedemo", demoname ))
 		Cbuf_AddTextf( "timedemo %s\n", demoname );
@@ -1398,7 +1420,9 @@ void Host_ShutdownWithReason( const char *reason )
 	SoundList_Shutdown();
 	Mod_Shutdown();
 	NET_Shutdown();
+#if !XASH_DREAMCAST
 	HTTP_Shutdown();
+#endif
 	Host_FreeCommon();
 	Platform_Shutdown();
 #if !XASH_DREAMCAST

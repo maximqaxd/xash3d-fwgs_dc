@@ -102,6 +102,16 @@ void R_LightmapCoord( const vec3_t v, const msurface_t *surf, const float sample
 	t += sample_size * 0.5f;
 	t /= BLOCK_SIZE * sample_size; //fa->texinfo->texture->width;
 
+#if XASH_DREAMCAST
+	// Add half texel bias at atlas page resolution to sample block center reliably
+	{
+		const float pageSize = (float)BLOCK_SIZE;
+		const float bias = 0.5f / pageSize;
+		s += bias;
+		t += bias;
+	}
+#endif
+
 	Vector2Set( coords, s, t );
 }
 
@@ -124,7 +134,13 @@ static void R_TextureCoord( const vec3_t v, const msurface_t *surf, vec2_t coord
 
 static void R_GetEdgePosition( const model_t *mod, const msurface_t *fa, int i, vec3_t vec )
 {
-	const int lindex = mod->surfedges[fa->firstedge + i];
+    int lindex;
+#if XASH_DREAMCAST
+    if( mod->surfedges16 ) lindex = (int)mod->surfedges16[fa->firstedge + i];
+    else lindex = mod->surfedges[fa->firstedge + i];
+#else
+    lindex = mod->surfedges[fa->firstedge + i];
+#endif
 
 	if( FBitSet( mod->flags, MODEL_QBSP2 ))
 	{
@@ -335,16 +351,16 @@ void GL_SubdivideSurface( model_t *loadmodel, msurface_t *fa )
 GL_BuildPolygonFromSurface
 ================
 */
-void GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
+static int GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
 {
-	int		i, lnumverts;
+	int		i, lnumverts, nColinElim = 0;
 	float		sample_size;
 	texture_t		*tex;
 	gl_texture_t	*glt;
 	glpoly2_t		*poly;
 
 	if( !mod || !fa->texinfo || !fa->texinfo->texture )
-		return; // bad polygon ?
+		return nColinElim; // bad polygon ?
 
 	if( FBitSet( fa->flags, SURF_CONVEYOR ) && fa->texinfo->texture->gl_texturenum != 0 )
 	{
@@ -417,6 +433,7 @@ void GL_BuildPolygonFromSurface( model_t *mod, msurface_t *fa )
 	}
 
 	poly->numverts = lnumverts;
+	return nColinElim;
 }
 
 /*
@@ -634,12 +651,16 @@ R_SetCacheState
 */
 static void R_SetCacheState( msurface_t *surf )
 {
+#if !XASH_DREAMCAST
 	int	maps;
 
 	for( maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++ )
 	{
 		surf->cached_light[maps] = tr.lightstylevalue[surf->styles[maps]];
 	}
+#else
+	(void)surf;
+#endif
 }
 
 /*
@@ -700,7 +721,7 @@ static void LM_UploadDynamicBlock( void )
 			height = gl_lms.allocated[i];
 	}
 
-	pglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, BLOCK_SIZE, height, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, gl_lms.lightmap_buffer );
+	pglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, BLOCK_SIZE, height, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, gl_lms.lightmap_buffer );
 }
 
 static void LM_UploadBlock( qboolean dynamic )
@@ -1085,8 +1106,18 @@ static void DrawGLPolyChain( glpoly2_t *p, float soffset, float toffset )
 #endif
 static qboolean R_HasLightmap( void )
 {
-	if( r_fullbright->value || !WORLDMODEL->lightdata )
-		return false;
+    if( r_fullbright->value )
+        return false;
+#if XASH_DREAMCAST
+    // DC: consider lightmaps present if either prebuilt pages exist or CPU lightdata exists
+    if( !WORLDMODEL )
+        return false;
+    if( !tr.lightmapTextures[0] && !WORLDMODEL->lightdata )
+        return false;
+#else
+    if( !WORLDMODEL->lightdata )
+        return false;
+#endif
 
 	if( RI.currententity )
 	{
@@ -1127,7 +1158,7 @@ static void R_BlendLightmaps( void )
 	else pglDisable( GL_BLEND );
 
 	// lightmapped solid surfaces
-	pglDepthMask( GL_TRUE );
+	pglDepthMask( GL_FALSE );
 	pglDepthFunc( GL_EQUAL );
 	pglDisable( GL_ALPHA_TEST );
 	if( gl_overbright.value )
@@ -1230,7 +1261,7 @@ static void R_BlendLightmaps( void )
 	}
 
 	pglDisable( GL_BLEND );
-	pglDepthMask( GL_FALSE );
+	pglDepthMask( GL_TRUE );
 	pglDepthFunc( GL_LEQUAL );
 	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
 	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
@@ -1290,6 +1321,7 @@ R_RenderDetails
 */
 static void R_RenderDetails( int passes )
 {
+#if !XASH_DREAMCAST
 	gl_texture_t	*glt;
 	mextrasurf_t	*es, *p;
 	msurface_t	*fa;
@@ -1340,6 +1372,7 @@ static void R_RenderDetails( int passes )
 
 	// restore fog here
 	GL_ResetFogColor();
+#endif
 }
 
 static void R_RenderFullbrightForSurface( msurface_t *fa, texture_t *t )
@@ -1354,6 +1387,7 @@ static void R_RenderFullbrightForSurface( msurface_t *fa, texture_t *t )
 
 static void R_RenderDetailsForSurface( msurface_t *fa, texture_t *t )
 {
+#if !XASH_DREAMCAST
 	if( !r_detailtextures.value )
 		return;
 
@@ -1376,6 +1410,7 @@ static void R_RenderDetailsForSurface( msurface_t *fa, texture_t *t )
 		detail_surfaces[t->dt_texturenum] = fa->info;
 		R_AddToSeparatePass( &draw_details, t->dt_texturenum );
 	}
+#endif
 }
 
 static void R_RenderDecalsForSurface( msurface_t *fa, int cull_type )
@@ -1398,22 +1433,28 @@ static qboolean R_CheckLightMap( msurface_t *fa )
 	qboolean is_dynamic = false;
 	int maps;
 
+#if XASH_DREAMCAST
+	// DC: no CPU lightdata => skip dynamic updates, use static lightmap pages only
+	if( !WORLDMODEL->lightdata )
+		return false;
+#else
 	// check for lightmap modification
 	for( maps = 0; maps < MAXLIGHTMAPS && fa->styles[maps] != 255; maps++ )
 	{
 		if( tr.lightstylevalue[fa->styles[maps]] != fa->cached_light[maps] )
 			goto dynamic;
 	}
+#endif
 
 	// dynamic this frame or dynamic previously
 	if( fa->dlightframe == tr.framecount )
 	{
-dynamic:
+ dynamic:
 		// NOTE: at this point we have only valid textures
 		if( r_dynamic->value )
 			is_dynamic = true;
 	}
-
+#if !XASH_DREAMCAST
 	if( is_dynamic )
 	{
 		const int style = fa->styles[maps];
@@ -1448,7 +1489,7 @@ dynamic:
 			GL_Bind( XASH_TEXTURE0, tr.lightmapTextures[fa->lightmaptexturenum] );
 #endif
 
-			pglTexSubImage2D( GL_TEXTURE_2D, 0, fa->light_s, fa->light_t, smax, tmax, GL_RGB, GL_UNSIGNED_SHORT_5_6_5_REV, temp );
+			pglTexSubImage2D( GL_TEXTURE_2D, 0, fa->light_s, fa->light_t, smax, tmax, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, temp );
 
 #if XASH_WES
 			GL_SelectTexture( XASH_TEXTURE0 );
@@ -1457,6 +1498,7 @@ dynamic:
 		else
 			return true; // add to dynamic chain
 	}
+#endif
 
 	return false; // updated
 }
@@ -1520,6 +1562,10 @@ static void R_DrawTextureChains( void )
 	msurface_t	*s;
 	texture_t		*t;
 
+    // reset lightmap chains for this pass
+    memset( gl_lms.lightmap_surfaces, 0, sizeof( gl_lms.lightmap_surfaces ));
+    gl_lms.dynamic_surfaces = NULL;
+
 	// make sure what color is reset
 	pglColor4ub( 255, 255, 255, 255 );
 	R_LoadIdentity();	// set identity matrix
@@ -1547,9 +1593,9 @@ static void R_DrawTextureChains( void )
 			R_DrawClouds();
 		skychain = NULL;
 	}
-
+#if !XASH_DREAMCAST
 	R_DrawVBO( !r_fullbright->value && !!WORLDMODEL->lightdata, true );
-
+#endif
 	for( i = 0; i < WORLDMODEL->numtextures; i++ )
 	{
 		t = WORLDMODEL->textures[i];
@@ -1896,11 +1942,18 @@ void R_DrawBrushModel( cl_entity_t *e )
 	if( !FBitSet( clmodel->flags, MODEL_LIQUID ) && e->curstate.rendermode == kRenderTransTexture && !gl_nosort.value )
 		qsort( gpGlobals->draw_surfaces, num_sorted, sizeof( sortedface_t ), R_SurfaceCompare );
 
+#if XASH_DREAMCAST
+		for( i = 0; i < num_sorted; i++ )
+			R_RenderBrushPoly( gpGlobals->draw_surfaces[i].surf, gpGlobals->draw_surfaces[i].cull );
+#else
 	// draw sorted translucent surfaces
 	for( i = 0; i < num_sorted; i++ )
 		if( !allow_vbo || !R_AddSurfToVBO( gpGlobals->draw_surfaces[i].surf, true ) )
 			R_RenderBrushPoly( gpGlobals->draw_surfaces[i].surf, gpGlobals->draw_surfaces[i].cull );
+#endif
+#if !XASH_DREAMCAST
 	R_DrawVBO( R_HasLightmap(), true );
+#endif
 	if( e->curstate.rendermode == kRenderTransColor )
 		pglEnable( GL_TEXTURE_2D );
 
@@ -1955,6 +2008,18 @@ For each texture build index arrays (vbotexture_t) every frame.
 */
 // vertex attribs
 //#define NO_TEXTURE_MATRIX // need debug
+
+qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
+{
+	return false;
+}
+
+qboolean R_HasEnabledVBO( void )
+{
+	return false;
+}
+
+#if !XASH_DREAMCAST
 typedef struct vbovertex_s
 {
 	vec3_t pos;
@@ -2441,6 +2506,7 @@ enable detail tmu if availiable
 */
 static void R_EnableDetail( void )
 {
+#if !XASH_DREAMCAST
 	if( mtst.details_enabled && mtst.tmu_dt != -1 )
 	{
 		GL_SelectTexture( mtst.tmu_dt );
@@ -2462,6 +2528,7 @@ static void R_EnableDetail( void )
 		pglTexCoordPointer( 2, GL_FLOAT, sizeof( vbovertex_t ), (void*)offsetof(vbovertex_t, dt_tc ) );
 #endif
 	}
+#endif
 }
 
 /*
@@ -2690,6 +2757,7 @@ draw details when not enough tmus
 */
 static void R_AdditionalPasses( vboarray_t *vbo, int indexlen, void *indexarray, texture_t *tex, qboolean resetvbo, size_t offset )
 {
+#if !XASH_DREAMCAST
 	if( !indexlen )
 		return;
 
@@ -2746,6 +2814,7 @@ static void R_AdditionalPasses( vboarray_t *vbo, int indexlen, void *indexarray,
 		else
 			R_SetupVBOArrayStatic( vbo, true, true );
 	}
+#endif
 }
 
 
@@ -3410,6 +3479,7 @@ void R_DrawVBO( qboolean drawlightmap, qboolean drawtextures )
 
 qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
 {
+#if !XASH_DREAMCAST
 	const int idx = surf - WORLDMODEL->surfaces;
 	vbotexture_t *vbotex;
 	int texturenum;
@@ -3479,8 +3549,9 @@ qboolean R_AddSurfToVBO( msurface_t *surf, qboolean buildlightmap )
 	r_stats.c_world_polys++;
 
 	return true;
+#endif
 }
-
+#endif
 /*
 =============================================================
 
@@ -3829,8 +3900,9 @@ void R_DrawWorld( void )
 		GL_ResetFogColor();
 		R_BlendLightmaps();
 		R_RenderFullbrights();
+#if !XASH_DREAMCAST
 		R_RenderDetails( R_HasEnabledVBO() ? 2 : 3 );
-
+#endif
 		if( skychain )
 			R_DrawSkyBox();
 	}
@@ -4025,17 +4097,73 @@ with all the surfaces from all brush models
 */
 void GL_BuildLightmaps( void )
 {
-	int	i, j;
+	int	i, j, nColinElim = 0;
 	model_t	*m;
 
-	// release old lightmaps
-	for( i = 0; i < MAX_LIGHTMAPS; i++ )
-	{
-		if( !tr.lightmapTextures[i] ) break;
-		GL_FreeTexture( tr.lightmapTextures[i] );
-	}
+    // DC fast path: if engine prebuilt pages and CPU lightdata is missing, reuse pages and build only polygons
+#if XASH_DREAMCAST
+    if( !WORLDMODEL->lightdata )
+    {
+        char lmName[16];
+        int tex0;
+        Q_snprintf( lmName, sizeof( lmName ), "*lightmap0" );
+        tex0 = GL_FindTexture( lmName );
+        if( tex0 > 0 )
+        {
+            // initialize minimal state similar to normal path
+            tr.block_size = BLOCK_SIZE_DEFAULT;
+            skychain = NULL;
+            tr.framecount = tr.visframecount = 1;
+            gl_lms.current_lightmap_texture = 0;
+            tr.modelviewIdentity = false;
+            tr.realframecount = 1;
+            R_InitDlightTexture();
+            CL_RunLightStyles((lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR ));
 
-	memset( tr.lightmapTextures, 0, sizeof( tr.lightmapTextures ));
+            memset( tr.lightmapTextures, 0, sizeof( tr.lightmapTextures ));
+            for( i = 0; i < MAX_LIGHTMAPS; i++ )
+            {
+                int tex;
+                Q_snprintf( lmName, sizeof( lmName ), "*lightmap%i", i );
+                tex = GL_FindTexture( lmName );
+                if( tex <= 0 ) break;
+                tr.lightmapTextures[i] = tex;
+            }
+
+            // Build polygons only
+            for( i = 0; i < gp_cl->nummodels; i++ )
+            {
+                if(( m = CL_ModelHandle( i + 1 )) == NULL )
+                    continue;
+                if( m->name[0] == '*' || m->type != mod_brush )
+                    continue;
+                for( j = 0; j < m->numsurfaces; j++ )
+                {
+                    m->surfaces[j].pdecals = NULL;
+                    m->surfaces[j].visframe = 0;
+                    if( m->surfaces[j].flags & SURF_DRAWTURB )
+                        continue;
+                    nColinElim += GL_BuildPolygonFromSurface( m, m->surfaces + j );
+                }
+                for( j = 0; j < m->numleafs; j++ ) m->leafs[j+1].visframe = 0;
+                for( j = 0; j < m->numnodes; j++ ) m->nodes[j].visframe = 0;
+            }
+
+            if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
+                gEngfuncs.drawFuncs->GL_BuildLightmaps( );
+            return;
+        }
+    }
+#endif
+
+    // release old lightmaps
+    for( i = 0; i < MAX_LIGHTMAPS; i++ )
+    {
+        if( !tr.lightmapTextures[i] ) break;
+        GL_FreeTexture( tr.lightmapTextures[i] );
+    }
+
+    memset( tr.lightmapTextures, 0, sizeof( tr.lightmapTextures ));
 	memset( &RI, 0, sizeof( RI ));
 
 #if XASH_DREAMCAST
@@ -4053,7 +4181,6 @@ void GL_BuildLightmaps( void )
 	gl_lms.current_lightmap_texture = 0;
 	tr.modelviewIdentity = false;
 	tr.realframecount = 1;
-	nColinElim = 0;
 
 	// setup the texture for dlights
 	R_InitDlightTexture();
@@ -4061,38 +4188,97 @@ void GL_BuildLightmaps( void )
 	// setup all the lightstyles
 	CL_RunLightStyles((lightstyle_t *)ENGINE_GET_PARM( PARM_GET_LIGHTSTYLES_PTR ));
 
-	LM_InitBlock();
+    // Try to reuse prebuilt static lightmaps named as *lightmap%d (engine/DC path)
+    // If found, just fill tr.lightmapTextures and skip building from surf->samples
+    {
+        qboolean have_prebuilt = false;
+        int filled = 0;
+        for( i = 0; i < MAX_LIGHTMAPS; i++ )
+        {
+            char lmName[16];
+            int tex;
+            Q_snprintf( lmName, sizeof( lmName ), "*lightmap%i", i );
+            tex = GL_FindTexture( lmName );
+            if( tex <= 0 )
+                break;
+            tr.lightmapTextures[i] = tex;
+            filled++;
+        }
+        have_prebuilt = ( filled > 0 );
 
-	for( i = 0; i < gp_cl->nummodels; i++ )
-	{
-		if(( m = CL_ModelHandle( i + 1 )) == NULL )
-			continue;
+        if( have_prebuilt )
+        {
+            gl_lms.current_lightmap_texture = filled;
+            // Only build polygons; placements (light_s/t and lightmaptexturenum) must be already set
+            for( i = 0; i < gp_cl->nummodels; i++ )
+            {
+                if(( m = CL_ModelHandle( i + 1 )) == NULL )
+                    continue;
 
-		if( m->name[0] == '*' || m->type != mod_brush )
-			continue;
+                if( m->name[0] == '*' || m->type != mod_brush )
+                    continue;
 
-		for( j = 0; j < m->numsurfaces; j++ )
-		{
-			// clearing all decal chains
-			m->surfaces[j].pdecals = NULL;
-			m->surfaces[j].visframe = 0;
+                for( j = 0; j < m->numsurfaces; j++ )
+                {
+                    // clearing all decal chains
+                    m->surfaces[j].pdecals = NULL;
+                    m->surfaces[j].visframe = 0;
 
-			GL_CreateSurfaceLightmap( m->surfaces + j, m );
+                    if( m->surfaces[j].flags & SURF_DRAWTURB )
+                        continue;
 
-			if( m->surfaces[j].flags & SURF_DRAWTURB )
-				continue;
+                    nColinElim += GL_BuildPolygonFromSurface( m, m->surfaces + j );
+                }
 
-			GL_BuildPolygonFromSurface( m, m->surfaces + j );
-		}
+                // clearing visframe
+                for( j = 0; j < m->numleafs; j++ )
+                    m->leafs[j+1].visframe = 0;
+                for( j = 0; j < m->numnodes; j++ )
+                    m->nodes[j].visframe = 0;
+            }
 
-		// clearing visframe
-		for( j = 0; j < m->numleafs; j++ )
-			m->leafs[j+1].visframe = 0;
-		for( j = 0; j < m->numnodes; j++ )
-			m->nodes[j].visframe = 0;
-	}
+            // done
+            if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
+            {
+                // allow client renderer to append if needed
+                gEngfuncs.drawFuncs->GL_BuildLightmaps( );
+            }
+            return;
+        }
+    }
 
-	LM_UploadBlock( false );
+    LM_InitBlock();
+
+    for( i = 0; i < gp_cl->nummodels; i++ )
+    {
+        if(( m = CL_ModelHandle( i + 1 )) == NULL )
+            continue;
+
+        if( m->name[0] == '*' || m->type != mod_brush )
+            continue;
+
+        for( j = 0; j < m->numsurfaces; j++ )
+        {
+            // clearing all decal chains
+            m->surfaces[j].pdecals = NULL;
+            m->surfaces[j].visframe = 0;
+
+            GL_CreateSurfaceLightmap( m->surfaces + j, m );
+
+            if( m->surfaces[j].flags & SURF_DRAWTURB )
+                continue;
+
+            nColinElim += GL_BuildPolygonFromSurface( m, m->surfaces + j );
+        }
+
+        // clearing visframe
+        for( j = 0; j < m->numleafs; j++ )
+            m->leafs[j+1].visframe = 0;
+        for( j = 0; j < m->numnodes; j++ )
+            m->nodes[j].visframe = 0;
+    }
+
+    LM_UploadBlock( false );
 
 	if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
 	{

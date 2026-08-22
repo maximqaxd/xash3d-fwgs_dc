@@ -38,9 +38,7 @@ GNU General Public License for more details.
 #include <sh4zam/shz_sh4zam.h>
 
 // PVR profiling support (uses SH4 performance counters)
-#ifndef REF_PVR_PROFILE
-#define REF_PVR_PROFILE 1 // Set to 1 to enable profiling
-#endif
+#define REF_PVR_PROFILE 0 // Set to 1 to enable profiling
 
 // Profiling helpers.
 #if REF_PVR_PROFILE
@@ -79,6 +77,7 @@ static inline double PVR_Prof_End( void ) { return 0.0; }
 
 // make mod_ref.h?
 #define LM_SAMPLE_SIZE             16
+#define LM_SAMPLE_EXTRASIZE        8
 
 
 extern poolhandle_t r_temppool;
@@ -87,7 +86,7 @@ extern poolhandle_t r_temppool;
 #define BLOCK_SIZE_DEFAULT	128		// for keep backward compatibility
 #define BLOCK_SIZE_MAX	128
 
-#define MAX_TEXTURES            1024	// a1ba: increased by users request
+#define MAX_TEXTURES            1536	// a1ba: increased by users request
 #define MAX_DETAIL_TEXTURES	16
 #define MAX_LIGHTMAPS	64
 #define SUBDIVIDE_SIZE	64
@@ -323,6 +322,8 @@ typedef struct
 	uint		c_particle_count;
 
 	uint		c_client_ents;	// entities that moved to client
+	uint		c_studio_headers;	// PVR polygon headers emitted (ideally 1 per unique texture)
+	uint		c_studio_strips;	// PVR strip/fan packets submitted
 	double		t_world_node;
 	double		t_world_draw;
 #if REF_PVR_PROFILE
@@ -338,6 +339,8 @@ typedef struct
 	double		t_studio_pervertex_lighting;	// Per-vertex lighting (R_LightLambert) time
 	double		t_studio_quaternions;	// Quaternion calculations (R_StudioCalcRotations, R_StudioSlerpBones) time
 	double		t_studio_bones;		// Bone transforms (Matrix3x4_ConcatTransforms) time
+	double		t_studio_skin;		// Pass 2 bone-group FTRV skinning time
+	double		t_studio_header;	// PVR_StudioSubmitHeader time (header batching overhead)
 #endif
 } ref_speeds_t;
 
@@ -397,6 +400,7 @@ void R_ClearDecals( void );
 //
 // pvr_draw.c
 //
+void Draw_FlushBatch( void );
 void R_Set2DMode( qboolean enable );
 void R_UploadStretchRaw( int texture, int cols, int rows, int width, int height, const byte *data );
 
@@ -663,6 +667,8 @@ typedef struct
 	qboolean		in2DMode;
 	
 	uint32_t	currentColor;  // ARGB format: 0xAARRGGBB
+	int		renderMode2D;  // GL_SetRenderMode for 2D: kRenderNormal, kRenderTransColor, etc.
+	qboolean vgui_alpha_test_enabled;
 } glstate_t;
 
 typedef struct
@@ -852,6 +858,11 @@ extern convar_t r_ripple_updatetime;
 extern convar_t r_ripple_spawntime;
 extern convar_t r_large_lightmaps;
 extern convar_t r_dlight_virtual_radius;
+extern convar_t r_occlusion_cull_studio;
+
+#define GL_NONE					0x0
+#define GL_FRONT				0x0404
+#define GL_BACK				0x0405
 
 //
 // engine shared convars

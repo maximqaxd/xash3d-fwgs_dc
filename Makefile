@@ -10,7 +10,7 @@ include engine.mk
 # Module paths and lib names
 FILESYSTEM_DIR = filesystem
 REF_DIR = ref/pvr
-MAINUI_DIR = libs/mainui_dc
+MAINUI_DIR = ../mainui_cpp
 CL_DLL_DIR = ../hlsdk-portable_dc/cl_dll
 SV_DLL_DIR = ../hlsdk-portable_dc/dlls
 UTILS_DIR = utils
@@ -35,6 +35,7 @@ LIBS = -L../hlsdk-portable_dc \
        -lref_pvr \
        -lppp \
 	   -lpthread \
+	   -lmenu \
 	   -lz \
        -lsh4zam
 
@@ -68,7 +69,7 @@ tools-mdldec:
 include $(KOS_BASE)/Makefile.rules
 
 # Step 2: Build executable and create IP.BIN
-engine: clean-public $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 1ST_READ.BIN
+engine: clean-public $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB) $(TARGET) IP.BIN 
 
 # Clean public folder object files
 clean-public:
@@ -94,13 +95,13 @@ $(TARGET): $(OBJS) $(FILESYSTEM_LIB) $(REF_LIB) $(SV_DLL_LIB) $(CL_DLL_LIB)
 1ST_READ.BIN: $(TARGET) IP.BIN
 	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
 	$(KOS_BASE)/utils/scramble/scramble $(TARGET).BIN 1ST_READ.BIN
-	-rm -f build/1ST_READ.BIN
-	cp 1ST_READ.BIN build
+	-rm -f ../xash3d-hl_repack/1ST_READ.BIN
+	cp 1ST_READ.BIN ../xash3d-hl_repack 
 
 1ST_READ_DS.BIN: $(TARGET) IP.BIN
-	kos-objcopy -R .stack -O binary $(TARGET) $(TARGET).BIN
-	-rm -f build/1ST_READ.BIN
-	cp 1ST_READ.BIN build
+	kos-objcopy -R .stack -O binary $(TARGET) 1ST_READ.BIN
+	-rm -f ../xash3d-hl_repack/1ST_READ.BIN
+	cp 1ST_READ.BIN ../xash3d-hl_repack 
 
 IP.BIN: ip.txt
 	-rm -f build/IP.BIN
@@ -112,13 +113,13 @@ repack: clean-tools tools
 	@$(MAKE) -f scripts/dreamcast/gearbox/repack_valve.mk all
 
 # Step 4: Create images
+ds_iso: engine 1ST_READ_DS.BIN 
+	@echo "Creating Dreamshell ISO image..."
+	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o ../xash.iso ../xash3d-hl_repack 
 cdi: engine  
 	@echo "Creating CDI image..."
 	mkdcdisc -e xash -D ../xash3d-hl_repack -p build/IP.BIN -N -o ../Xash3D_HL.cdi
 
-ds_iso: engine 1ST_READ_DS.BIN 
-	@echo "Creating Dreamshell ISO image..."
-	mkisofs -V XashDC -G build/IP.BIN -r -J -l -o xash.iso ../xash3d-hl_repack 
 	
 emu: cdi
 	@echo "Running flycast"
@@ -145,6 +146,16 @@ clean-engine:
 	-rm -f $(TARGET).bin
 	-rm -f 1ST_READ.BIN
 	-rm -f build/IP.BIN
+
+clean-repack:
+	$(MAKE) -f scripts/dreamcast/valve/repack_valve.mk clean
+
+clean: clean-tools clean-engine 
+	-rm -f $(PROJECT_NAME).cdi
+	-rm -f $(PROJECT_NAME).iso
+
+.PHONY: all clean tools engine cdi clean-tools clean-engine clean-repack
+.PHONY: tools-qlumpy tools-pvrstudiomdl tools-pvrtex tools-makels tools-decompwad tools-mdldec
 
 clean-repack:
 	$(MAKE) -f scripts/dreamcast/valve/repack_valve.mk clean

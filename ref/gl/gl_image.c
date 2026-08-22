@@ -26,7 +26,6 @@ static gl_texture_t		gl_textures[MAX_TEXTURES];
 static gl_texture_t*	gl_texturesHashTable[TEXTURES_HASH_SIZE];
 static uint		gl_numTextures;
 static uint		vq_codebook_sz = 2048;
-static uint 	vq_small_codebook_sz = 256;
 
 static byte    dottexture[8][8] =
 {
@@ -226,12 +225,7 @@ void GL_ApplyTextureParams( gl_texture_t *tex )
 
 		if( tex->target == GL_TEXTURE_3D || tex->target == GL_TEXTURE_CUBE_MAP_ARB )
 			pglTexParameteri( tex->target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_BORDER );
-#if XASH_DREAMCAST
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR, border[0]); // Red
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 1, border[1]); // Green
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 2, border[2]); // Blue
-		pglTexParameterf(tex->target, GL_TEXTURE_BORDER_COLOR + 3, border[3]); // Alpha
-#else
+#if !XASH_DREAMCAST
 		pglTexParameterfv( tex->target, GL_TEXTURE_BORDER_COLOR, border );
 #endif // !XASH_DREAMCAST
 	}
@@ -404,6 +398,7 @@ static size_t GL_CalcImageSize( pixformat_t format, int width, int height, int d
 	case PF_ARGB_1555:
 		size = width * height * depth * 2;
 		break;
+	case PF_VQ_MIPMAP_ARGB_1555:
 	case PF_VQ_MIPMAP_RGB_5650:
 		int main_size = (width * height) / 4;
         int mip1_size = main_size / 4;
@@ -416,6 +411,9 @@ static size_t GL_CalcImageSize( pixformat_t format, int width, int height, int d
 		break; 
 	case PF_ARGB_4444:
 		size = width * height * depth * 2;
+		break;
+	case PF_SMALL_VQ_RGB_5650:
+		size = 256 + ((width * height) / 4);
 		break;
 #endif
 	}
@@ -526,6 +524,7 @@ static size_t GL_CalcTextureSize( GLenum format, int width, int height, int dept
 		size = width * height * depth * 4;
 		break;
 #if XASH_DREAMCAST
+    case GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS:
 	case GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS:
 		int main_size = (width * height) / 4;
         int mip1_size = main_size / 4;
@@ -776,8 +775,10 @@ static void GL_SetTextureFormat( gl_texture_t *tex, pixformat_t format, int chan
 #if XASH_DREAMCAST
 		case PF_VQ_ARGB_4444: tex->format = GL_COMPRESSED_ARGB_4444_VQ_KOS; break;
 		case PF_VQ_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_KOS; break;
+		case PF_SMALL_VQ_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_KOS; break;
 		case PF_VQ_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_KOS; break;
 		case PF_VQ_MIPMAP_RGB_5650: tex->format = GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS; break;
+		case PF_VQ_MIPMAP_ARGB_1555: tex->format = GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS; break;
 #endif
 		case PF_DXT1: tex->format = GL_COMPRESSED_RGB_S3TC_DXT1_EXT; break;	// never use DXT1 with 1-bit alpha
 		case PF_DXT3: tex->format = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; break;
@@ -1936,6 +1937,9 @@ int GL_LoadTextureFromBuffer( const char *name, rgbdata_t *pic, texFlags_t flags
 		if( tex == NULL )
 			gEngfuncs.Host_Error( "%s: couldn't find texture %s for update\n", __func__, name );
 		SetBits( tex->flags, flags );
+		// Reset accounting so size reflects this upload only
+		tex->size = 0;
+		tex->numMips = 0;
 	}
 	else
 	{
@@ -1964,7 +1968,7 @@ creates texture from buffer
 */
 int GL_CreateTexture( const char *name, int width, int height, const void *buffer, texFlags_t flags )
 {
-	qboolean	update = FBitSet( flags, TF_UPDATE ) ? true : false;
+    qboolean	update = FBitSet( flags, TF_UPDATE ) ? true : false;
 	int	datasize = 1;
 	rgbdata_t	r_empty;
 
@@ -1973,7 +1977,7 @@ int GL_CreateTexture( const char *name, int width, int height, const void *buffe
 	else if( FBitSet( flags, TF_ARB_FLOAT ))
 		datasize = 4;
 
-	ClearBits( flags, TF_UPDATE );
+    ClearBits( flags, TF_UPDATE );
 	memset( &r_empty, 0, sizeof( r_empty ));
 	r_empty.width = width;
 	r_empty.height = height;
@@ -1999,7 +2003,7 @@ int GL_CreateTexture( const char *name, int width, int height, const void *buffe
 		r_empty.size *= 6;
 	}
 
-	return GL_LoadTextureFromBuffer( name, &r_empty, flags, update );
+    return GL_LoadTextureFromBuffer( name, &r_empty, flags, update );
 }
 
 /*
@@ -2298,10 +2302,11 @@ static void GL_CreateInternalTextures( void )
 	for( x = 0; x < 16; x++ )
 		((uint *)pic->buffer)[x] = 0xFF000000;
 	tr.blackTexture = GL_LoadTextureInternal( REF_BLACK_TEXTURE, pic, TF_COLORMAP );
-
+#if !XASH_DREAMCAST
 	// cinematic dummy
 	pic = GL_FakeImage( 640, 100, 1, IMAGE_HAS_COLOR );
 	tr.cinTexture = GL_LoadTextureInternal( "*cintexture", pic, TF_NOMIPMAP|TF_CLAMP );
+#endif
 }
 
 /*
@@ -2438,6 +2443,24 @@ void R_TextureList_f( void )
 			break;
 		case GL_RGBA32F_ARB:
 			gEngfuncs.Con_Printf( "RGBA32F" );
+			break;
+		case GL_RGB565_KOS:
+			gEngfuncs.Con_Printf( "RGB565" );
+			break;
+		case GL_ARGB1555_KOS:
+			gEngfuncs.Con_Printf( "ARGB1555" );
+			break;
+		case GL_COMPRESSED_ARGB_1555_VQ_MIPMAP_KOS:
+			gEngfuncs.Con_Printf( "ARGB1555 VQ MIPMAP" );
+			break;
+		case GL_COMPRESSED_RGB_565_VQ_MIPMAP_KOS:
+			gEngfuncs.Con_Printf( "RGB565 VQ MIPMAP" );
+			break;
+		case GL_COMPRESSED_RGB_565_VQ_KOS:
+			gEngfuncs.Con_Printf( "RGB565 VQ" );
+			break;
+		case GL_COMPRESSED_ARGB_1555_VQ_KOS:
+			gEngfuncs.Con_Printf( "ARGB 1555 VQ" );
 			break;
 		default:
 			gEngfuncs.Con_Printf( " ^1ERROR^7 " );

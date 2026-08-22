@@ -15,6 +15,7 @@ GNU General Public License for more details.
 
 #include "pvr_local.h"
 #include "entity_types.h"
+#include "pm_defs.h" // PM_* trace flags + pmtrace_t
 
 /*
 =============================================================
@@ -55,6 +56,73 @@ int R_CullModel( cl_entity_t *e, const vec3_t absmin, const vec3_t absmax )
 
 	if( R_CullBox( absmin, absmax ))
 		return 1;
+
+	// Occlusion culling for studio models: if the model is completely behind world solids
+	// (as seen from the camera), skip it. This is NOT classic HL behavior, but useful on DC.
+	// Conservative: only cull if multiple sample points are blocked.
+	if( r_occlusion_cull_studio.value && e && e->model && e->model->type == mod_studio )
+	{
+		// If we don't have a sane view origin, don't try.
+		// (RI.vieworg is set in setup; for safety keep this guard.)
+		if( RI.drawWorld )
+		{
+			vec3_t center, top, bottom;
+			VectorAverage( absmin, absmax, center );
+			VectorCopy( center, top );
+			VectorCopy( center, bottom );
+			top[2] = absmax[2];
+			bottom[2] = absmin[2];
+
+			// IMPORTANT: do NOT use PM_WORLD_ONLY here, otherwise brush entities (func_door/func_rotating)
+			// won't occlude and we'll still render models behind them.
+			// Also ignore other studio models to avoid false occlusion chains.
+			const int traceFlags = PM_GLASS_IGNORE | PM_STUDIO_IGNORE;
+
+			// Prefer EV_VisTraceLine (returns pointer, used by sprite glow cull), fallback to CL_TraceLine.
+			float *start = (float *)RI.vieworg;
+			float *end_c = (float *)center;
+			float *end_t = (float *)top;
+			float *end_b = (float *)bottom;
+
+			qboolean blocked_c = false, blocked_t = false, blocked_b = false;
+
+			if( gEngfuncs.EV_VisTraceLine )
+			{
+				const pmtrace_t *tr_c = gEngfuncs.EV_VisTraceLine( start, end_c, traceFlags );
+				blocked_c = ( tr_c && tr_c->fraction < 1.0f ) ? true : false;
+				if( blocked_c )
+				{
+					const pmtrace_t *tr_t = gEngfuncs.EV_VisTraceLine( start, end_t, traceFlags );
+					blocked_t = ( tr_t && tr_t->fraction < 1.0f ) ? true : false;
+					if( blocked_t )
+					{
+						const pmtrace_t *tr_b = gEngfuncs.EV_VisTraceLine( start, end_b, traceFlags );
+						blocked_b = ( tr_b && tr_b->fraction < 1.0f ) ? true : false;
+					}
+				}
+			}
+			else
+			{
+				const pmtrace_t tr_c = gEngfuncs.CL_TraceLine( RI.vieworg, center, traceFlags );
+				blocked_c = ( tr_c.fraction < 1.0f ) ? true : false;
+				if( blocked_c )
+				{
+					const pmtrace_t tr_t = gEngfuncs.CL_TraceLine( RI.vieworg, top, traceFlags );
+					blocked_t = ( tr_t.fraction < 1.0f ) ? true : false;
+					if( blocked_t )
+					{
+						const pmtrace_t tr_b = gEngfuncs.CL_TraceLine( RI.vieworg, bottom, traceFlags );
+						blocked_b = ( tr_b.fraction < 1.0f ) ? true : false;
+					}
+				}
+			}
+
+			if( blocked_c && blocked_t && blocked_b )
+			{
+				return 1; // occluded
+			}
+		}
+	}
 
 	return 0;
 }
@@ -97,7 +165,6 @@ int R_CullSurface( msurface_t *surf, gl_frustum_t *frustum, uint clipflags )
 			dist = orthonormal[2];
 		}
 		else dist = PlaneDiff( tr.modelorg, surf->plane );
-#if 0
 		if( glState.faceCull == GL_FRONT )
 		{
 			if( FBitSet( surf->flags, SURF_PLANEBACK ))
@@ -124,7 +191,6 @@ int R_CullSurface( msurface_t *surf, gl_frustum_t *frustum, uint clipflags )
 					return CULL_BACKSIDE; // wrong side
 			}
 		}
-#endif // PVR cull TODO
 	}
 	if( frustum && GL_FrustumCullBox( frustum, surf->info->mins, surf->info->maxs, clipflags ))
 		return CULL_FRUSTUM;

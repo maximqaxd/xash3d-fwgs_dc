@@ -44,16 +44,16 @@ void TriRenderMode( int mode )
 #endif
 {
 	ds.renderMode = mode;
+    pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
+
 	switch( mode )
 	{
 	case kRenderNormal:
-		pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
 		pglDisable( GL_BLEND );
 		pglDepthMask( GL_TRUE );
 		break;
 	case kRenderTransAlpha:
 		pglEnable( GL_BLEND );
-		pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
 		pglBlendFunc( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA );
 		pglDepthMask( GL_FALSE );
 		break;
@@ -64,7 +64,6 @@ void TriRenderMode( int mode )
 		break;
 	case kRenderGlow:
 	case kRenderTransAdd:
-		pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
 		pglBlendFunc( GL_SRC_ALPHA, GL_ONE );
 		pglEnable( GL_BLEND );
 		pglDepthMask( GL_FALSE );

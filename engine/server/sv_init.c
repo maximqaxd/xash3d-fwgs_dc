@@ -20,7 +20,7 @@ GNU General Public License for more details.
 #include "voice.h"
 #include "pm_local.h"
 
-#if XASH_LOW_MEMORY != 2 || XASH_DREAMCAST
+#if XASH_LOW_MEMORY != 2 
 int SV_UPDATE_BACKUP = SINGLEPLAYER_BACKUP;
 #endif
 server_t		sv;	// local server
@@ -121,7 +121,11 @@ int SV_ModelIndex( const char *filename )
 
 	if( i == MAX_MODELS )
 	{
+#if XASH_DREAMCAST
+		Con_DPrintf( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
+#else
 		Host_Error( "MAX_MODELS limit exceeded (%d)\n", MAX_MODELS );
+#endif
 		return 0;
 	}
 
@@ -172,7 +176,11 @@ int GAME_EXPORT SV_SoundIndex( const char *filename )
 
 	if( i == MAX_SOUNDS )
 	{
+#if XASH_DREAMCAST
+		Con_DPrintf( "MAX_SOUNDS limit exceeded (%d)\n", MAX_SOUNDS );
+#else
 		Host_Error( "MAX_SOUNDS limit exceeded (%d)\n", MAX_SOUNDS );
+#endif
 		return 0;
 	}
 
@@ -814,7 +822,7 @@ static void SV_SetupClients( void )
 
 	// feedback for cvar
 	Cvar_FullSet( "maxplayers", va( "%d", svs.maxclients ), FCVAR_LATCH );
-#if XASH_DREAMCAST || XASH_LOW_MEMORY != 2 
+#if XASH_LOW_MEMORY != 2 
 	SV_UPDATE_BACKUP = ( svs.maxclients == 1 ) ? SINGLEPLAYER_BACKUP : MULTIPLAYER_BACKUP;
 #endif
 
@@ -1117,6 +1125,8 @@ qboolean SV_SpawnServer( const char *mapname, const char *startspot, qboolean ba
 	sv.worldmodel = sv.models[WORLD_INDEX] = Mod_LoadWorld( sv.model_precache[WORLD_INDEX], true );
 	CRC32_MapFile( &sv.worldmapCRC, sv.model_precache[WORLD_INDEX], svs.maxclients > 1 );
 
+
+#if !XASH_DREAMCAST
 	if( FBitSet( host.features, ENGINE_QUAKE_COMPATIBLE ) && FS_FileExists( "progs.dat", false ))
 	{
 		dc_file_t *f = FS_Open( "progs.dat", "rb", false );
@@ -1124,7 +1134,7 @@ qboolean SV_SpawnServer( const char *mapname, const char *startspot, qboolean ba
 		FS_Read( f, &sv.progsCRC, sizeof( int ));
 		FS_Close( f );
 	}
-
+#endif
 	for( i = WORLD_INDEX; i < sv.worldmodel->numsubmodels; i++ )
 	{
 		Q_snprintf( sv.model_precache[i+1], sizeof( sv.model_precache[i+1] ), "*%i", i );
@@ -1145,9 +1155,10 @@ qboolean SV_SpawnServer( const char *mapname, const char *startspot, qboolean ba
 		SV_InitEdict( ent );
 	}
 
+#if !XASH_DREAMCAST
 	// heartbeats will always be sent to the id master
 	NET_MasterClear();
-
+#endif
 	// get actual movevars
 	SV_UpdateMovevars( true );
 

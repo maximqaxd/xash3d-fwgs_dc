@@ -1,4 +1,8 @@
 #include "pvr_local.h"
+#include "pvr_alloc.h"
+
+#define PVR_MEM_BUFFER_SIZE (64 * 1024)
+
 
 CVAR_DEFINE( gl_extensions, "gl_allow_extensions", "1", FCVAR_GLCONFIG|FCVAR_READ_ONLY, "allow gl_extensions" );
 CVAR_DEFINE( gl_texture_anisotropy, "gl_anisotropy", "8", FCVAR_GLCONFIG, "textures anisotropic filter" );
@@ -21,6 +25,7 @@ CVAR_DEFINE_AUTO( r_lighting_ambient, "0.3", FCVAR_GLCONFIG, "map ambient lighti
 CVAR_DEFINE_AUTO( r_detailtextures, "1", FCVAR_GLCONFIG, "enable detail textures support" );
 CVAR_DEFINE_AUTO( r_novis, "0", 0, "ignore vis information (perfomance test)" );
 CVAR_DEFINE_AUTO( r_nocull, "0", 0, "ignore frustrum culling (perfomance test)" );
+CVAR_DEFINE_AUTO( r_occlusion_cull_studio, "1", 0, "occlusion cull studio models using world trace to bbox (may cause pop-in)" );
 CVAR_DEFINE_AUTO( r_lockpvs, "0", FCVAR_CHEAT, "lockpvs area at current point (pvs test)" );
 CVAR_DEFINE_AUTO( r_lockfrustum, "0", FCVAR_CHEAT, "lock frustrum area at current point (cull test)" );
 CVAR_DEFINE_AUTO( r_traceglow, "0", FCVAR_GLCONFIG, "cull flares behind models" );
@@ -38,6 +43,9 @@ CVAR_DEFINE_AUTO( r_dlight_virtual_radius, "3", FCVAR_GLCONFIG, "increase dlight
 DEFINE_ENGINE_SHARED_CVAR_LIST()
 
 poolhandle_t r_temppool;
+
+// VRAM allocator base block (allocated from KOS pvr_mem)
+static void *vram_alloc_base = NULL;
 
 gl_globals_t	tr;
 glconfig_t	glConfig;
@@ -121,6 +129,7 @@ static void GL_SetDefaultState( void )
 
 	// Initialize color to white (default)
 	glState.currentColor = 0xFFFFFFFF;
+	glState.renderMode2D = kRenderNormal;
 
 	// init draw stack
 	tr.draw_list = &tr.draw_stack[0];
@@ -234,6 +243,7 @@ static void GL_InitCommands( void )
 	gEngfuncs.Cvar_RegisterVariable( &r_lighting_ambient );
 	gEngfuncs.Cvar_RegisterVariable( &r_novis );
 	gEngfuncs.Cvar_RegisterVariable( &r_nocull );
+	gEngfuncs.Cvar_RegisterVariable( &r_occlusion_cull_studio );
 	gEngfuncs.Cvar_RegisterVariable( &r_detailtextures );
 	gEngfuncs.Cvar_RegisterVariable( &r_lockpvs );
 	gEngfuncs.Cvar_RegisterVariable( &r_lockfrustum );
@@ -331,6 +341,34 @@ qboolean Ref_Init( void )
 		return false;
 	}
 
+	// Initialize VRAM allocator (following GLdc pattern)
+	// Reserve 64KB buffer for KOS internal use
+	size_t vram_free = pvr_mem_available();
+	size_t alloc_size = (vram_free > PVR_MEM_BUFFER_SIZE) ? (vram_free - PVR_MEM_BUFFER_SIZE) : vram_free;
+	
+	// Allocate a large block from KOS allocator for our custom allocator
+	vram_alloc_base = pvr_mem_malloc( alloc_size );
+	if( !vram_alloc_base )
+	{
+		gEngfuncs.Con_Printf( S_ERROR "Failed to allocate VRAM block for allocator (requested %zu bytes)\n", alloc_size );
+		GL_RemoveCommands();
+		gEngfuncs.R_Free_Video();
+		Mem_FreePool( &r_temppool );
+		return false;
+	}
+	
+	// Initialize our custom allocator on the allocated block
+	if( alloc_init( vram_alloc_base, alloc_size ) != 0 )
+	{
+		gEngfuncs.Con_Printf( S_ERROR "Failed to initialize VRAM allocator\n" );
+		pvr_mem_free( vram_alloc_base );
+		vram_alloc_base = NULL;
+		GL_RemoveCommands();
+		gEngfuncs.R_Free_Video();
+		Mem_FreePool( &r_temppool );
+		return false;
+	}
+
 	// see R_ProcessEntData for tr.entities initialization
 	tr.world = (struct world_static_s *)ENGINE_GET_PARM( PARM_GET_WORLD_PTR );
 	tr.movevars = (movevars_t *)ENGINE_GET_PARM( PARM_GET_MOVEVARS_PTR );
@@ -366,6 +404,15 @@ void Ref_Shutdown( void )
 
 	GL_RemoveCommands();
 	R_ShutdownImages();
+	
+	// Shutdown VRAM allocator and free the base block
+	if( vram_alloc_base )
+	{
+		alloc_shutdown( NULL );
+		pvr_mem_free( vram_alloc_base );
+		vram_alloc_base = NULL;
+	}
+	
 	Mem_FreePool( &r_temppool );
 
 	// shut down OS specific OpenGL stuff like contexts, etc.

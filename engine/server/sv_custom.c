@@ -60,7 +60,7 @@ static void SV_CreateCustomizationList( sv_client_t *cl )
 		}
 	}
 }
-
+#if !XASH_DREAMCAST
 static qboolean SV_FileInConsistencyList( const char *filename, consistency_t **ppout )
 {
 	int	i;
@@ -82,10 +82,9 @@ static qboolean SV_FileInConsistencyList( const char *filename, consistency_t **
 			return true;
 		}
 	}
-
 	return false;
 }
-
+#endif
 void SV_ParseConsistencyResponse( sv_client_t *cl, sizebuf_t *msg )
 {
 	int		i, c, idx, value;
@@ -167,14 +166,14 @@ void SV_ParseConsistencyResponse( sv_client_t *cl, sizebuf_t *msg )
 			break;
 		c++;
 	}
-
+#if !XASH_DREAMCAST
 	if( sv.num_consistency != c )
 	{
 		Con_Printf( S_WARN "%s:%s sent bad file data\n", cl->name, NET_AdrToString( cl->netchan.remote_address ));
 		SV_DropClient( cl, false );
 		return;
 	}
-
+#endif
 	if( badresindex != 0 )
 	{
 		char	dropmessage[256];
@@ -195,6 +194,7 @@ void SV_ParseConsistencyResponse( sv_client_t *cl, sizebuf_t *msg )
 
 void SV_TransferConsistencyInfo( void )
 {
+#if !XASH_DREAMCAST
 	vec3_t		mins, maxs;
 	int		i, total = 0;
 	resource_t	*pResource;
@@ -244,6 +244,7 @@ void SV_TransferConsistencyInfo( void )
 	}
 
 	sv.num_consistency = total;
+#endif
 }
 
 static void SV_SendConsistencyList( sv_client_t *cl, sizebuf_t *msg )
@@ -251,13 +252,21 @@ static void SV_SendConsistencyList( sv_client_t *cl, sizebuf_t *msg )
 	int	i, lastcheck;
 	int	delta;
 
+#if XASH_DREAMCAST
+	if( svs.maxclients == 1 ||  FBitSet( cl->flags, FCL_HLTV_PROXY ))
+	{
+		ClearBits( cl->flags, FCL_FORCE_UNMODIFIED );
+		MSG_WriteOneBit( msg, 0 );
+		return;
+	}
+#else
 	if( svs.maxclients == 1 || !sv_consistency.value || !sv.num_consistency || FBitSet( cl->flags, FCL_HLTV_PROXY ))
 	{
 		ClearBits( cl->flags, FCL_FORCE_UNMODIFIED );
 		MSG_WriteOneBit( msg, 0 );
 		return;
 	}
-
+#endif
 	SetBits( cl->flags, FCL_FORCE_UNMODIFIED );
 	MSG_WriteOneBit( msg, 1 );
 	lastcheck = 0;

@@ -6,6 +6,10 @@
 #include <dc/pvr.h>
 #include <sh4zam/shz_sh4zam.h>
 
+// Vertices with w < z + PVR_NEAR_CLIP_EPSILON are treated as behind the near plane
+// (avoids triangles straddling the plane that pop or project badly).
+#define PVR_NEAR_CLIP_EPSILON 1e-4f
+
 // Clip a single triangle against the near plane in clip space and submit it.
 // NOTE: Our projection (sh4zam shz_xmtrx_apply_perspective) produces clip.z = near_z and clip.w = -z_eye,
 // so the correct near-plane test is (w >= z), NOT the OpenGL-style (z >= -w).

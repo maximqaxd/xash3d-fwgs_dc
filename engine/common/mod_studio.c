@@ -40,6 +40,7 @@ typedef struct mstudiocache_s
 #define STUDIO_CACHESIZE		16
 #define STUDIO_CACHEMASK		(STUDIO_CACHESIZE - 1)
 
+
 // trace global variables
 static sv_blending_interface_t	*pBlendAPI = NULL;
 static studiohdr_t			*mod_studiohdr;
@@ -383,7 +384,6 @@ static void Mod_StudioCalcRotations( int boneused[], int numbones, const byte *p
 	{
 		i = boneused[j];
 		R_StudioCalcBones( frame, s, &pbone[i], &panim[i], adj, pos[i], q[i] );
-
 	}
 
 	if( pseqdesc->motiontype & STUDIO_X ) pos[pseqdesc->motionbone][0] = 0.0f;
@@ -867,7 +867,7 @@ void Mod_LoadStudioModel( model_t *mod, const void *buffer, qboolean *loaded )
 	mod->type = mod_studio;
 
 	phdr = R_StudioLoadHeader( mod, buffer );
-	if( !phdr )
+	if( !phdr || phdr->length < sizeof( studiohdr_t )) // garbage value in length
 		return;	// bad model
 
 #if !XASH_DEDICATED

@@ -190,6 +190,9 @@ typedef struct mnode_s
 typedef struct msurface_s	msurface_t;
 typedef struct decal_s	decal_t;
 
+// Forward declaration needed for interfaces that use struct tag in prototypes
+struct cl_entity_s;
+
 // JAY: Compress this as much as possible
 struct decal_s
 {
@@ -232,32 +235,36 @@ typedef struct mextrasurf_s
 	vec3_t		mins, maxs;
 	vec3_t		origin;		// surface origin
 	struct msurface_s	*surf;		// upcast to surface
-
+#if !XASH_DREAMCAST
 	// extended light info
 	int		dlight_s, dlight_t;	// gl lightmap coordinates for dynamic lightmaps
-
+#endif
 	short		lightmapmins[2];	// lightmatrix
 	short		lightextents[2];
 	float		lmvecs[2][4];
 
+#if !XASH_DREAMCAST
 	color24		*deluxemap;	// note: this is the actual deluxemap data for this surface
 	byte		*shadowmap;	// note: occlusion map for this surface
 // begin userdata
 	struct msurface_s	*lightmapchain;	// lightmapped polys
 	struct mextrasurf_s	*detailchain;	// for detail textures drawing
-	mfacebevel_t	*bevel;		// for exact face traceline
 	struct mextrasurf_s	*lumachain;	// draw fullbrights
+#endif
+	mfacebevel_t	*bevel;		// for exact face traceline
+#if XASH_DREAMCAST
+	int		lt2_face_index;	// index into worldmodel->lt2_lightsurfs for LT2 lighting
+#endif
+#if !XASH_DREAMCAST
 	struct cl_entity_s	*parent;		// upcast to owner entity
-
 	int		mirrortexturenum;	// gl texnum
 	float		mirrormatrix[4][4];
-
 	struct grasshdr_s	*grass;		// grass that linked by this surface
 	unsigned short	grasscount;	// number of bushes per polygon (used to determine total VBO size)
 	unsigned short	numverts;		// world->vertexes[]
 	int		firstvertex;	// fisrt look up in tr.tbn_vectors[], then acess to world->vertexes[]
-
 	intptr_t	reserved[32];	// just for future expansions or mod-makers
+#endif
 } mextrasurf_t;
 
 #ifdef SUPPORT_HL25_EXTENDED_STRUCTS
@@ -273,36 +280,34 @@ typedef struct mdisplaylist_s
 
 struct msurface_s
 {
-	int		visframe;		// should be drawn when node is crossed
-
-	mplane_t		*plane;		// pointer to shared plane
-	int		flags;		// see SURF_ #defines
-
-	int		firstedge;	// look up in model->surfedges[], negative numbers
-	int		numedges;		// are backwards edges
+	byte		flags;		// see SURF_ #defines
+	byte		numedges;		// are backwards edges
+	byte		light_s, light_t;	// gl lightmap coordinates
+	byte		dlightframe;	// last frame the surface was checked by an animated light
+	byte		lightmaptexturenum;
+	byte		styles[MAXLIGHTMAPS];
 
 	short		texturemins[2];
 	short		extents[2];
 
-	int		light_s, light_t;	// gl lightmap coordinates
-
-	glpoly2_t		*polys;		// multiple if warped
-	struct msurface_s	*texturechain;
-
-	mtexinfo_t	*texinfo;
-
+#if !XASH_DREAMCAST
+	int		cached_light[MAXLIGHTMAPS];	// values currently used in lightmap
+#endif
+	int		firstedge;	// look up in model->surfedges[], negative numbers
 	// lighting info
-	int		dlightframe;	// last frame the surface was checked by an animated light
 	int		dlightbits;	// dynamically generated. Indicates if the surface illumination
 					// is modified by an animated light.
+	int		visframe;		// should be drawn when node is crossed
 
-	int		lightmaptexturenum;
-	byte		styles[MAXLIGHTMAPS];
-	int		cached_light[MAXLIGHTMAPS];	// values currently used in lightmap
 	mextrasurf_t	*info;		// pointer to surface extradata (was cached_dlight)
 
 	color24		*samples;		// note: this is the actual lightmap data for this surface
 	decal_t		*pdecals;
+	mplane_t	*plane;		// pointer to shared plane
+	glpoly2_t		*polys;		// multiple if warped
+	struct msurface_s	*texturechain;
+
+	mtexinfo_t	*texinfo;
 
 #ifdef SUPPORT_HL25_EXTENDED_STRUCTS
 	mdisplaylist_t displaylist;
@@ -333,7 +338,7 @@ typedef struct cache_user_s
 
 typedef struct model_s
 {
-	char		name[64];		// model name
+	char		name[MAX_QPATH];		// model name
 	qboolean		needload;		// bmodels and sprites don't cache normally
 
 	// shared modelinfo
@@ -413,6 +418,13 @@ typedef struct model_s
 //
 	cache_user_t	cache;		// only access through Mod_Extradata
 #if XASH_DREAMCAST
+	// Dreamcast: optional HLDC LT2 lighting (subformat 'a' supported)
+	byte		*lt2_payload;        // rounded-to-4 payload bytes (no header)
+	uint32_t		lt2_payload_size;   // bytes
+	uint32_t		*lt2_lightsurfs;     // offsets into lt2_payload (count = lt2_lightsurfs_count)
+	uint32_t		lt2_lightsurfs_count;
+	byte		lt2_subformat;      // e.g. 'a'
+
 	// Dreamcast: track last usage for studio LRU
 	unsigned int	dc_last_used_frame;
 #endif
@@ -513,6 +525,7 @@ ALIAS MODELS
 Alias models are position independent, so the cache manager can move them.
 ==============================================================================
 */
+#ifndef XASH_DREAMCAST
 #define MAXALIASVERTS	2048
 #define MAXALIASFRAMES	256
 #define MAXALIASTRIS	4096
@@ -570,6 +583,7 @@ typedef struct
 	maliasframedesc_t	frames[1];	// variable sized
 } aliashdr_t;
 
+#endif
 
 
 // remapping info
@@ -599,7 +613,9 @@ typedef struct
 #define MAX_REQUESTS	64
 
 STATIC_CHECK_SIZEOF( mnode_t, 52, 72 );
+#if !XASH_DREAMCAST
 STATIC_CHECK_SIZEOF( mextrasurf_t, 324, 496 );
+#endif
 STATIC_CHECK_SIZEOF( decal_t, 60, 88 );
 STATIC_CHECK_SIZEOF( mfaceinfo_t, 176, 304 );
 

@@ -562,7 +562,9 @@ static void R_AddDecalToSurface( decal_t *pdecal, msurface_t *surf, decalinfo_t 
 
 	// alloc clipped poly for decal
 	R_DecalCreatePoly( decalinfo, pdecal, surf );
+#if !XASH_DREAMCAST
 	R_AddDecalVBO( pdecal, surf );
+#endif
 }
 
 static void R_DecalCreate( decalinfo_t *decalinfo, msurface_t *surf, float x, float y )

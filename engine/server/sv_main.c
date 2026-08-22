@@ -135,6 +135,12 @@ CVAR_DEFINE_AUTO( sv_check_errors, "0", FCVAR_ARCHIVE, "check edicts for errors"
 CVAR_DEFINE_AUTO( sv_validate_changelevel, "0", 0, "test change level for level-designer errors" );
 CVAR_DEFINE( sv_hostmap, "hostmap", "", 0, "keep name of last entered map" );
 
+#if XASH_DREAMCAST
+CVAR_DEFINE_AUTO( dc_softreboot, "0", FCVAR_ARCHIVE, "soft reboot on smooth changelevel to defragment heap" );
+CVAR_DEFINE_AUTO( dc_softreboot_threshold_kb, "900", FCVAR_ARCHIVE, "run soft reboot when largest allocatable heap block is <= this threshold in KB (0 disables threshold trigger)" );
+CVAR_DEFINE_AUTO( dc_softreboot_minexec_kb, "600", FCVAR_ARCHIVE, "minimum largest allocatable heap block in KB required to attempt soft reboot (fallback to normal changelevel below this)" );
+#endif
+
 static CVAR_DEFINE_AUTO( sv_allow_joystick, "1", FCVAR_ARCHIVE, "allow connect with joystick enabled" );
 static CVAR_DEFINE_AUTO( sv_allow_mouse, "1", FCVAR_ARCHIVE, "allow connect with mouse" );
 static CVAR_DEFINE_AUTO( sv_allow_touch, "1", FCVAR_ARCHIVE, "allow connect with touch controls" );
@@ -697,9 +703,10 @@ void Host_ServerFrame( void )
 
 	// clear edict flags for next frame
 	SV_PrepWorldFrame ();
-
+#if !XASH_DREAMCAST
 	// send a heartbeat to the master if needed
 	NET_MasterHeartbeat ();
+#endif
 }
 
 //============================================================================
@@ -719,12 +726,13 @@ void SV_AddToMaster( netadr_t from, sizebuf_t *msg )
 	double last_heartbeat;
 	const int len = sizeof( s );
 
+#if !XASH_DREAMCAST
 	if( !NET_GetMaster( from, &heartbeat_challenge, &last_heartbeat ))
 	{
 		Con_Printf( S_WARN "unexpected master server info query packet from %s\n", NET_AdrToString( from ));
 		return;
 	}
-
+#endif
 	if( last_heartbeat + sv_master_response_timeout.value < host.realtime )
 	{
 		Con_Printf( S_WARN "unexpected master server info query packet (too late? try increasing sv_master_response_timeout value)\n");
@@ -887,6 +895,11 @@ void SV_Init( void )
 	Cvar_RegisterVariable( &rcon_enable );
 	Cvar_RegisterVariable( &sv_stepsize );
 	Cvar_RegisterVariable( &sv_newunit );
+#if XASH_DREAMCAST
+	Cvar_RegisterVariable( &dc_softreboot );
+	Cvar_RegisterVariable( &dc_softreboot_threshold_kb );
+	Cvar_RegisterVariable( &dc_softreboot_minexec_kb );
+#endif
 	Cvar_RegisterVariable( &hostname );
 	Cvar_RegisterVariable( &sv_timeout );
 	Cvar_RegisterVariable( &sv_pausable );
@@ -1104,10 +1117,10 @@ void SV_Shutdown( const char *finalmsg )
 
 	if( svs.clients )
 		SV_FinalMessage( finalmsg, false );
-
+#if !XASH_DREAMCAST
 	if( public_server.value && svs.maxclients != 1 )
 		NET_MasterShutdown();
-
+#endif
 	NET_Config( false, false );
 	SV_DeactivateServer();
 	CL_Drop();

@@ -95,10 +95,10 @@ static const loadpixformat_t load_null[] =
 
 static const loadpixformat_t load_game[] =
 {
+#if !XASH_DREAMCAST
 { "%s%s.%s", "dds", Image_LoadDDS, IL_HINT_NO },	// dds for world and studio models
 { "%s%s.%s", "bmp", Image_LoadBMP, IL_HINT_NO },	// WON menu images
 { "%s%s.%s", "tga", Image_LoadTGA, IL_HINT_NO },	// hl vgui menus
-#if !XASH_DREAMCAST
 { "%s%s.%s", "png", Image_LoadPNG, IL_HINT_NO },	// NightFire 007 menus
 #endif
 { "%s%s.%s", "mip", Image_LoadMIP, IL_HINT_NO },	// hl textures from wad or buffer
@@ -107,7 +107,9 @@ static const loadpixformat_t load_game[] =
 { "%s%s.%s", "lmp", Image_LoadLMP, IL_HINT_NO },	// hl menu images (cached.wad etc)
 { "%s%s.%s", "fnt", Image_LoadFNT, IL_HINT_HL },	// hl console font (fonts.wad etc)
 { "%s%s.%s", "pal", Image_LoadPAL, IL_HINT_NO },	// install studio\sprite palette
+#if !XASH_DREAMCAST
 { "%s%s.%s", "ktx2", Image_LoadKTX2, IL_HINT_NO },	// ktx2 for world and studio models
+#endif
 { "%s%s.%s", "pvr", Image_LoadPVR, IL_HINT_HL },	// pvr for world and studio models
 { NULL, NULL, NULL, IL_HINT_NO }
 };
@@ -128,9 +130,9 @@ static const savepixformat_t save_null[] =
 // Xash3D normal instance
 static const savepixformat_t save_game[] =
 {
+#if !XASH_DREAMCAST
 { "%s%s.%s", "tga", Image_SaveTGA },		// tga screenshots
 { "%s%s.%s", "bmp", Image_SaveBMP },		// bmp levelshots or screenshots
-#if !XASH_DREAMCAST
 { "%s%s.%s", "png", Image_SavePNG },		// png screenshots
 #endif
 { NULL, NULL, NULL }

@@ -16,6 +16,9 @@ GNU General Public License for more details.
 #include "common.h"
 #include "client.h"
 #include "sound.h"
+#if XASH_DREAMCAST
+#include "platform/dreamcast/AudioEngine.h"
+#endif
 
 // during registration it is possible to have more sounds
 // than could actually be referenced during gameplay,
@@ -265,14 +268,21 @@ void S_FreeSound( sfx_t *sfx )
         prev = &hashSfx->hashNext;
     }
 
-    if( sfx->cache ) 
+	if( sfx->cache )
 	{
-		if (sfx->cache->aica_pos) {
-			snd_mem_free(sfx->cache->aica_pos);
-			Con_Printf("AICA: Freeing sound %s from AICA memory\n", sfx->name);
+#ifdef XASH_DREAMCAST
+		// aica_pos is AudioEngine stream/SFX index, not a memory address
+		// Note: aica_pos >= 0 is valid (0 = stream 0, >= AUDIO_ENGINE_MAX_STREAMS = SFX)
+		if( sfx->cache->aica_pos >= 0 )
+		{
+			AudioEngine_Unload( (int)sfx->cache->aica_pos );
 		}
-		else
-        	FS_FreeSound( sfx->cache );
+		// For streamed sounds, buffer is NULL, so FS_FreeSound won't try to free it
+		// For small sounds loaded into memory, buffer is set and will be freed
+		FS_FreeSound( sfx->cache );
+#else
+		FS_FreeSound( sfx->cache );
+#endif
 	}
     memset( sfx, 0, sizeof( *sfx ));
 }

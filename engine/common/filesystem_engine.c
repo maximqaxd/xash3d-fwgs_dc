@@ -20,9 +20,6 @@ GNU General Public License for more details.
 #include "common.h"
 #include "library.h"
 #include "platform/platform.h"
-#if XASH_DREAMCAST
-#include <fatfs.h>
-#endif 
 
 fs_api_t g_fsapi;
 #if XASH_DREAMCAST

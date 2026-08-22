@@ -15,6 +15,20 @@ GNU General Public License for more details.
 
 #include "common.h"
 #include "client.h"
+#if XASH_DREAMCAST
+#include "platform/dreamcast/softreboot_dc.h"
+#endif
+#if XASH_DREAMCAST
+#include "avi.h"
+#include "avi/mpeg.h"
+#include <dc/pvr.h>
+
+
+int mpeg_player_start_audio(mpeg_player_t *player);
+void mpeg_player_poll_audio(mpeg_player_t *player);
+void mpeg_player_stop_audio(mpeg_player_t *player);
+mpeg_decode_result_t mpeg_decode_step(mpeg_player_t *player);
+#endif
 
 /*
 =================================================================
@@ -60,8 +74,8 @@ qboolean SCR_NextMovie( void )
 		return false;
 	}
 
-	Q_snprintf( str, MAX_STRING, "movie %s full\n", cls.movies[cls.movienum] );
 
+	Q_snprintf( str, MAX_STRING, "movie %s full\n", cls.movies[cls.movienum] );
 	Cbuf_InsertText( str );
 	cls.movienum++;
 
@@ -76,8 +90,13 @@ static void SCR_CreateStartupVids( void )
 	if( !f ) return;
 
 	// make standard video playlist: sierra, valve
+#if XASH_DREAMCAST
+	FS_Print( f, "media/sierra.mpg\n" );
+	FS_Print( f, "media/valve.mpg\n" );
+#else
 	FS_Print( f, "media/sierra.avi\n" );
 	FS_Print( f, "media/valve.avi\n" );
+#endif
 	FS_Close( f );
 }
 
@@ -87,6 +106,18 @@ void SCR_CheckStartupVids( void )
 	byte *afile;
 	char *pfile;
 	string	token;
+	
+#if XASH_DREAMCAST
+	
+	const dc_softreboot_desc_t *d = DC_SoftReboot_Desc();
+	if( d && d->magic == DC_SOFTREBOOT_MAGIC && d->commit == DC_SOFTREBOOT_COMMIT )
+	{
+		cls.movienum = -1;
+		CL_CheckStartupDemos();
+		return;
+	}
+
+#endif
 
 	if( Sys_CheckParm( "-nointro" ) || host_developer.value || cls.demonum != -1 || GameState->nextstate != STATE_RUNFRAME )
 	{
@@ -97,10 +128,16 @@ void SCR_CheckStartupVids( void )
 	}
 
 	if( !FS_FileExists( DEFAULT_VIDEOLIST_PATH, false ))
+	{
 		SCR_CreateStartupVids();
+	}
 
 	afile = FS_LoadFile( DEFAULT_VIDEOLIST_PATH, NULL, false );
-	if( !afile ) return; // something bad happens
+	if( !afile )
+	{
+		Con_Printf( S_ERROR "SCR_CheckStartupVids: failed to load %s\n", DEFAULT_VIDEOLIST_PATH );
+		return; // something bad happens
+	}
 
 	pfile = (char *)afile;
 
@@ -116,6 +153,12 @@ void SCR_CheckStartupVids( void )
 	}
 
 	Mem_Free( afile );
+
+	if( c == 0 )
+	{
+		Con_Printf( S_WARN "SCR_CheckStartupVids: no movies found in %s\n", DEFAULT_VIDEOLIST_PATH );
+		return;
+	}
 
 	// run cinematic
 	cls.movienum = 0;
@@ -135,6 +178,15 @@ void SCR_RunCinematic( void )
 
 	if( !AVI_IsActive( cin_state ))
 	{
+#if XASH_DREAMCAST
+		// Ensure audio is stopped before moving to next movie
+		if( cin_state )
+		{
+			mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+			if( player )
+				mpeg_player_stop_audio( player );
+		}
+#endif
 		SCR_NextMovie( );
 		return;
 	}
@@ -142,10 +194,25 @@ void SCR_RunCinematic( void )
 	if( UI_IsVisible( ))
 	{
 		// these can happens when user set +menu_ option to cmdline
+#if XASH_DREAMCAST
+		// Stop MPEG audio immediately when video is skipped
+		if( cin_state && AVI_IsActive( cin_state ))
+		{
+			mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+			if( player )
+			{
+				// Stop audio stream and reset player state to prevent further decoding
+				// mpeg_player_stop_audio() will reset start_time internally
+				mpeg_player_stop_audio( player );
+			}
+		}
+#endif
 		AVI_CloseVideo( cin_state );
 		cls.state = ca_disconnected;
 		Key_SetKeyDest( key_menu );
+#if !XASH_DREAMCAST
 		S_StopStreaming();
+#endif
 		cls.movienum = -1;
 		cin_time = 0.0f;
 		cls.signon = 0;
@@ -158,12 +225,42 @@ void SCR_RunCinematic( void )
 	// stop the video after it finishes
 	if( cin_time > video_duration + 0.1f )
 	{
+#if XASH_DREAMCAST
+		// Ensure audio is stopped and video is closed before moving to next movie
+		if( cin_state && AVI_IsActive( cin_state ))
+		{
+			mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+			if( player )
+				mpeg_player_stop_audio( player );
+		}
+#endif
+		AVI_CloseVideo( cin_state );
 		SCR_NextMovie( );
 		return;
 	}
 
+#if XASH_DREAMCAST
+	if( cin_state && AVI_IsActive( cin_state ))
+	{
+		mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+		if( player )
+		{
+			// Poll audio and decode frames continuously
+			mpeg_decode_result_t result = mpeg_decode_step( player );
+			if( result == MPEG_DECODE_EOF )
+			{
+				// Video finished - ensure proper cleanup before moving to next movie
+				mpeg_player_stop_audio( player );
+				AVI_CloseVideo( cin_state );
+				SCR_NextMovie( );
+				return;
+			}
+		}
+	}
+#else
 	// read the next frame
 	cin_frame = AVI_GetVideoFrameNumber( cin_state, cin_time );
+#endif
 }
 
 /*
@@ -176,6 +273,25 @@ should be skipped
 */
 qboolean SCR_DrawCinematic( void )
 {
+#if XASH_DREAMCAST
+	if( !ref.initialized || cin_time <= 0.0f )
+		return false;
+
+	mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+	if( !player || !mpeg_player_get_frame( player ))
+ 		return false;
+
+	// Upload and draw current frame (
+	pvr_wait_ready();
+	pvr_scene_begin();
+	mpeg_upload_frame( player );
+	pvr_list_begin( PVR_LIST_OP_POLY );
+	mpeg_draw_frame( player );
+	pvr_list_finish();
+	pvr_scene_finish();
+	
+	return true;
+#else
 	static int	last_frame = -1;
 	qboolean		redraw = false;
 	byte		*frame = NULL;
@@ -190,9 +306,13 @@ qboolean SCR_DrawCinematic( void )
 		redraw = true;
 	}
 
-	ref.dllFuncs.R_DrawStretchRaw( 0, 0, refState.width, refState.height, xres, yres, frame, redraw );
+	if( frame )
+	{
+		ref.dllFuncs.R_DrawStretchRaw( 0, 0, refState.width, refState.height, xres, yres, frame, redraw );
+	}
 
 	return true;
+#endif
 }
 
 /*
@@ -212,9 +332,27 @@ qboolean SCR_PlayCinematic( const char *arg )
 		return false;
 	}
 
+	if( !fullpath )
+	{
+		Con_Printf( S_ERROR "SCR_PlayCinematic: file not found: %s\n", arg );
+		return false;
+	}
+
+	// Stop any previous video before opening a new one
+#if XASH_DREAMCAST
+	if( cin_state && AVI_IsActive( cin_state ))
+	{
+		mpeg_player_t *player = (mpeg_player_t *)AVI_GetMpegPlayer( cin_state );
+		if( player )
+			mpeg_player_stop_audio( player );
+	}
+#endif
+	AVI_CloseVideo( cin_state );
+
 	AVI_OpenVideo( cin_state, fullpath, true, false );
 	if( !AVI_IsActive( cin_state ))
 	{
+		Con_Printf( S_ERROR "SCR_PlayCinematic: AVI_OpenVideo failed for %s\n", fullpath );
 		AVI_CloseVideo( cin_state );
 		return false;
 	}
@@ -229,7 +367,13 @@ qboolean SCR_PlayCinematic( const char *arg )
 	{
 		// begin streaming
 		S_StopAllSounds( true );
+#if XASH_DREAMCAST
+		// On Dreamcast, MPEG player handles its own audio streaming
+		// Audio was already started in AVI_OpenVideo
+		// Don't call S_StartStreaming() as it expects SCR_GetAudioChunk to work
+#else
 		S_StartStreaming();
+#endif
 	}
 
 	UI_SetActiveMenu( false );
@@ -269,7 +413,11 @@ void SCR_StopCinematic( void )
 		return;
 
 	AVI_CloseVideo( cin_state );
+#if XASH_DREAMCAST
+	// MPEG player audio is stopped in AVI_CloseVideo
+#else
 	S_StopStreaming();
+#endif
 	cin_time = 0.0f;
 
 	cls.state = ca_disconnected;

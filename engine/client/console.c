@@ -546,6 +546,10 @@ static void Con_LoadConsoleFont( int fontNumber, cl_font_t *font )
 	if( font->valid )
 		return; // already loaded
 
+#if XASH_DREAMCAST
+	// Dreamcast: use engine creditsfont as the console font.
+	success = Con_LoadVariableWidthFont( "gfx/creditsfont.fnt", font, scale, &con_fontrender, TF_FONT|TF_NEAREST );
+#else
 	if( con_oldfont.value )
 	{
 		success = Con_LoadVariableWidthFont( "gfx/conchars.fnt", font, scale, &con_fontrender, TF_FONT|TF_NEAREST );
@@ -571,6 +575,7 @@ static void Con_LoadConsoleFont( int fontNumber, cl_font_t *font )
 			success = Con_LoadVariableWidthFont( path, font, scale, &con_fontrender, TF_FONT|TF_NEAREST );
 		}
 	}
+#endif
 
 	if( !success )
 	{
@@ -2190,7 +2195,6 @@ void Con_VidInit( void )
 	Con_LoadConchars();
 	Con_CheckResize();
 
-
 	// loading console image
 	con.background = Con_LoadSimpleConback( host.allow_console ? "conback" : "loading", flags );
 
@@ -2237,7 +2241,6 @@ void Con_VidInit( void )
 	// missed console image will be replaced as gray background like X-Ray or Crysis
 	if( con.background == R_GetBuiltinTexture( REF_DEFAULT_TEXTURE ) || con.background == 0 )
 		con.background = R_GetBuiltinTexture( REF_GRAY_TEXTURE );
-
 }
 
 /*

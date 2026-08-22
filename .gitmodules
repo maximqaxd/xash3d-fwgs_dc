@@ -34,9 +34,12 @@
 [submodule "3rdparty/opusfile/opusfile"]
 	path = 3rdparty/opusfile/opusfile
 	url = https://gitlab.xiph.org/xiph/opusfile.git
-[submodule "3rdparty/dreamcast/GLdc"]
-	path = 3rdparty/dreamcast/GLdc
-	url = https://gitlab.com/simulant/GLdc.git
 [submodule "3rdparty/dreamcast/FatFs"]
 	path = 3rdparty/dreamcast/FatFs
 	url = https://github.com/DC-SWAT/FatFs
+[submodule "3rdparty/dreamcast/GLdc"]
+	path = 3rdparty/dreamcast/GLdc
+	url = https://github.com/maximqaxd/GLdc.git
+[submodule "3rdparty/dreamcast/kos"]
+	path = 3rdparty/dreamcast/kos
+	url = https://github.com/maximqaxd/KallistiOS.git

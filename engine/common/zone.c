@@ -57,10 +57,14 @@ static void *Q_realloc( void *mem, size_t size )
 typedef struct memheader_s
 {
 	struct memheader_s *next, *prev; // next and previous memheaders in chain belonging to pool
+#ifdef DEBUG
 	const char         *filename;    // file name and line where Mem_Alloc was called
+#endif
 	size_t             size;         // size of the memory after the header (excluding header and sentinel2)
 	poolhandle_t       poolptr;      // pool this memheader belongs to
+#ifdef DEBUG
 	uint16_t           fileline;
+#endif
 	uint16_t           sentinel1;    // must be equal to MEMHEADER_SENTINEL1
 	// immediately followed by data, which is followed by a MEMHEADER_SENTINEL2 byte
 } memheader_t;
@@ -128,8 +132,10 @@ static inline void Mem_PoolUnlinkAlloc( mempool_t *pool, memheader_t *mem )
 static inline void Mem_InitAlloc( memheader_t *mem, size_t size, const char *filename, int fileline )
 {
 	mem->size = size;
+#ifdef DEBUG
 	mem->filename = filename;
 	mem->fileline = fileline;
+#endif
 	mem->sentinel1 = MEMHEADER_SENTINEL1;
 	*((byte *)mem + sizeof( memheader_t ) + mem->size ) = MEMHEADER_SENTINEL2;
 }
@@ -151,6 +157,7 @@ static qboolean Mem_CheckAllocHeader( const char *func, const memheader_t *mem, 
 {
 	const char *memfilename;
 
+#ifdef DEBUG
 	if( mem->sentinel1 != MEMHEADER_SENTINEL1 )
 	{
 		memfilename = Mem_CheckFilename( mem->filename );
@@ -164,7 +171,7 @@ static qboolean Mem_CheckAllocHeader( const char *func, const memheader_t *mem, 
 		Sys_Error( "%s: trashed header sentinel 2 (alloc at %s:%i, check at %s:%i)\n", func, memfilename, mem->fileline, filename, fileline );
 		return false;
 	}
-
+#endif
 	return true;
 }
 
@@ -510,7 +517,12 @@ void Mem_PrintList( size_t minallocationsize )
 		for( mem = pool->chain; mem; mem = mem->next )
 		{
 			if( mem->size >= minallocationsize )
+#ifdef DEBUG
 				Con_Printf( "%10s allocated at %s:%i\n", Q_memprint( mem->size ), mem->filename, mem->fileline );
+#else
+			Con_Printf( "%10s allocated\n", Q_memprint( mem->size ));
+#endif
+
 		}
 	}
 }

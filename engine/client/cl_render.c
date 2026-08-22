@@ -250,7 +250,7 @@ static render_api_t gRenderAPI =
 	NULL, // R_SetCurrentEntity,
 	NULL, // R_SetCurrentModel,
 	R_FatPVS,
-	R_StoreEfrags,
+	NULL, // R_StoreEfrags !XASH_DREAMCAST
 	NULL, // GL_FindTexture,
 	NULL, // GL_TextureName,
 	NULL, // GL_TextureData,
@@ -269,7 +269,7 @@ static render_api_t gRenderAPI =
 	NULL, // R_UploadStretchRaw,
 	(void*)AVI_FreeVideo,
 	(void*)AVI_IsActive,
-	S_StreamAviSamples,
+	NULL,
 	NULL,
 	NULL,
 	NULL, // GL_Bind,

@@ -20,9 +20,11 @@ extern poolhandle_t sndpool;
 
 #include "xash3d_mathlib.h"
 #if XASH_DREAMCAST
-#include <dc/sound/aica_comm.h>
-#undef int8
 #include <dc/sound/sound.h>
+#include <dc/sound/stream.h>
+static snd_stream_hnd_t music_stream = SND_STREAM_INVALID;
+#define MUSIC_BUFFER_SIZE 16384
+static byte music_buffer[MUSIC_BUFFER_SIZE] __attribute__((aligned(32)));
 #endif
 
 #define XASH_AUDIO_CD_QUALITY 1 // some platforms might need this
@@ -130,7 +132,6 @@ typedef struct channel_s
 	sfx_t   *sfx;         // sfx number
 
 #ifdef XASH_DREAMCAST
-	aica_channel_t aica;      // AICA channel data
 	qboolean    active;       // Is AICA channel in use?
 	qboolean    temp_aica; 
 	int         aica_channel;  
@@ -277,6 +278,9 @@ void SND_MoveMouth16( channel_t *ch, wavdata_t *pSource, int count );
 void SND_MoveMouthRaw( rawchan_t *ch, portable_samplepair_t *pData, int count );
 void SND_CloseMouth( channel_t *ch );
 void SND_ForceCloseMouth( int entnum );
+#ifdef XASH_DREAMCAST
+void SND_UpdateMouthDC( channel_t *ch );
+#endif
 
 //
 // s_stream.c
@@ -293,8 +297,6 @@ int S_ZeroCrossingAfter( wavdata_t *pWaveData, int sample );
 int S_ZeroCrossingBefore( wavdata_t *pWaveData, int sample );
 int S_ConvertLoopedPosition( wavdata_t *pSource, int samplePosition, qboolean use_loop );
 int S_GetOutputData( wavdata_t *pSource, void **pData, int samplePosition, int sampleCount, qboolean use_loop );
-
-#ifndef XASH_DREAMCAST
 //
 // s_vox.c
 //
@@ -304,6 +306,6 @@ void VOX_SetChanVol( channel_t *ch );
 void VOX_LoadSound( channel_t *pchan, const char *psz );
 float VOX_ModifyPitch( channel_t *ch, float pitch );
 int VOX_MixDataToDevice( channel_t *pChannel, int sampleCount, int outputRate, int outputOffset );
-#endif
+
 #endif //SOUND_H
 

@@ -659,7 +659,7 @@ static void LM_InitBlock( void )
 	memset( gl_lms.allocated, 0, sizeof( gl_lms.allocated ));
 }
 
-static int LM_AllocBlock( int w, int h, int *x, int *y )
+static int LM_AllocBlock( int w, int h, byte *x, byte *y )
 {
 	int	i, j;
 	int	best, best2;
@@ -760,27 +760,96 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 	const int size = smax * tmax;
 
 	if( gl_overbright.value )
-	 	lightscale = ( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256 ) + 0.5;
+		lightscale = 256;
+	else lightscale = ( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256 ) + 0.5;
 
 	memset( r_blocklights, 0, sizeof( uint ) * size * 3 );
 
-	// add all the lightmaps
-	for( map = 0; map < MAXLIGHTMAPS && surf->samples; map++ )
+	/* add all the lightmaps (BSP samples or LT2) */
+	for( map = 0; map < MAXLIGHTMAPS && surf->styles[map] != 255; map++ )
 	{
-		const color24 *lm = &surf->samples[map * size];
-		uint scale;
-		int i;
+		const uint scale = tr.lightstylevalue[surf->styles[map]];
 
-		if( surf->styles[map] >= 255 )
-			break;
-
-		scale = tr.lightstylevalue[surf->styles[map]];
-
-		for( i = 0; i < size; i++ )
+		if( surf->samples )
 		{
-			r_blocklights[i * 3 + 0] += lm[i].r * scale;
-			r_blocklights[i * 3 + 1] += lm[i].g * scale;
-			r_blocklights[i * 3 + 2] += lm[i].b * scale;
+			const color24 *lm = &surf->samples[map * size];
+			for( int i = 0; i < size; i++ )
+			{
+				r_blocklights[i * 3 + 0] += lm[i].r * scale;
+				r_blocklights[i * 3 + 1] += lm[i].g * scale;
+				r_blocklights[i * 3 + 2] += lm[i].b * scale;
+			}
+		}
+		else if( WORLDMODEL && FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) &&
+		         WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs && info )
+		{
+			/* LT2 'a' (LERP control-point grid) evaluated on demand */
+			const int face_index = info->lt2_face_index;
+			if( face_index >= 0 && (uint32_t)face_index < WORLDMODEL->lt2_lightsurfs_count )
+			{
+				/* locate style grid by walking previous grids */
+				uint32_t pos = WORLDMODEL->lt2_lightsurfs[face_index];
+				for( int st = 0; st < map; st++ )
+				{
+					if( pos + 1u >= WORLDMODEL->lt2_payload_size ) { pos = 0; break; }
+					const byte op = WORLDMODEL->lt2_payload[pos];
+					const uint gw = ((op >> 4) & 0x0F) + 2u;
+					const uint gh = (op & 0x0F) + 2u;
+					pos += 1u + gw * gh * 3u;
+				}
+
+				if( pos + 1u < WORLDMODEL->lt2_payload_size )
+				{
+					const byte op = WORLDMODEL->lt2_payload[pos];
+					const uint gw = ((op >> 4) & 0x0F) + 2u;
+					const uint gh = (op & 0x0F) + 2u;
+					const uint need = 1u + gw * gh * 3u;
+					const byte *grid = WORLDMODEL->lt2_payload + pos + 1u;
+
+					if( pos + need <= WORLDMODEL->lt2_payload_size && gw >= 2 && gh >= 2 )
+					{
+						for( int y = 0; y < tmax; y++ )
+						{
+							const float v = (tmax == 1) ? 0.0f : ((float)y / (float)(tmax - 1)) * (float)(gh - 1);
+							int cy = (int)floorf( v );
+							if( cy < 0 ) cy = 0;
+							if( cy > (int)gh - 2 ) cy = (int)gh - 2;
+							const float fy = v - (float)cy;
+
+							for( int x = 0; x < smax; x++ )
+							{
+								const float u = (smax == 1) ? 0.0f : ((float)x / (float)(smax - 1)) * (float)(gw - 1);
+								int cx = (int)floorf( u );
+								if( cx < 0 ) cx = 0;
+								if( cx > (int)gw - 2 ) cx = (int)gw - 2;
+								const float fx = u - (float)cx;
+
+								const uint idx00 = (uint)((cy * (int)gw + cx) * 3);
+								const uint idx10 = (uint)((cy * (int)gw + (cx + 1)) * 3);
+								const uint idx01 = (uint)(((cy + 1) * (int)gw + cx) * 3);
+								const uint idx11 = (uint)(((cy + 1) * (int)gw + (cx + 1)) * 3);
+
+								const float c00r = (float)grid[idx00 + 0], c00g = (float)grid[idx00 + 1], c00b = (float)grid[idx00 + 2];
+								const float c10r = (float)grid[idx10 + 0], c10g = (float)grid[idx10 + 1], c10b = (float)grid[idx10 + 2];
+								const float c01r = (float)grid[idx01 + 0], c01g = (float)grid[idx01 + 1], c01b = (float)grid[idx01 + 2];
+								const float c11r = (float)grid[idx11 + 0], c11g = (float)grid[idx11 + 1], c11b = (float)grid[idx11 + 2];
+
+								const float top_r = c00r + (c10r - c00r) * fx;
+								const float top_g = c00g + (c10g - c00g) * fx;
+								const float top_b = c00b + (c10b - c00b) * fx;
+								const float bot_r = c01r + (c11r - c01r) * fx;
+								const float bot_g = c01g + (c11g - c01g) * fx;
+								const float bot_b = c01b + (c11b - c01b) * fx;
+
+								const int i = x + y * smax;
+								r_blocklights[i * 3 + 0] += (uint)(top_r + (bot_r - top_r) * fy) * scale;
+								r_blocklights[i * 3 + 1] += (uint)(top_g + (bot_g - top_g) * fy) * scale;
+								r_blocklights[i * 3 + 2] += (uint)(top_b + (bot_b - top_b) * fy) * scale;
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -850,8 +919,50 @@ static void R_BuildLightMap( const msurface_t *surf, byte *dest, int stride, qbo
 
 /*
 ================
+AddDynamicLightToVertex
+Q2-style: 3D distance from vertex to light, add (radius - dist) * color.
+================
+*/
+static void AddDynamicLightToVertex( const msurface_t *surf, const vec3_t vert_world,
+	uint *r_accum, uint *g_accum, uint *b_accum )
+{
+	if( !surf->dlightbits || surf->dlightframe != tr.framecount || !r_dynamic->value )
+		return;
+
+	vec3_t impact;
+	for( int lnum = 0; lnum < MAX_DLIGHTS; lnum++ )
+	{
+		if( !FBitSet( surf->dlightbits, BIT( lnum )))
+			continue;
+
+		const dlight_t *dl = &tr.dlights[lnum];
+		if( dl->die < gp_cl->time || !dl->radius )
+			continue;
+
+		VectorSubtract( dl->origin, vert_world, impact );
+		float dist = VectorLength( impact );
+		float add = dl->radius - dist;
+		if( add <= 0.0f )
+			continue;
+		if( add < dl->minlight )
+			continue;
+
+		uint add_scaled = (uint)( add * 256.0f );
+		*r_accum += ( dl->color.r * add_scaled ) / 256;
+		*g_accum += ( dl->color.g * add_scaled ) / 256;
+		*b_accum += ( dl->color.b * add_scaled ) / 256;
+	}
+
+	const uint max_light_accum = 255 * 256;
+	if( *r_accum > max_light_accum ) *r_accum = max_light_accum;
+	if( *g_accum > max_light_accum ) *g_accum = max_light_accum;
+	if( *b_accum > max_light_accum ) *b_accum = max_light_accum;
+}
+
+/*
+================
 SampleVertexLight
-Sample lightmap data at a vertex position from surf->samples
+Q2-style: nearest-neighbor static sample + LT2 single sample + simple 3D dlights.
 ================
 */
 static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
@@ -859,72 +970,158 @@ static uint32_t SampleVertexLight( const msurface_t *surf, const float *vert )
 #if REF_PVR_PROFILE
 	PVR_Prof_Start();
 #endif
-	float r = 0.0f, g = 0.0f, b = 0.0f;
-	
-	// Sample static lightmap if available (like Q2 example, but using Xash3D lightstyle scaling)
-	if( surf && surf->samples && WORLDMODEL && WORLDMODEL->lightdata )
+	uint r_accum = 0, g_accum = 0, b_accum = 0;
+	qboolean has_static = false;
+	vec3_t vert_world;
+
+	// World-space vertex for dlights (only when needed)
+	qboolean need_dlights = ( surf && surf->dlightbits && surf->dlightframe == tr.framecount );
+	if( need_dlights )
+	{
+		if( tr.modelviewIdentity )
+			VectorCopy( vert, vert_world );
+		else
+			PVR_Mat4x4_TransformVec3( &RI.objectMatrix, vert, vert_world );
+	}
+
+	// Static lightmap (BSP samples or LT2) — nearest-neighbor single sample
+	if( surf && WORLDMODEL && ( ( surf->samples && WORLDMODEL->lightdata ) || FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING )))
 	{
 		const mextrasurf_t *info = surf->info;
+#if XASH_DREAMCAST
+		SHZ_PREFETCH( info->lmvecs );
+#endif
 		const int sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
 		const int smax = ( info->lightextents[0] / sample_size ) + 1;
 		const int tmax = ( info->lightextents[1] / sample_size ) + 1;
 		const int size = smax * tmax;
-		
-		// Compute lightmap (s,t) in luxel space
+
+#if XASH_DREAMCAST
+		shz_vec2_t st = shz_vec3_dot2( shz_vec3_deref( vert ),
+			shz_vec3_deref( info->lmvecs[0] ), shz_vec3_deref( info->lmvecs[1] ));
+		float s = st.x + info->lmvecs[0][3] - info->lightmapmins[0];
+		float t = st.y + info->lmvecs[1][3] - info->lightmapmins[1];
+#else
 		float s = DotProduct( vert, info->lmvecs[0] ) + info->lmvecs[0][3] - info->lightmapmins[0];
 		float t = DotProduct( vert, info->lmvecs[1] ) + info->lmvecs[1][3] - info->lightmapmins[1];
-		
-		// Convert to luxel coordinates
-		float ls = s / sample_size;
-		float lt = t / sample_size;
-		
-		int is = (int)ls;
-		int it = (int)lt;
-		
-		// Clamp to valid range
-		if( is < 0 ) is = 0;
-		if( is >= smax ) is = smax - 1;
-		if( it < 0 ) it = 0;
-		if( it >= tmax ) it = tmax - 1;
-		
-		// Base pointer to first style samples
-		const color24 *lightmap = &surf->samples[it * smax + is];
-		
-		// Accumulate all styles (like R_BuildLightMap in gl_rsurf.c)
+#endif
+
+		float ls = s / (float)sample_size;
+		float lt = t / (float)sample_size;
+		int lux_s = (int)ls;
+		int lux_t = (int)lt;
+		if( lux_s < 0 ) lux_s = 0;
+		if( lux_s >= smax ) lux_s = smax - 1;
+		if( lux_t < 0 ) lux_t = 0;
+		if( lux_t >= tmax ) lux_t = tmax - 1;
+
 		for( int maps = 0; maps < MAXLIGHTMAPS && surf->styles[maps] != 255; maps++ )
 		{
-			const color24 *lm = lightmap + maps * size;
-			// tr.lightstylevalue is 16.16 fixed point (256 = 1.0)
-			const float scale = (float)tr.lightstylevalue[surf->styles[maps]] / 256.0f;
-			
-			r += lm->r * scale;
-			g += lm->g * scale;
-			b += lm->b * scale;
+			const uint scale = tr.lightstylevalue[surf->styles[maps]];
+
+			if( surf->samples && WORLDMODEL->lightdata )
+			{
+				const color24 *p = &surf->samples[maps * size + lux_t * smax + lux_s];
+#if XASH_DREAMCAST
+				SHZ_PREFETCH( p );
+#endif
+				r_accum += (uint)p->r * scale;
+				g_accum += (uint)p->g * scale;
+				b_accum += (uint)p->b * scale;
+				has_static = true;
+			}
+			else if( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs && info )
+			{
+				const int face_index = info->lt2_face_index;
+				if( face_index >= 0 && (uint32_t)face_index < WORLDMODEL->lt2_lightsurfs_count )
+				{
+					uint32_t pos = WORLDMODEL->lt2_lightsurfs[face_index];
+					for( int m = 0; m < maps; m++ )
+					{
+						if( pos + 1u >= WORLDMODEL->lt2_payload_size ) { pos = 0; break; }
+						const byte op = WORLDMODEL->lt2_payload[pos];
+						const uint gw = ((op >> 4) & 0x0F) + 2u;
+						const uint gh = (op & 0x0F) + 2u;
+						pos += 1u + gw * gh * 3u;
+					}
+					if( pos + 1u < WORLDMODEL->lt2_payload_size )
+					{
+						const byte op = WORLDMODEL->lt2_payload[pos];
+						const uint gw = ((op >> 4) & 0x0F) + 2u;
+						const uint gh = (op & 0x0F) + 2u;
+						const uint need = 1u + gw * gh * 3u;
+						const byte *grid = WORLDMODEL->lt2_payload + pos + 1u;
+						if( pos + need <= WORLDMODEL->lt2_payload_size && gw >= 1 && gh >= 1 )
+						{
+							float u = (smax <= 1) ? 0.0f : (ls / (float)(smax - 1)) * (float)(gw - 1);
+							float v = (tmax <= 1) ? 0.0f : (lt / (float)(tmax - 1)) * (float)(gh - 1);
+							int cx = (int)u;
+							int cy = (int)v;
+							if( cx < 0 ) cx = 0;
+							if( cx >= (int)gw ) cx = (int)gw - 1;
+							if( cy < 0 ) cy = 0;
+							if( cy >= (int)gh ) cy = (int)gh - 1;
+							uint idx = (uint)( cy * gw + cx ) * 3u;
+							r_accum += (uint)grid[idx + 0] * scale;
+							g_accum += (uint)grid[idx + 1] * scale;
+							b_accum += (uint)grid[idx + 2] * scale;
+							has_static = true;
+						}
+					}
+				}
+			}
 		}
-		
-		// If no styles, treat as fullbright
-		if( r == 0.0f && g == 0.0f && b == 0.0f )
-		{
-			r = g = b = 255.0f;
-		}
+	}
+
+	// Add dynamic lights (Q2-style 3D distance; vert_world set only when need_dlights)
+	if( need_dlights )
+		AddDynamicLightToVertex( surf, vert_world, &r_accum, &g_accum, &b_accum );
+
+	// No static and no dlight contribution -> fullbright
+	if( !has_static && r_accum == 0 && g_accum == 0 && b_accum == 0 )
+	{
+#if REF_PVR_PROFILE
+		r_stats.t_world_lighting += PVR_Prof_End();
+#endif
+		return 0xFF000000 | (255 << 16) | (255 << 8) | 255;
+	}
+
+	// Apply lightscale (gamma compensation) and convert to 10-bit range
+	// This matches GL renderer: val = bl[i] * lightscale >> 14
+	int lightscale;
+	if( gl_overbright.value )
+		lightscale = 256; // Simple case for overbright
+	else
+		lightscale = (int)( pow( 2.0f, 1.0f / v_lightgamma->value ) * 256.0f + 0.5f );
+
+	uint r_val = ( r_accum * lightscale ) >> 14;
+	uint g_val = ( g_accum * lightscale ) >> 14;
+	uint b_val = ( b_accum * lightscale ) >> 14;
+	if( r_val > 1023 ) r_val = 1023;
+	if( g_val > 1023 ) g_val = 1023;
+	if( b_val > 1023 ) b_val = 1023;
+
+	// Gamma to 8-bit
+	int ir, ig, ib;
+	if( FBitSet( gp_host->features, ENGINE_LINEAR_GAMMA_SPACE ))
+	{
+		ir = r_val >> 2;
+		ig = g_val >> 2;
+		ib = b_val >> 2;
 	}
 	else
 	{
-		// No lightmap - fullbright
-		r = g = b = 255.0f;
+		ir = tr.lightgammatable[r_val] >> 2;
+		ig = tr.lightgammatable[g_val] >> 2;
+		ib = tr.lightgammatable[b_val] >> 2;
 	}
-	
-	// TODO: Add dynamic lights here if needed
-	
-	// Clamp and pack to ARGB
-	int ir = (int)r; if( ir > 255 ) ir = 255; if( ir < 0 ) ir = 0;
-	int ig = (int)g; if( ig > 255 ) ig = 255; if( ig < 0 ) ig = 0;
-	int ib = (int)b; if( ib > 255 ) ib = 255; if( ib < 0 ) ib = 0;
-	
+	if( ir > 255 ) ir = 255;
+	if( ig > 255 ) ig = 255;
+	if( ib > 255 ) ib = 255;
+
 #if REF_PVR_PROFILE
 	r_stats.t_world_lighting += PVR_Prof_End();
 #endif
-	
 	return 0xFF000000 | (ir << 16) | (ig << 8) | ib;
 }
 
@@ -935,13 +1132,17 @@ Helper function to submit polygon vertices to PVR
 Now supports per-vertex colors for Gouraud shading
 ================
 */
+#if XASH_DREAMCAST
+static SHZ_HOT void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const uint32_t *vertex_colors, float sOffset, float tOffset, float xScale, float yScale )
+#else
 static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const uint32_t *vertex_colors, float sOffset, float tOffset, float xScale, float yScale )
+#endif
 {
 	if( !p || p->numverts < 3 ) return;
-	
+
 	float *v = p->verts[0];
 	const int numverts = p->numverts;
-	
+
 	// Load matrix once
 	__attribute__((aligned(8))) float aligned_matrix[16];
 	memcpy( aligned_matrix, r_world_matrix, sizeof( aligned_matrix ));
@@ -949,44 +1150,70 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 	PVR_Prof_Start();
 #endif
 	shz_xmtrx_load_4x4((shz_mat4x4_t*)aligned_matrix);
-	
-	// Transform all vertices
+
+	// Transform all vertices and compute 1/w in same pass (cache-hot; avoids second pass in all-visible path).
 	shz_vec4_t transformed[64];
+	float inv_w[64];
 	float uv[64][2];
 	unsigned vismask_all = 0;
-	
-	SHZ_PREFETCH(v);
-	
+	float batch_4x[16];
+
 	int hasScale = (xScale != 0.0f && yScale != 0.0f);
-	
-	for( int i = 0; i < numverts; i++, v += VERTEXSIZE )
+
+	int j = 0;
+	for( ; j + 4 <= numverts; j += 4 )
 	{
-		SHZ_PREFETCH(v + VERTEXSIZE);
-		
-		shz_vec3_t pos = shz_vec3_init(v[0], v[1], v[2]);
-		transformed[i] = shz_xmtrx_transform_vec4(shz_vec3_vec4(pos, 1.0f));
-		
-		// Calculate UV coordinates
-		float s = v[3] + sOffset;
-		float t = v[4] + tOffset;
-		if( hasScale )
+		for( int k = 0; k < 4; k++ )
 		{
-			s *= xScale;
-			t *= yScale;
+			float *vk = v + (j + k) * VERTEXSIZE;
+			batch_4x[k*4 + 0] = vk[0];
+			batch_4x[k*4 + 1] = vk[1];
+			batch_4x[k*4 + 2] = vk[2];
+			batch_4x[k*4 + 3] = 1.0f;
 		}
-		uv[i][0] = s;
-		uv[i][1] = t;
-		
-		// Track if any vertex is visible
-		if( transformed[i].z >= -transformed[i].w )
-			vismask_all |= (1 << i);
+		shz_xmtrx_load_apply_unaligned_4x4( aligned_matrix, batch_4x );
+		for( int k = 0; k < 4; k++ )
+		{
+			const int i = j + k;
+			shz_vec4_t clip = shz_xmtrx_read_col( k );
+			transformed[i] = clip;
+			inv_w[i] = shz_invf_fsrra( clip.w );
+			if( clip.w >= clip.z + PVR_NEAR_CLIP_EPSILON )
+				vismask_all |= (1u << i);
+			float *vk = v + i * VERTEXSIZE;
+			float s = vk[3] + sOffset;
+			float t = vk[4] + tOffset;
+			if( hasScale ) { s *= xScale; t *= yScale; }
+			uv[i][0] = s;
+			uv[i][1] = t;
+		}
+		shz_xmtrx_load_4x4( (shz_mat4x4_t *)aligned_matrix );
 	}
-	
+	for( ; j < numverts; j++ )
+	{
+#if XASH_DREAMCAST
+		if( j + 1 < numverts )
+			SHZ_PREFETCH( v + (j + 1) * VERTEXSIZE );
+#endif
+		float *vj = v + j * VERTEXSIZE;
+		shz_vec3_t pos = shz_vec3_init( vj[0], vj[1], vj[2] );
+		shz_vec4_t clip = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
+		transformed[j] = clip;
+		inv_w[j] = shz_invf_fsrra( clip.w );
+		if( clip.w >= clip.z + PVR_NEAR_CLIP_EPSILON )
+			vismask_all |= (1u << j);
+		float s = vj[3] + sOffset;
+		float t = vj[4] + tOffset;
+		if( hasScale ) { s *= xScale; t *= yScale; }
+		uv[j][0] = s;
+		uv[j][1] = t;
+	}
+
 #if REF_PVR_PROFILE
 	r_stats.t_world_transforms += PVR_Prof_End();
 	PVR_Prof_Start(); // Start geometry profiling
 #endif
-	
+
 	// Early out if entire poly is behind near plane
 	if( vismask_all == 0 )
 	{
@@ -995,19 +1222,21 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 #endif
 		return;
 	}
-	
+
 	// Check if all visible (common case)
-	unsigned all_visible_mask = (1 << numverts) - 1;
-	
+	unsigned all_visible_mask = (1u << numverts) - 1;
+
 	if( vismask_all == all_visible_mask )
 	{
-		// Fast path - no clipping
+		// Fast path: inv_w already computed in transform loop (cache-hot)
+
+		// Fan: tri (0,1,2), (0,2,3), ... — must emit 3 verts per tri (strip would give wrong tris)
 		for( int i = 1; i < numverts - 1; i++ )
 		{
-			float inv_w0 = shz_invf_fsrra(transformed[0].w);
-			float inv_wi = shz_invf_fsrra(transformed[i].w);
-			float inv_wi1 = shz_invf_fsrra(transformed[i+1].w);
-			
+			const float inv_w0 = inv_w[0];
+			const float inv_wi = inv_w[i];
+			const float inv_wi1 = inv_w[i+1];
+
 			pvr_vertex_t *vert = pvr_dr_target(*dr_state);
 			vert->flags = PVR_CMD_VERTEX;
 			vert->x = transformed[0].x * inv_w0;
@@ -1018,7 +1247,7 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			vert->argb = vertex_colors ? vertex_colors[0] : 0xFFFFFFFF;
 			vert->oargb = 0;
 			pvr_dr_commit(vert);
-			
+
 			vert = pvr_dr_target(*dr_state);
 			vert->flags = PVR_CMD_VERTEX;
 			vert->x = transformed[i].x * inv_wi;
@@ -1029,7 +1258,7 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			vert->argb = vertex_colors ? vertex_colors[i] : 0xFFFFFFFF;
 			vert->oargb = 0;
 			pvr_dr_commit(vert);
-			
+
 			vert = pvr_dr_target(*dr_state);
 			vert->flags = PVR_CMD_VERTEX_EOL;
 			vert->x = transformed[i+1].x * inv_wi1;
@@ -1059,7 +1288,7 @@ static void DrawGLPolyVertices( glpoly2_t *p, pvr_dr_state_t *dr_state, const ui
 			);
 		}
 	}
-	
+
 #if REF_PVR_PROFILE
 	r_stats.t_world_geometry += PVR_Prof_End();
 #endif
@@ -1089,8 +1318,7 @@ static qboolean DrawGLPoly_AnyVertexVisible( glpoly2_t *p )
 	{
 		shz_vec3_t pos = shz_vec3_init( v[0], v[1], v[2] );
 		shz_vec4_t tp = shz_xmtrx_transform_vec4( shz_vec3_vec4( pos, 1.0f ));
-		// sh4zam perspective: near plane is (w >= z)
-		if( tp.w >= tp.z )
+		if( tp.w >= tp.z + PVR_NEAR_CLIP_EPSILON )
 			return true;
 	}
 
@@ -1103,18 +1331,29 @@ DrawGLPolySurfaceGouraud
 Gouraud shaded polygon - samples light per vertex from surf->samples 
 ================
 */
-static void DrawGLPolySurfaceGouraud( glpoly2_t *p, pvr_dr_state_t *dr_state, const msurface_t *surf, float sOffset, float tOffset, float xScale, float yScale )
+static SHZ_HOT void DrawGLPolySurfaceGouraud( glpoly2_t *p, pvr_dr_state_t *dr_state, const msurface_t *surf, float sOffset, float tOffset, float xScale, float yScale )
 {
 	if( !p || p->numverts < 3 || !surf )
 		return;
 
 	float *v = p->verts[0];
 	const int numverts = p->numverts;
-	
+
+#if XASH_DREAMCAST
+	// Prefetch current surface's lmvecs so SampleVertexLight has it hot
+	if( surf->info )
+		SHZ_PREFETCH( surf->info->lmvecs );
+#endif
+
 	// Sample light per vertex from surf->samples
 	uint32_t colors[64];
 	for( int i = 0; i < numverts && i < 64; i++, v += VERTEXSIZE )
 	{
+#if XASH_DREAMCAST
+		// Prefetch next vertex so it's in cache for the next iteration
+		if( i + 1 < numverts && i + 1 < 64 )
+			SHZ_PREFETCH( v + VERTEXSIZE );
+#endif
 		colors[i] = SampleVertexLight( surf, v );
 	}
 	
@@ -1245,7 +1484,8 @@ conveyor_done:
 	// Both world surfaces and brush entities can have lightmaps (surf->samples)
 	// But exclude TransTexture entities - they should use flat shading
 	qboolean use_gouraud = false;
-	if( surf && surf->samples && WORLDMODEL && WORLDMODEL->lightdata )
+	if( surf && WORLDMODEL && ( ( surf->samples && WORLDMODEL->lightdata ) ||
+		( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs )))
 	{
 		// Don't apply Gouraud to TransTexture 
 		if( rendermode == kRenderTransTexture )
@@ -1257,7 +1497,7 @@ conveyor_done:
 			use_gouraud = true;
 		}
 	}
-	
+
 	// Entity color setup (for translucent entities)
 	uint32_t vertex_colors[64] = { 0 };
 	const uint32_t *vertex_colors_ptr = NULL;
@@ -1408,7 +1648,12 @@ static qboolean R_HasLightmap( void )
     if( r_fullbright->value )
         return false;
 
-	if( !WORLDMODEL->lightdata )
+	if( !WORLDMODEL )
+		return false;
+
+	/* LT2 keeps WORLDMODEL->lightdata NULL on purpose. */
+	if( !WORLDMODEL->lightdata &&
+	    !( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs ))
 		return false;
 
 	if( RI.currententity )
@@ -1444,120 +1689,7 @@ static void R_BlendLightmaps( void )
 		return;
 
 	GL_SetupFogColorForSurfacesEx( r_detailtextures.value ? 3 : 2, 1.0f, true );
-#if 0
-	if( !r_lightmap->value )
-		pglEnable( GL_BLEND );
-	else pglDisable( GL_BLEND );
 
-	// lightmapped solid surfaces
-	pglDepthMask( GL_FALSE );
-	pglDepthFunc( GL_EQUAL );
-	pglDisable( GL_ALPHA_TEST );
-	if( gl_overbright.value )
-	{
-		pglBlendFunc( GL_DST_COLOR, GL_SRC_COLOR );
-		if(!( R_HasEnabledVBO() && !r_vbo_overbrightmode.value ))
-			pglColor4f( 128.0f / 192.0f, 128.0f / 192.0f, 128.0f / 192.0f, 1.0f );
-	}
-	else
-	{
-		pglBlendFunc( GL_ZERO, GL_SRC_COLOR );
-	}
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE );
-
-	// render static lightmaps first
-	for( i = 0; i < MAX_LIGHTMAPS; i++ )
-	{
-		if( gl_lms.lightmap_surfaces[i] )
-		{
-			GL_Bind( XASH_TEXTURE0, tr.lightmapTextures[i] );
-
-			for( surf = gl_lms.lightmap_surfaces[i]; surf != NULL; surf = surf->info->lightmapchain )
-			{
-				if( surf->polys ) DrawGLPolyChain( surf->polys, 0.0f, 0.0f );
-			}
-		}
-	}
-
-	// render dynamic lightmaps
-	if( r_dynamic->value )
-	{
-		LM_InitBlock();
-		GL_Bind( XASH_TEXTURE0, tr.dlightTexture );
-		newsurf = gl_lms.dynamic_surfaces;
-
-		for( surf = gl_lms.dynamic_surfaces; surf != NULL; surf = surf->info->lightmapchain )
-		{
-			int		smax, tmax;
-			int		sample_size;
-			mextrasurf_t	*info = surf->info;
-			byte		*base;
-
-			sample_size = gEngfuncs.Mod_SampleSizeForFace( surf );
-			smax = ( info->lightextents[0] / sample_size ) + 1;
-			tmax = ( info->lightextents[1] / sample_size ) + 1;
-
-			if( LM_AllocBlock( smax, tmax, &surf->info->dlight_s, &surf->info->dlight_t ))
-			{
-				base = gl_lms.lightmap_buffer;
-				base += ( surf->info->dlight_t * BLOCK_SIZE + surf->info->dlight_s ) * LIGHTMAP_BPP;
-
-				R_BuildLightMap( surf, base, BLOCK_SIZE * LIGHTMAP_BPP, true );
-			}
-			else
-			{
-				msurface_t	*drawsurf;
-
-				// upload what we have so far
-				LM_UploadBlock( true );
-
-				// draw all surfaces that use this lightmap
-				for( drawsurf = newsurf; drawsurf != surf; drawsurf = drawsurf->info->lightmapchain )
-				{
-					if( drawsurf->polys )
-					{
-						DrawGLPolyChain( drawsurf->polys,
-						( drawsurf->light_s - drawsurf->info->dlight_s ) * ( 1.0f / (float)BLOCK_SIZE ),
-						( drawsurf->light_t - drawsurf->info->dlight_t ) * ( 1.0f / (float)BLOCK_SIZE ));
-					}
-				}
-
-				newsurf = drawsurf;
-
-				// clear the block
-				LM_InitBlock();
-
-				// try uploading the block now
-				if( !LM_AllocBlock( smax, tmax, &surf->info->dlight_s, &surf->info->dlight_t ))
-					gEngfuncs.Host_Error( "AllocBlock: full\n" );
-
-				base = gl_lms.lightmap_buffer;
-				base += ( surf->info->dlight_t * BLOCK_SIZE + surf->info->dlight_s ) * LIGHTMAP_BPP;
-
-				R_BuildLightMap( surf, base, BLOCK_SIZE * LIGHTMAP_BPP, true );
-			}
-		}
-
-		// draw remainder of dynamic lightmaps that haven't been uploaded yet
-		if( newsurf ) LM_UploadBlock( true );
-
-		for( surf = newsurf; surf != NULL; surf = surf->info->lightmapchain )
-		{
-			if( surf->polys )
-			{
-				DrawGLPolyChain( surf->polys,
-				( surf->light_s - surf->info->dlight_s ) * ( 1.0f / (float)BLOCK_SIZE ),
-				( surf->light_t - surf->info->dlight_t ) * ( 1.0f / (float)BLOCK_SIZE ));
-			}
-		}
-	}
-
-	pglDisable( GL_BLEND );
-	pglDepthMask( GL_TRUE );
-	pglDepthFunc( GL_LEQUAL );
-	pglTexEnvi( GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE );
-	pglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
-#endif // TODO
 	// restore fog here
 	GL_ResetFogColor();
 }
@@ -1592,12 +1724,7 @@ static void R_RenderDetails( int passes )
 
 static void R_RenderFullbrightForSurface( msurface_t *fa, texture_t *t )
 {
-	if( !t->fb_texturenum )
-		return;
 
-	fa->info->lumachain = fullbright_surfaces[t->fb_texturenum];
-	fullbright_surfaces[t->fb_texturenum] = fa->info;
-	R_AddToSeparatePass( &draw_fullbrights, t->fb_texturenum );
 }
 
 static void R_RenderDetailsForSurface( msurface_t *fa, texture_t *t )
@@ -1630,7 +1757,9 @@ static qboolean R_CheckLightMap( msurface_t *fa )
 	int maps;
 
 #if 1
-	if( !WORLDMODEL->lightdata )
+	/* LT2 keeps WORLDMODEL->lightdata NULL on purpose. */
+	if( !WORLDMODEL->lightdata &&
+	    !( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs ))
 		return false;
 #else
 	// check for lightmap modification
@@ -1690,22 +1819,6 @@ static qboolean R_CheckLightMap( msurface_t *fa )
 	return false; // updated
 }
 
-static void R_RenderLightmapForSurface( msurface_t *fa )
-{
-	if( !fa->polys || FBitSet( fa->flags, SURF_DRAWTILED ))
-		return;
-
-	if( R_CheckLightMap( fa ))
-	{
-		fa->info->lightmapchain = gl_lms.dynamic_surfaces;
-		gl_lms.dynamic_surfaces = fa;
-	}
-	else
-	{
-		fa->info->lightmapchain = gl_lms.lightmap_surfaces[fa->lightmaptexturenum];
-		gl_lms.lightmap_surfaces[fa->lightmaptexturenum] = fa;
-	}
-}
 
 /*
 ================
@@ -1741,13 +1854,11 @@ static void R_RenderBrushPoly( msurface_t *fa, int cull_type )
 	}
 	else GL_Bind( XASH_TEXTURE0, t->gl_texturenum );
 
-	R_RenderFullbrightForSurface( fa, t );
 	// Draw all polys in the chain (surfaces can be subdivided into multiple polys)
 	// Pass NULL for shared_dr_state so DrawGLPoly creates its own (for entity rendering outside texture chains)
 	for( glpoly2_t *p = fa->polys; p != NULL; p = p->chain )
 		DrawGLPoly( p, 0.0f, 0.0f, fa, NULL );
 	R_RenderDecalsForSurface( fa, cull_type );
-	R_RenderLightmapForSurface( fa );
 }
 
 /*
@@ -1865,7 +1976,8 @@ static void R_DrawTextureChains( void )
 		// IMPORTANT: header is submitted ONCE per texture chain, so it MUST be Gouraud+Modulate,
 		// otherwise PVR will ignore vertex colors and you'll see fullbright world.
 		// DrawGLPoly will call DrawGLPolySurfaceGouraud for surfaces with lightmaps.
-		const qboolean use_world_vertex_light = ( !r_fullbright->value && WORLDMODEL && WORLDMODEL->lightdata );
+		const qboolean use_world_vertex_light = ( !r_fullbright->value && WORLDMODEL &&
+			( WORLDMODEL->lightdata || ( FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ) && WORLDMODEL->lt2_payload && WORLDMODEL->lt2_lightsurfs )));
 		if( use_world_vertex_light )
 			cxt.gen.shading = PVR_SHADE_GOURAUD;
 		cxt.txr.env = use_world_vertex_light ? PVR_TXRENV_MODULATE : PVR_TXRENV_REPLACE;
@@ -1884,6 +1996,11 @@ static void R_DrawTextureChains( void )
 		// Now render all surfaces with this texture (they share the header and DR state we just created)
 		for( ; s != NULL; s = s->texturechain )
 		{
+#if XASH_DREAMCAST
+			// Prefetch next surface's lmvecs so it's hot when we advance
+			if( s->texturechain && s->texturechain->info )
+				SHZ_PREFETCH( s->texturechain->info->lmvecs );
+#endif
 			// Bind texture for DrawGLPoly (it reads glState.currentTexturesIndex as fallback)
 			GL_Bind( XASH_TEXTURE0, texnum );
 			
@@ -2175,7 +2292,9 @@ void R_DrawBrushModel( cl_entity_t *e )
 	if( ENGINE_GET_PARM( PARM_QUAKE_COMPATIBLE ) && FBitSet( clmodel->flags, MODEL_TRANSPARENT ))
 		e->curstate.rendermode = kRenderTransAlpha;
 
-	e->visframe = tr.realframecount; // visible
+#if !XASH_DREAMCAST
+	e->visframe = tr.realframecount; // visible 
+#endif
 
 	if( rotated ) PVR_Mat4x4_VectorITransform( &RI.objectMatrix, RI.cullorigin, tr.modelorg );
 	else VectorSubtract( RI.cullorigin, e->origin, tr.modelorg );
@@ -2705,7 +2824,7 @@ static void GL_CreateSurfaceLightmap( msurface_t *surf, model_t *loadmodel )
 	mextrasurf_t	*info = surf->info;
 	byte		*base;
 
-	if( !loadmodel->lightdata )
+	if( !loadmodel->lightdata && !FBitSet( WORLDMODEL->flags, MODEL_LT2_LIGHTING ))
 		return;
 
 	if( FBitSet( surf->flags, SURF_DRAWTILED ))
@@ -2797,14 +2916,10 @@ void GL_BuildLightmaps( void )
 {
 	int	i, j, nColinElim = 0;
 	model_t	*m;
-    // release old lightmaps
-    for( i = 0; i < MAX_LIGHTMAPS; i++ )
-    {
-        if( !tr.lightmapTextures[i] ) break;
-        GL_FreeTexture( tr.lightmapTextures[i] );
-    }
-
-    memset( tr.lightmapTextures, 0, sizeof( tr.lightmapTextures ));
+	
+	// PVR uses vertex lighting with gouraud shading, not lightmap textures
+	// We still need to set up light samples for vertex lighting, but don't build textures
+	
 	memset( &RI, 0, sizeof( RI ));
 
 	tr.block_size = BLOCK_SIZE_DEFAULT;
@@ -2852,7 +2967,8 @@ void GL_BuildLightmaps( void )
             m->nodes[j].visframe = 0;
     }
 
-    LM_UploadBlock( false );
+    // Don't upload lightmap block - we use vertex lighting instead
+    // LM_UploadBlock( false );
 
 	if( gEngfuncs.drawFuncs->GL_BuildLightmaps )
 	{
@@ -2875,3 +2991,15 @@ void GL_InitRandomTable( void )
 
 	gEngfuncs.COM_SetRandomSeed( 0 );
 }
+
+#if XASH_DREAMCAST
+uintptr_t R_SurfGetSampleVertexLightAddr( void )
+{
+	return (uintptr_t)&SampleVertexLight;
+}
+
+uintptr_t R_SurfGetDrawGLPolyVerticesAddr( void )
+{
+	return (uintptr_t)&DrawGLPolyVertices;
+}
+#endif

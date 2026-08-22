@@ -3191,16 +3191,30 @@ qboolean GAME_EXPORT FS_Delete( const char *path )
 	char path2[MAX_SYSPATH], real_path[MAX_SYSPATH];
 	int ret;
 
+#if !XASH_DREAMCAST
 	if( !fs_writepath || !COM_CheckString( path ))
 	{
 		return false;
 	}
-
+#endif
 	Q_strncpy( path2, path, sizeof( path2 ));
 	COM_FixSlashes( path2 );
 
 #if XASH_DREAMCAST
-	Q_snprintf( real_path, sizeof(real_path), "%s%s", fs_writepath->dir, path2 );
+	// Check if this is a save file and redirect to VMU if so
+	const char *ext = COM_FileExtension(path2);	
+	if (ext && !Q_stricmp(ext, "sav"))
+	{
+		const char *filename = COM_FileWithoutPath(path2);
+		Q_snprintf(real_path, sizeof(real_path), "/vmu/a1/%s", filename);
+		
+	}
+	else if (ext && !Q_stricmp(ext, "HL1"))
+	{
+		const char *filename = COM_FileWithoutPath(path2);
+		Q_snprintf(real_path, sizeof(real_path), "/ram/%s", filename);
+		Con_Printf("Deleting HL1 file: %s\n", real_path);
+	}
 #else
 	if( !FS_FixFileCase( fs_writepath->dir, path2, real_path, sizeof( real_path ), true ))
 	{

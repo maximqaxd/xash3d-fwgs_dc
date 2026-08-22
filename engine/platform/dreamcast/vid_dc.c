@@ -27,7 +27,7 @@ static qboolean vsync;
 
 pvr_init_params_t params = {
 	{ PVR_BINSIZE_8, PVR_BINSIZE_0, PVR_BINSIZE_8, PVR_BINSIZE_0, PVR_BINSIZE_8 },
-	4096 * 256,    /* vertex buffer */
+	3072 * 256,    /* vertex buffer */
 	0,             /* dma disabled for TA  */
 	0,             /* fsaa off */
 	0,             /* keep PVR translucent autosort OFF  */
@@ -58,7 +58,7 @@ int GL_SetAttribute(int attr, int val)
             val = 5; 
             break;
         case REF_GL_ALPHA_SIZE:
-            val = 0; 
+            val = 1; 
             break;
         case REF_GL_DOUBLEBUFFER:
             val = 1; 
@@ -98,7 +98,7 @@ int GL_GetAttribute(int attr, int *val)
             value = 5; 
             break;
         case REF_GL_ALPHA_SIZE:
-            value = 0; 
+            value = 1; 
             break;
         case REF_GL_DOUBLEBUFFER:
             value = 1; 

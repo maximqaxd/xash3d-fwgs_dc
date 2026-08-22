@@ -94,6 +94,7 @@ static const dllfunc_t cdll_new_exports[] = 	// allowed only in SDK 2.3 and high
 
 static void pfnSPR_DrawHoles( int frame, int x, int y, const wrect_t *prc );
 
+
 /*
 ====================
 CL_CreatePlaylist
@@ -1076,7 +1077,7 @@ void CL_InitEdicts( int maxclients )
 	Assert( clgame.entities == NULL );
 
 	if( !clgame.mempool ) return; // Host_Error without client
-#if XASH_LOW_MEMORY != 2 || XASH_DREAMCAST
+#if XASH_LOW_MEMORY != 2 
 	CL_UPDATE_BACKUP = ( maxclients <= 1 ) ? SINGLEPLAYER_BACKUP : MULTIPLAYER_BACKUP;
 #endif
 	cls.num_client_entities = CL_UPDATE_BACKUP * NUM_PACKET_ENTITIES;
@@ -3985,7 +3986,6 @@ void CL_UnloadProgs( void )
 
 qboolean CL_LoadProgs( const char *name )
 {
-	static playermove_t		gpMove;
 	CL_EXPORT_FUNCS	GetClientAPI; // single export
 	qboolean valid_single_export = false;
 	qboolean missed_exports = false;
@@ -3993,8 +3993,8 @@ qboolean CL_LoadProgs( const char *name )
 
 	if( clgame.hInstance ) CL_UnloadProgs();
 
-	// initialize PlayerMove
-	clgame.pmove = &gpMove;
+	// initialize PlayerMove — use the single shared instance 
+	clgame.pmove = &g_shared_playermove;
 
 	cls.mempool = Mem_AllocPool( "Client Static Pool" );
 	clgame.mempool = Mem_AllocPool( "Client Edicts Zone" );

@@ -20,6 +20,7 @@ GNU General Public License for more details.
 
 static void R_ParseDetailTextures( const char *filename )
 {
+#if !XASH_DREAMCAST
 	byte *afile;
 	char *pfile;
 	string	token, texname;
@@ -101,6 +102,7 @@ static void R_ParseDetailTextures( const char *filename )
 	}
 
 	Mem_Free( afile );
+#endif
 }
 
 void R_NewMap( void )
@@ -112,6 +114,7 @@ void R_NewMap( void )
 
 	R_StudioResetPlayerModels();
 
+#if !XASH_DREAMCAST
 	// upload detailtextures
 	if( r_detailtextures.value )
 	{
@@ -123,7 +126,7 @@ void R_NewMap( void )
 
 		R_ParseDetailTextures( filepath );
 	}
-
+#endif
 	// clear out efrags in case the level hasn't been reloaded
 	for( i = 0; i < WORLDMODEL->numleafs; i++ )
 		WORLDMODEL->leafs[i+1].efrags = NULL;
@@ -146,11 +149,13 @@ void R_NewMap( void )
  		tx->texturechain = NULL;
 	}
 
-	GL_BuildLightmaps ();
+    GL_BuildLightmaps ();
 
+#if !XASH_DREAMCAST
 	R_ClearVBO();
 	if( R_HasEnabledVBO( ))
 		R_GenerateVBO();
+#endif
 	R_ResetRipples();
 
 	if( gEngfuncs.drawFuncs->R_NewMap != NULL )

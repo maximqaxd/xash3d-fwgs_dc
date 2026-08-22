@@ -41,7 +41,7 @@ static struct dc_keymap_s {
     int dstkey;      
 } dc_keymap[] = 
 {
-	{ CONT_START,		K_START_BUTTON },
+	{ CONT_START,		K_ESCAPE },  
 	{ CONT_B,			K_B_BUTTON },
 	{ CONT_A,			K_A_BUTTON },
 	{ CONT_DPAD_DOWN,	K_DPAD_DOWN },
@@ -256,6 +256,8 @@ void Platform_RunEvents(void)
     static uint32_t last_buttons = 0;
     static uint32_t last_msbtn;
     static kbd_mods_t last_mods = {0};
+	//keep our own "previous frame" state to generate clean edge-triggered events.
+    static uint8_t last_kbd_down[sizeof(dc_kbd_map)] = { 0 };
     static int last_X = 0, last_Y = 0, last_X2 = 0, last_Y2 = 0;
 	maple_device_t *dev = maple_enum_type(0, MAPLE_FUNC_CONTROLLER);
     cont_state_t *cont;
@@ -392,41 +394,45 @@ void Platform_RunEvents(void)
 		
 		if (kbd)
 		{
-			uint8_t shiftkeys = kbd->last_modifiers.raw ^ last_mods.raw;
+			const uint8_t mods = kbd->cond.modifiers.raw;
+			uint8_t shiftkeys = mods ^ last_mods.raw;
 			
 			if (shiftkeys & KBD_MOD_CTRL)
 			{
-				Key_Event(K_CTRL , ((kbd->last_modifiers.raw & KBD_MOD_CTRL) != 0));
+				Key_Event(K_CTRL , ((mods & KBD_MOD_CTRL) != 0));
 			}
 			
 			if (shiftkeys & KBD_MOD_SHIFT)
 			{
-				Key_Event(K_SHIFT , ((kbd->last_modifiers.raw & KBD_MOD_SHIFT) != 0));
+				Key_Event(K_SHIFT , ((mods & KBD_MOD_SHIFT) != 0));
 			}
 			
 			if (shiftkeys & KBD_MOD_ALT)
 			{
-				Key_Event(K_ALT , ((kbd->last_modifiers.raw & KBD_MOD_ALT) != 0));
+				Key_Event(K_ALT , ((mods & KBD_MOD_ALT) != 0));
 			}
 			
 			if (shiftkeys & (KBD_MOD_S1 | KBD_MOD_S2))
 			{
-				Key_Event(K_WIN , ((kbd->last_modifiers.raw & (KBD_MOD_S1 | KBD_MOD_S2)) != 0));
+				Key_Event(K_WIN , ((mods & (KBD_MOD_S1 | KBD_MOD_S2)) != 0));
 			}
 			
 			for(i = 0; i < sizeof(dc_kbd_map); ++i) 
 			{
-				/* Get the state of key i */
-				key_state_t i_state = kbd->key_states[i];
+				const key_state_t i_state = kbd->key_states[i];
+				const uint8_t was_down = last_kbd_down[i] ? 1 : 0;
+				const uint8_t is_down = i_state.is_down ? 1 : 0;
 
-				/* If the state of i changed */
-				if(i_state.is_down ^ i_state.was_down)
+				// If the state changed since our last frame, emit edge event.
+				if( is_down != was_down )
 				{
-					if (i == KBD_KEY_PAD_NUMLOCK && i_state.is_down)
+					last_kbd_down[i] = is_down;
+
+					if (i == KBD_KEY_PAD_NUMLOCK && is_down)
 					{
 						numlock_en ^= 1;
 					}
-					else if (i == KBD_KEY_CAPSLOCK && i_state.is_down)
+					else if (i == KBD_KEY_CAPSLOCK && is_down)
 					{
 						capslock_en ^= 1;
 					}
@@ -435,16 +441,17 @@ void Platform_RunEvents(void)
 
 					if(key) 
 					{
-						Key_Event( key , i_state.is_down );
+						Key_Event( key , is_down );
 						
 						if (numlock_en && i >= KBD_KEY_PAD_1 && i <= KBD_KEY_PAD_PERIOD)
 						{
 							key = dc_kbd_map_numlock[i-KBD_KEY_PAD_1];
 						}
 						
-						if (text_in_en && i_state.is_down && (key >= 32 && key < 127))
+						// Text input: generate characters only on key press (no per-frame spam).
+						if (text_in_en && is_down && (key >= 32 && key < 127))
 						{
-							if( (kbd->last_modifiers.raw & KBD_MOD_SHIFT))
+							if( (mods & KBD_MOD_SHIFT))
 							{
 								if (i >= KBD_KEY_1 && i <= KBD_KEY_SLASH )
 								{
@@ -468,7 +475,7 @@ void Platform_RunEvents(void)
 					}
 				}
 			}
-			last_mods = kbd->last_modifiers;
+			last_mods.raw = mods;
 		}
 	}
 }
